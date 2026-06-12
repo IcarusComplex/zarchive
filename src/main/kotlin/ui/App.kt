@@ -2,6 +2,7 @@ package ui
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -39,7 +40,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -54,6 +55,12 @@ import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
 import data.SearchResult
+import data.OrderPlan
+import data.StoreOrder
+import data.cheapestPlan
+import data.fewestStoresPlan
+import data.preferExactMatches
+import data.luckshackSearchUrl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -115,20 +122,27 @@ fun App(
         onSurface    = OnSurface,
     )
 
+    var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
+    val hasSearch = vm.searchedCards.isNotEmpty() || vm.results.isNotEmpty()
+
     MaterialTheme(colorScheme = colorScheme) {
         Column(
             Modifier.fillMaxSize().background(Surface)
                 .border(1.dp, OutlineVariant)
         ) {
-            AppHeader(vm, onCloseRequest, windowState, window)
+            AppHeader(vm, onCloseRequest, windowState, window, tab.takeIf { hasSearch }) { tab = it }
             HorizontalDivider(color = OutlineVariant)
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                 if (vm.isSearching || vm.statusText.isNotEmpty()) {
                     Spacer(Modifier.height(6.dp))
                     StatusRow(vm)
                 }
+                if (vm.searchedCards.isNotEmpty() && tab == ResultsTab.RESULTS) {
+                    Spacer(Modifier.height(8.dp))
+                    LuckshackLinks(vm.searchedCards)
+                }
                 Spacer(Modifier.height(8.dp))
-                ResultsPane(vm)
+                ResultsPane(vm, tab)
             }
         }
     }
@@ -140,83 +154,102 @@ private fun AppHeader(
     onCloseRequest: () -> Unit,
     windowState: WindowState,
     window: java.awt.Window?,
+    tab: ResultsTab?,
+    onSelectTab: (ResultsTab) -> Unit,
 ) {
+    val bannerBitmap = remember {
+        runCatching {
+            Thread.currentThread().contextClassLoader.getResourceAsStream("banner_logo.png")
+                ?.use { javax.imageio.ImageIO.read(it) }
+                ?.toComposeImageBitmap()
+        }.getOrNull()
+    }
+
     Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 6.dp)
-                .pointerInput(Unit) {
-                    detectDragGestures { change, dragAmount ->
-                        change.consume()
-                        val w = window ?: return@detectDragGestures
-                        val f = w as? java.awt.Frame
-                        if (f == null || f.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0) {
-                            w.location = java.awt.Point(
-                                (w.x + dragAmount.x).toInt(),
-                                (w.y + dragAmount.y).toInt(),
-                            )
-                        }
+        Column(
+            modifier = Modifier.pointerInput(Unit) {
+                detectDragGestures { change, dragAmount ->
+                    change.consume()
+                    val w = window ?: return@detectDragGestures
+                    val f = w as? java.awt.Frame
+                    if (f == null || f.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0) {
+                        w.location = java.awt.Point(
+                            (w.x + dragAmount.x).toInt(),
+                            (w.y + dragAmount.y).toInt(),
+                        )
                     }
-                },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                }
+            }
         ) {
-            val bannerBitmap = remember {
-                runCatching {
-                    // Load from the classpath so it resolves both in `gradlew run` and the packaged app
-                    Thread.currentThread().contextClassLoader.getResourceAsStream("banner_logo.png")
-                        ?.use { javax.imageio.ImageIO.read(it) }
-                        ?.toComposeImageBitmap()
-                }.getOrNull()
-            }
-            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                if (bannerBitmap != null) {
-                    Image(
-                        bitmap = bannerBitmap,
-                        contentDescription = "ZArchive",
-                        contentScale = ContentScale.Fit,
-                        modifier = Modifier.fillMaxWidth(),
-                        alignment = Alignment.CenterStart,
-                    )
+            // ── Main row: logo | search + checkboxes | window buttons ───────
+            Row(
+                modifier = Modifier.fillMaxWidth()
+                    .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    HeaderLogo(bannerBitmap)
+                }
+                Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    HeaderSearch(vm, Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                        IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
+                        LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+                    }
+                }
+
+                if (vm.isSearching) {
+                    GhostIconButton(Icons.Default.Close, "Cancel", tint = ErrorColor, iconSize = 18.dp) { vm.cancel() }
                 } else {
-                    Text("ZArchive", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Primary)
+                    GhostIconButton(Icons.Default.Search, "Search", tint = Primary, iconSize = 18.dp) { vm.search() }
+                }
+
+                if (System.getProperty("mtg.debug") == "true") {
+                    val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
+                    GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                        debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
+                    }
+                }
+
+                GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                    (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED
+                }
+                GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                    val f = window as? java.awt.Frame ?: return@GhostIconButton
+                    f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
+                        java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
+                }
+                GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 16.dp) {
+                    onCloseRequest()
                 }
             }
 
-            Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                HeaderSearch(vm, Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                    IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
-                    LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+            // ── Bottom strip: folder tabs ────────────────────────────────────
+            if (tab != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    FolderTabs(tab, onSelectTab)
                 }
-            }
-
-            if (vm.isSearching) {
-                GhostIconButton(Icons.Default.Close, "Cancel", tint = ErrorColor, iconSize = 18.dp) { vm.cancel() }
-            } else {
-                GhostIconButton(Icons.Default.Search, "Search", tint = Primary, iconSize = 18.dp) { vm.search() }
-            }
-
-            if (System.getProperty("mtg.debug") == "true") {
-                val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
-                GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                    debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
-                }
-            }
-
-            GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED
-            }
-            GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                val f = window as? java.awt.Frame ?: return@GhostIconButton
-                f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
-                    java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
-            }
-            GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 16.dp) {
-                onCloseRequest()
             }
         }
+    }
+}
+
+@Composable
+private fun HeaderLogo(bannerBitmap: ImageBitmap?) {
+    if (bannerBitmap != null) {
+        Image(
+            bitmap = bannerBitmap,
+            contentDescription = "ZArchive",
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxWidth(),  // width-constrained; height follows aspect ratio
+            alignment = Alignment.CenterStart,
+        )
+    } else {
+        Text("ZArchive", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Primary)
     }
 }
 
@@ -322,10 +355,14 @@ private fun StatusRow(vm: SearchViewModel) {
             ) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     val entries = vm.storeStatuses.entries.toList()
+                    val total = vm.searchedCards.size
                     entries.chunked(2).forEach { pair ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             pair.forEach { (store, status) ->
-                                StoreStatusChip(store, status, Modifier.weight(1f))
+                                StoreStatusChip(store, status,
+                                    done = vm.storeCardCounts[store] ?: 0,
+                                    total = total,
+                                    modifier = Modifier.weight(1f))
                             }
                             if (pair.size == 1) Spacer(Modifier.weight(1f))
                         }
@@ -337,11 +374,22 @@ private fun StatusRow(vm: SearchViewModel) {
 }
 
 @Composable
-private fun StoreStatusChip(store: String, status: StoreStatus, modifier: Modifier = Modifier) {
+private fun StoreStatusChip(
+    store: String,
+    status: StoreStatus,
+    done: Int,
+    total: Int,
+    modifier: Modifier = Modifier,
+) {
     val (icon, tint, bg) = when (status) {
         StoreStatus.PENDING  -> Triple(Icons.Default.HourglassEmpty, OnSurfaceVariant.copy(alpha = 0.4f), SurfaceContainerHighest)
         StoreStatus.CHECKING -> Triple(Icons.Default.Sync,           Primary,                             Primary.copy(alpha = 0.08f))
         StoreStatus.DONE     -> Triple(Icons.Default.CheckCircle,     Tertiary,                            Tertiary.copy(alpha = 0.08f))
+    }
+    val nameColor = when (status) {
+        StoreStatus.PENDING  -> OnSurfaceVariant.copy(alpha = 0.5f)
+        StoreStatus.CHECKING -> OnSurface
+        StoreStatus.DONE     -> OnSurfaceVariant
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -352,42 +400,159 @@ private fun StoreStatusChip(store: String, status: StoreStatus, modifier: Modifi
     ) {
         Icon(icon, null, tint = tint, modifier = Modifier.size(12.dp))
         Spacer(Modifier.width(6.dp))
-        Text(
-            store,
-            fontSize = 11.sp,
-            color = when (status) {
-                StoreStatus.PENDING  -> OnSurfaceVariant.copy(alpha = 0.5f)
-                StoreStatus.CHECKING -> OnSurface
-                StoreStatus.DONE     -> OnSurfaceVariant
-            },
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+        Text(store, fontSize = 11.sp, color = nameColor,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (total > 0 && status != StoreStatus.PENDING) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "$done/$total",
+                fontFamily = Mono,
+                fontSize = 10.sp,
+                color = when (status) {
+                    StoreStatus.DONE     -> Tertiary.copy(alpha = 0.8f)
+                    StoreStatus.CHECKING -> Primary.copy(alpha = 0.8f)
+                    else                 -> OnSurfaceVariant.copy(alpha = 0.4f)
+                },
+            )
+        }
     }
 }
 
-@Composable
-private fun ResultsPane(vm: SearchViewModel) {
-    val searchedCards = vm.searchedCards
+private enum class ResultsTab(val label: String, val icon: ImageVector) {
+    RESULTS("Search Results", Icons.Default.Storefront),
+    ORDERS("Order Lists", Icons.Default.ShoppingCart),
+}
 
-    if (searchedCards.isEmpty() && vm.results.isEmpty()) {
+@Composable
+private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
+    if (vm.searchedCards.isEmpty() && vm.results.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Enter a card name and press Search", color = OnSurfaceVariant, fontSize = 14.sp)
         }
         return
     }
+    when (tab) {
+        ResultsTab.RESULTS -> SearchResultsTab(vm)
+        ResultsTab.ORDERS  -> OrderListsPane(vm)
+    }
+}
 
+// Folder-tab strip that sits at the bottom of the header banner, just above the divider line.
+// The active tab is filled with the content-area colour and top-rounded so it reads as a folder
+// tab connected to the panel below the line.
+@Composable
+private fun FolderTabs(selected: ResultsTab, onSelect: (ResultsTab) -> Unit, modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        ResultsTab.entries.forEach { t ->
+            val active = t == selected
+            val shape = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .clip(shape)
+                    .background(if (active) Surface else SurfaceContainerLowest)
+                    .border(
+                        1.dp,
+                        if (active) OutlineVariant else OutlineVariant.copy(alpha = 0.4f),
+                        shape,
+                    )
+                    .clickable { onSelect(t) }
+                    .padding(horizontal = 16.dp, vertical = if (active) 9.dp else 7.dp),
+            ) {
+                Icon(t.icon, null, tint = if (active) Primary else OnSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.size(15.dp))
+                Text(
+                    t.label,
+                    fontSize = 13.sp,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                    color = if (active) OnSurface else OnSurfaceVariant.copy(alpha = 0.7f),
+                )
+            }
+        }
+    }
+}
+
+// Per-card click-through links to Luckshack, which we don't scrape (Cloudflare-protected).
+// Lives outside the normal results so it's clearly "just a link", never a search result.
+@Composable
+private fun LuckshackLinks(cards: List<String>) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = SurfaceContainerLow,
+        border = BorderStroke(1.dp, OutlineVariant.copy(alpha = 0.6f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
+        ) {
+            Icon(Icons.Default.OpenInNew, null, tint = OnSecondaryContainer, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Luckshack (not searched — open directly):", fontSize = 11.sp,
+                color = OnSurfaceVariant, maxLines = 1)
+            Spacer(Modifier.width(10.dp))
+            // weight(1f) + horizontalScroll: chips lay out at natural width and scroll within the row.
+            // pointerInput remaps the vertical wheel to horizontal so no Shift is needed.
+            val hScroll = rememberScrollState()
+            val hScrollScope = rememberCoroutineScope()
+            Row(
+                modifier = Modifier.weight(1f)
+                    .horizontalScroll(hScroll)
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val scrollDelta = event.changes.firstOrNull()?.scrollDelta ?: continue
+                                if (scrollDelta.y != 0f) {
+                                    event.changes.forEach { it.consume() }
+                                    hScrollScope.launch {
+                                        hScroll.scrollTo((hScroll.value + scrollDelta.y * 60).toInt().coerceIn(0, hScroll.maxValue))
+                                    }
+                                }
+                            }
+                        }
+                    },
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                cards.forEach { card ->
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(SurfaceContainerHighest)
+                            .border(1.dp, OutlineVariant.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                            .clickable { openUrl(luckshackSearchUrl(card)) }
+                            .padding(horizontal = 8.dp, vertical = 3.dp),
+                    ) {
+                        Text(card, fontSize = 11.sp, color = OnSecondaryContainer, softWrap = false)
+                        Spacer(Modifier.width(4.dp))
+                        Icon(Icons.Default.OpenInNew, "Open $card on Luckshack",
+                            tint = OnSurfaceVariant, modifier = Modifier.size(11.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchResultsTab(vm: SearchViewModel) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
     // Summary tracks the full searched list from the moment search() fires.
     // Results list only shows cards that have received at least one response.
-    val summaryCards = searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
+    val summaryCards = vm.searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
     val resultCards  = vm.results.map { it.card }.distinct()
 
     Column {
         if (summaryCards.size > 1) {
-            Spacer(Modifier.height(8.dp))
             CardSummaryPanel(
                 cards = summaryCards,
                 results = vm.results.toList(),
@@ -469,7 +634,7 @@ private fun LuckshackToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
 }
 
 @Composable
-private fun FilterField(value: String, onChange: (String) -> Unit) {
+private fun FilterField(value: String, placeholder: String = "Filter results…", onChange: (String) -> Unit) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -484,7 +649,7 @@ private fun FilterField(value: String, onChange: (String) -> Unit) {
         Spacer(Modifier.width(6.dp))
         Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (value.isEmpty()) {
-                Text("Filter results…", color = OnSurfaceVariant.copy(alpha = 0.5f), fontFamily = Mono, fontSize = 13.sp)
+                Text(placeholder, color = OnSurfaceVariant.copy(alpha = 0.5f), fontFamily = Mono, fontSize = 13.sp)
             }
             BasicTextField(
                 value = value,
@@ -513,7 +678,7 @@ private fun CardSection(
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
 
-    val allListings = results.filter { it.title != null }
+    val allListings = preferExactMatches(card, results.filter { it.title != null })
     val listings = if (cardFilterQ.isEmpty()) allListings else allListings.filter { r ->
         r.title!!.lowercase().contains(cardFilterQ) || r.store.lowercase().contains(cardFilterQ)
     }
@@ -576,7 +741,7 @@ private fun CardSection(
 
                 if (allListings.isEmpty()) {
                     ListingTable(emptyList(), images, dimmed = false,
-                        emptyMessage = if (isSearching) "Searching…" else "No listings found at any store")
+                        emptyMessage = if (isSearching) "Searching…" else "No listings found at any store", card = card)
                 } else if (listings.isEmpty()) {
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -589,7 +754,7 @@ private fun CardSection(
                     }
                 } else {
                     if (inStock.isNotEmpty()) {
-                        ListingTable(inStock, images, dimmed = false, emptyMessage = null)
+                        ListingTable(inStock, images, dimmed = false, emptyMessage = null, card = card)
                     }
                     if (outOfStock.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
@@ -619,7 +784,7 @@ private fun CardSection(
                             enter = expandVertically() + fadeIn(),
                             exit = shrinkVertically() + fadeOut(),
                         ) {
-                            ListingTable(outOfStock, images, dimmed = true, emptyMessage = null)
+                            ListingTable(outOfStock, images, dimmed = true, emptyMessage = null, card = card)
                         }
                     }
                 }
@@ -656,7 +821,7 @@ private fun CountBadge(text: String, muted: Boolean = false) {
 }
 
 @Composable
-private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, dimmed: Boolean, emptyMessage: String?) {
+private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, dimmed: Boolean, emptyMessage: String?, card: String = "") {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = if (dimmed) SurfaceContainerLowest else SurfaceContainerLow,
@@ -672,7 +837,7 @@ private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, 
             }
             rows.forEachIndexed { idx, r ->
                 if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
-                ListingRow(r, r.title?.let { images[it] }, dimmed = dimmed)
+                ListingRow(r, (r.title?.let { images[it] }) ?: images[card], dimmed = dimmed)
             }
         }
     }
@@ -869,8 +1034,12 @@ private fun CardSummaryPanel(
     onCardClick: (String) -> Unit,
 ) {
     var expanded by remember { mutableStateOf(true) }
+    var summaryFilter by remember { mutableStateOf("") }
+    val filterQ = summaryFilter.trim().lowercase()
+    val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
     val foundCount = cards.count { card ->
-        results.any { it.card == card && it.title != null && it.available != false }
+        preferExactMatches(card, results.filter { it.card == card && it.title != null })
+            .any { it.available != false }
     }
     val pendingCount = if (isSearching) cards.count { card -> results.none { it.card == card } } else 0
 
@@ -918,6 +1087,17 @@ private fun CardSummaryPanel(
             ) {
                 Column {
                     HorizontalDivider(color = OutlineVariant.copy(alpha = 0.6f))
+                    Box(Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp)) {
+                        FilterField(summaryFilter, placeholder = "Find a card in the list…") { summaryFilter = it }
+                    }
+                    if (shownCards.isEmpty()) {
+                        Box(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text("No cards match \"$summaryFilter\"", color = OnSurfaceVariant, fontSize = 12.sp)
+                        }
+                    }
                     // Scrollable grid capped at ~240dp so 100-card lists don't push results off screen
                     Column(
                         Modifier
@@ -927,13 +1107,13 @@ private fun CardSummaryPanel(
                             .padding(8.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        cards.chunked(2).forEach { pair ->
+                        shownCards.chunked(2).forEach { pair ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 pair.forEach { card ->
                                     val cardResults = results.filter { it.card == card }
-                                    val imagePath = cardResults
+                                    val imagePath = preferExactMatches(card, cardResults.filter { it.title != null })
                                         .mapNotNull { r -> r.title?.let { images[it] } }
-                                        .firstOrNull()
+                                        .firstOrNull() ?: images[card]
                                     CardSummaryEntry(
                                         card = card,
                                         results = cardResults,
@@ -980,14 +1160,16 @@ private fun CardSummaryEntry(
         }
     }
 
-    val listings = results.filter { it.title != null }
+    val listings = preferExactMatches(card, results.filter { it.title != null })
     val hasInStock = listings.any { it.available != false }
     val hasOutOfStock = !hasInStock && listings.any { it.available == false }
+    // Don't finalise Out of Stock / Not Found until searching is done — a card that's OOS at
+    // one fast store might be in stock at a slower one still running.
     val (statusText, statusColor) = when {
-        results.isEmpty() && isSearching -> "…"           to OnSurfaceVariant.copy(alpha = 0.35f)
-        hasInStock                       -> "Found"        to Tertiary
-        hasOutOfStock                    -> "Out of Stock" to ErrorColor
-        else                             -> "Not Found"    to OnSurfaceVariant
+        hasInStock               -> "Found"        to Tertiary
+        isSearching              -> "…"             to OnSurfaceVariant.copy(alpha = 0.35f)
+        hasOutOfStock            -> "Out of Stock"  to ErrorColor
+        else                     -> "Not Found"     to OnSurfaceVariant
     }
 
     Box(modifier) {
@@ -1054,6 +1236,216 @@ private fun CardSummaryEntry(
                     CardImagePopup(bmp, width = SUMMARY_POPUP_W, height = SUMMARY_POPUP_H)
                 }
             }
+        }
+    }
+}
+
+private enum class OrderStrategy(val label: String, val icon: ImageVector, val blurb: String) {
+    CHEAPEST("Cheapest total", Icons.Default.Savings,
+        "Lowest possible spend — each card from whichever store is cheapest, even if that means more parcels."),
+    FEWEST("Fewest packages", Icons.Default.Inventory2,
+        "Fewest orders to place — the smallest set of stores that covers everything in stock, price aside."),
+}
+
+@Composable
+private fun OrderListsPane(vm: SearchViewModel) {
+    var strategy by remember { mutableStateOf(OrderStrategy.CHEAPEST) }
+
+    // Recomputed automatically whenever results stream in (reads the observable list).
+    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList()) } }
+    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList()) } }
+    val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
+
+    val anyInStock = cheapest.storeOrders.isNotEmpty()
+
+    Column(Modifier.fillMaxSize()) {
+        // Strategy switcher
+        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            OrderStrategy.entries.forEach { s ->
+                val active = s == strategy
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(if (active) Primary.copy(alpha = 0.12f) else SurfaceContainerLow)
+                        .border(1.dp, if (active) Primary.copy(alpha = 0.5f) else OutlineVariant, RoundedCornerShape(4.dp))
+                        .clickable { strategy = s }
+                        .padding(horizontal = 12.dp, vertical = 7.dp),
+                ) {
+                    Icon(s.icon, null, tint = if (active) Primary else OnSurfaceVariant, modifier = Modifier.size(15.dp))
+                    Text(s.label, fontSize = 12.sp,
+                        fontWeight = if (active) FontWeight.SemiBold else FontWeight.Medium,
+                        color = if (active) Primary else OnSurfaceVariant)
+                }
+            }
+            if (vm.isSearching) {
+                Spacer(Modifier.width(8.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(Modifier.size(12.dp), color = Primary, strokeWidth = 1.5.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("updating live…", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+                }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(strategy.blurb, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+        Spacer(Modifier.height(10.dp))
+
+        if (!anyInStock) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(
+                    if (vm.isSearching) "No in-stock cards yet — building the list as results arrive…"
+                    else "No in-stock listings to build an order from.",
+                    color = OnSurfaceVariant, fontSize = 13.sp,
+                )
+            }
+            return
+        }
+
+        // Plan totals
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 10.dp)) {
+            PlanStat("${plan.storeCount}", if (plan.storeCount == 1) "store" else "stores")
+            Spacer(Modifier.width(20.dp))
+            PlanStat("${plan.itemCount}", if (plan.itemCount == 1) "card" else "cards")
+            Spacer(Modifier.width(20.dp))
+            PlanStat(formatZar(plan.grandTotal), "total", valueColor = Primary)
+            if (plan.uncoveredCards.isNotEmpty()) {
+                Spacer(Modifier.width(20.dp))
+                PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
+            }
+        }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            items(plan.storeOrders, key = { it.store }) { so ->
+                StoreOrderCard(so, vm.images)
+            }
+            if (plan.uncoveredCards.isNotEmpty()) {
+                item { UncoveredCard(plan.uncoveredCards) }
+            }
+            item { Spacer(Modifier.height(8.dp)) }
+        }
+    }
+}
+
+@Composable
+private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface) {
+    Row(verticalAlignment = Alignment.Bottom) {
+        Text(value, fontFamily = Mono, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = valueColor)
+        Spacer(Modifier.width(5.dp))
+        Text(label, fontSize = 11.sp, color = OnSurfaceVariant, modifier = Modifier.padding(bottom = 2.dp))
+    }
+}
+
+@Composable
+private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = SurfaceContainerLowest,
+        border = BorderStroke(1.dp, OutlineVariant),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column {
+            // Store header — click opens the store
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(HeaderBg)
+                    .clickable { openUrl(order.storeUrl) }
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+            ) {
+                Icon(Icons.Default.Storefront, null, tint = Secondary, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(order.store, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSecondaryContainer)
+                Spacer(Modifier.width(8.dp))
+                CountBadge("${order.itemCount}")
+                Spacer(Modifier.weight(1f))
+                Text(formatZar(order.total), fontFamily = Mono, fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold, color = Primary)
+                Spacer(Modifier.width(10.dp))
+                Icon(Icons.Default.OpenInNew, "Open store", tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
+            }
+            HorizontalDivider(color = OutlineVariant)
+            order.lines.forEachIndexed { idx, line ->
+                if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+                OrderLineRow(line, line.listing.title?.let { images[it] } ?: images[line.card])
+            }
+        }
+    }
+}
+
+@Composable
+private fun OrderLineRow(line: data.OrderLine, imagePath: String?) {
+    val density = LocalDensity.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+                .hoverable(interaction)
+                .clickable { openUrl(line.listing.url) }
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.width(COL_THUMB)) { CardThumbnail(imagePath, dimmed = false) }
+            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                line.listing.title?.takeIf { it != line.card }?.let {
+                    Text(it, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Box(Modifier.width(COL_PRICE), contentAlignment = Alignment.CenterEnd) {
+                Text(line.listing.priceZar?.let { formatZar(it) } ?: "N/A", fontFamily = Mono,
+                    fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (line.listing.priceZar == null) OnSurfaceVariant.copy(alpha = 0.6f) else Primary)
+            }
+            Box(Modifier.width(COL_ACTION), contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.OpenInNew, "Open listing",
+                    tint = if (hovered) Primary else OnSurfaceVariant, modifier = Modifier.size(16.dp))
+            }
+        }
+
+        if (hovered && imagePath != null) {
+            val bmp = imageCache[imagePath]
+            if (bmp != null) {
+                Popup(
+                    alignment = Alignment.TopStart,
+                    offset = with(density) {
+                        IntOffset(24.dp.roundToPx(), -(POPUP_CARD_H + 6.dp).roundToPx())
+                    },
+                ) { CardImagePopup(bmp) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UncoveredCard(cards: List<String>) {
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        color = SurfaceContainerLowest,
+        border = BorderStroke(1.dp, ErrorColor.copy(alpha = 0.4f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.ErrorOutline, null, tint = ErrorColor, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Not available anywhere (${cards.size})", fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold, color = ErrorColor)
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(cards.joinToString(", "), fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f))
         }
     }
 }

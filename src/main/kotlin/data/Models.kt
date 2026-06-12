@@ -19,7 +19,6 @@ val STORES: Map<String, String> = linkedMapOf(
     "D20 Battleground"       to "http://d20battleground.co.za",
     "Dracoti"                to "http://www.dracoti.co.za",
     "Geek Home"              to "http://www.geekhome.co.za",
-    "The Luckshack"          to "https://luckshack.co.za",
     "The Warren"             to "https://thewarren.co.za",
     "Underworld Connections" to "http://www.underworldconnections.co.za",
     "The Trade Inn"          to "https://thetradeinn.co.za",
@@ -36,9 +35,15 @@ val STORES: Map<String, String> = linkedMapOf(
     "The Cantina"            to "https://thecantina.co.za",
 )
 
+// Luckshack is Cloudflare-protected and we don't scrape its stock — it's surfaced only as a
+// per-card convenience link (outside the normal results), never as a search result or store.
+const val LUCKSHACK_NAME = "The Luckshack"
+fun luckshackSearchUrl(card: String): String =
+    "https://luckshack.co.za/index.php?route=product/asearch&search=" +
+        java.net.URLEncoder.encode(card, "UTF-8")
+
 /** Pre-known platforms — confirmed stores where auto-detection fails (e.g. Cloudflare-blocked). */
 val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
-    "https://luckshack.co.za"          to Platform.BROWSER,
     "https://thewarren.co.za"          to Platform.BROWSER,
     "https://www.battlewizards.co.za"  to Platform.BIGCOMMERCE,
     "https://store.ai-fest.co.za"      to Platform.PRESTASHOP,
@@ -62,10 +67,50 @@ fun parsePrice(text: String): Double? {
     }
 }
 
+// Accessories / sealed product that often share a card's name in their title but are NOT
+// singles (e.g. a "Ultimate Guard Zipfolio … Season of the Burrow" binder matching the card
+// "Season of the Burrow"). Phrases are multi-word/brand-specific on purpose so they don't
+// clobber real card names that happen to contain a word like "booster" (e.g. Booster Tutor).
+private val NON_SINGLE_RE = Regex(
+    """(?i)\b(binder|portfolio|zipfolio|ultimate[ -]?guard|dragon[ -]?shield|""" +
+    """gamegenic|playmat|play[ -]mat|mouse[ -]?pad|deck[ -]?box|deck[ -]?protector|""" +
+    """card[ -]?sleeves|\bsleeves\b|toploader|top[ -]loader|storage[ -]?box|card[ -]?case|""" +
+    """booster[ -](?:box|pack|bundle|case)|(?:collector|set|draft|jumpstart)[ -]booster|""" +
+    """booster[ -]display|fat[ -]?pack|bundle[ -]?box|gift[ -]?bundle|prerelease[ -]?(?:pack|kit)|""" +
+    """commander[ -]?deck|starter[ -]?deck|planeswalker[ -]?deck|intro[ -]?pack|""" +
+    """booster[ -]?display|dice[ -]?set|life[ -]?counter|spindown)\b"""
+)
+
+// Collapse to a comparable key: lowercase, punctuation → spaces, trimmed.
+private fun matchKey(s: String): String =
+    s.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+
+/**
+ * Among a searched card's candidate listings, prefer the ones whose name matches the query
+ * *exactly* (after normalisation, and per-face for double-faced / split cards). This stops a
+ * search for "Reprieve" from surfacing "Graceful Reprieve", or "Bolt" from matching "Lightning
+ * Bolt". Falls back to all candidates when nothing matches exactly, so messy titles that don't
+ * normalise cleanly still show up rather than vanishing.
+ */
+fun preferExactMatches(card: String, listings: List<SearchResult>): List<SearchResult> {
+    if (listings.size <= 1) return listings
+    val want = matchKey(card)
+    if (want.isEmpty()) return listings
+    val exact = listings.filter { r ->
+        val title = r.title ?: return@filter false
+        val norm = normalizeCardName(title)
+        matchKey(norm) == want || norm.split("//").any { matchKey(it) == want }
+    }
+    return if (exact.isNotEmpty()) exact else listings
+}
+
 fun isRelevant(card: String, title: String): Boolean {
-    val words = card.lowercase().split(Regex("[^a-z']+")).filter { it.length > 2 }
+    if (NON_SINGLE_RE.containsMatchIn(title)) return false
     val t = title.lowercase()
-    return words.all { it in t }
+    val words = card.lowercase().split(Regex("[^a-z']+")).filter { it.length > 2 }
+    if (words.isEmpty()) return false
+    // Whole-word match (not substring) so "Hop to It" → "hop" doesn't match "Hope Thief".
+    return words.all { w -> Regex("""\b${Regex.escape(w)}\b""").containsMatchIn(t) }
 }
 
 private val NOISE_RE = Regex(

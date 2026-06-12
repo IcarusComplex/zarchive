@@ -43,13 +43,26 @@ The originals also still exist in the top-level `resources/` dir (source of trut
 ## Behaviour notes
 
 - Concurrent store searches via `async/await` on `Dispatchers.IO`.
-- Platform auto-detected per store, cached per session; `KNOWN_PLATFORMS` overrides detection.
-- **Luckshack** is Cloudflare-protected — we no longer scrape it; `searchLuckshack` returns a
-  placeholder row linking to the store's search URL. A persisted user setting (`SearchViewModel
-  .autoOpenLuckshack`, stored via `java.util.prefs`, toggled by the "Auto-open Luckshack" checkbox
-  in the results toolbar) controls behaviour: **checked** auto-opens the search in the default
-  browser; **unchecked** (default) shows a clickable "Click to search Luckshack" row instead. The
-  flag is threaded `runSearch → BrowserSearcher(autoOpenLuckshack)`.
+- Platform auto-detected per store; **only successful detections are cached** for the session
+  (`platformCache`, a `ConcurrentHashMap`). `UNKNOWN`/`UNREACHABLE` are *not* cached, so a transient
+  network blip or momentary rate-limit doesn't strand a store as "check manually" until restart —
+  it's retried on the next search. `KNOWN_PLATFORMS` overrides detection.
+- **Luckshack** is Cloudflare-protected and **not a store/search result at all** — it's been removed
+  from `STORES`, so it never produces result rows or appears in order lists. It surfaces only as a
+  per-card **convenience link** (`ui/App.kt LuckshackLinks`, rendered outside the results/order panes)
+  built from `data.luckshackSearchUrl(card)`. The persisted `SearchViewModel.autoOpenLuckshack`
+  setting (prefs node `zarchive`, "Auto-open Luckshack" checkbox) still works: when **on**, running a
+  search opens each card's Luckshack search in the browser (`SearchViewModel.openLuckshackSearches`);
+  when **off** (default), the user clicks the link chips manually.
+- **Relevance / matching** (`data.isRelevant` + `data.preferExactMatches`):
+  - `isRelevant` requires every significant (>2-char) query word to appear as a **whole word** in the
+    title (not a substring — so "Hop to It" → "hop" no longer matches "Hope Thief"), and rejects
+    titles matching `NON_SINGLE_RE` (binders, sleeves, booster boxes, "Ultimate Guard", etc. — sealed
+    product / accessories that share a card's name but aren't singles).
+  - `preferExactMatches(card, listings)` keeps only listings whose normalised name (or a `//` face)
+    **equals** the query when any such exact match exists, else returns all. Stops "Reprieve" from
+    surfacing "Graceful Reprieve". Applied at every display/use point: `CardSection`, the card summary,
+    and both order-list plans.
 - **The Warren** is the only Playwright-driven store (JS-token-protected). It runs **headless**
   (`BrowserSearcher.launchRealBrowser` → `setHeadless(true)`) — no visible browser window.
 - **Card images** (`network/CardImageService.kt`): each store listing's image is matched against the
@@ -64,7 +77,9 @@ The originals also still exist in the top-level `resources/` dir (source of trut
   both a `User-Agent` and `Accept` header** (400s otherwise), so the service uses its own Ktor client
   with `Accept: application/json` — not the browser-header store client.
 - Images are keyed in the UI by listing title (`vm.images[title]` → local file path); the search field
-  auto-focuses on launch.
+  auto-focuses on launch. The **searched card names** are also resolved up front (keyed by the card
+  name) so the summary / order-list / thumbnails **fall back** to the card's art (`images[card]`) when
+  a messy listing title fails to resolve its own printing.
 - MTGGoldfish price comparison was **removed** — SA secondary-market prices don't track USD and we
   don't always match the exact printing.
 
@@ -99,9 +114,28 @@ These were the hard-won fixes — keep them:
   results-table popup (`POPUP_CARD_W`/`POPUP_CARD_H`). Images are eagerly pre-warmed into a shared
   `imageCache` via `LaunchedEffect` so the preview shows immediately, not only after a table row was
   hovered.
-- **Luckshack fast-path:** when `autoOpenLuckshack` is off, `BrowserSearcher.search` returns the
-  placeholder *before* touching the single-threaded Playwright executor, so Luckshack completes
-  instantly instead of queuing behind The Warren's multi-minute session.
+- **Top-level tabs (`ResultsTab`):** the app splits into two panes — **Search Results**
+  (`SearchResultsTab`: the card summary + per-card sections) and **Order Lists** (`OrderListsPane`).
+  The tabs render as **folder tabs in the header banner**, below the logo and just above the divider
+  line (`FolderTabs`, hoisted tab state lives in `App()`); the active tab is filled with the content
+  colour + top-rounded so it reads as connected to the panel below. Tabs only show once a search has
+  run. Clean split so the buying plan never clutters the live results.
+- **Card-summary search field:** `CardSummaryPanel` has an internal `FilterField` ("Find a card in
+  the list…") that substring-filters the summary grid by card name. `FilterField` now takes an
+  optional `placeholder`.
+- **Optimised order lists (`data/OrderOptimizer.kt`):** pure functions `cheapestPlan` and
+  `fewestStoresPlan` build an `OrderPlan` (`List<StoreOrder>` of `OrderLine`s + `uncoveredCards`) from
+  the current results. Both run **reactively** via `derivedStateOf` over `vm.results` — they recompute
+  as listings stream in, never on a button. Only in-stock listings at a **named** store (`title != null
+  && available != false && store.isNotBlank()`) are considered, and `preferExactMatches` is applied
+  per card so near-name listings don't pollute the plan.
+    - **Cheapest total:** lowest-priced listing per card anywhere, grouped by store (minimises spend).
+    - **Fewest packages:** greedy set-cover picking the smallest set of stores covering every available
+      card (tie-break: cheaper combined price for newly-covered cards), then each card sourced from the
+      cheapest *picked* store. Minimises number of orders, price aside.
+  `OrderListsPane` has a strategy toggle, a totals row (`PlanStat`), a `StoreOrderCard` per store
+  (header opens the store, each `OrderLineRow` opens the listing), and an `UncoveredCard` listing
+  cards not in stock anywhere. `STORES[store]` supplies the per-store header URL.
 
 ## Design system — "Arcane Market Ledger"
 
