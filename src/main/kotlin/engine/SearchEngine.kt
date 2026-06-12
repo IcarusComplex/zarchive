@@ -1,0 +1,179 @@
+package engine
+
+import data.*
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.DefaultRequest
+import io.ktor.client.request.*
+import io.ktor.http.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import network.*
+import java.security.cert.X509Certificate
+import javax.net.ssl.X509TrustManager
+
+private val platformCache = mutableMapOf<String, Platform>()
+
+// Accept any certificate — small SA stores often have expired/self-signed certs
+private val permissiveTrustManager = object : X509TrustManager {
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+}
+
+fun buildHttpClient(): HttpClient = HttpClient(CIO) {
+    engine {
+        requestTimeout = 20_000
+        endpoint { connectTimeout = 12_000 }
+        https { trustManager = permissiveTrustManager }
+    }
+    install(HttpRedirect) { checkHttpMethod = false }
+    install(HttpTimeout) {
+        requestTimeoutMillis = 20_000
+        connectTimeoutMillis = 12_000
+    }
+    install(DefaultRequest) {
+        header(HttpHeaders.UserAgent,
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+        header(HttpHeaders.Accept,
+            "text/html,application/xhtml+xml,application/xml;q=0.9," +
+            "image/avif,image/webp,image/apng,*/*;q=0.8")
+        header(HttpHeaders.AcceptLanguage, "en-ZA,en;q=0.9")
+        header("sec-ch-ua",
+            "\"Google Chrome\";v=\"124\",\"Chromium\";v=\"124\",\"Not-A.Brand\";v=\"99\"")
+        header("sec-ch-ua-mobile",   "?0")
+        header("sec-ch-ua-platform", "\"Windows\"")
+        header("sec-fetch-dest",     "document")
+        header("sec-fetch-mode",     "navigate")
+        header("sec-fetch-site",     "none")
+        header("sec-fetch-user",     "?1")
+        header("upgrade-insecure-requests", "1")
+    }
+}
+
+// onResults is called once per card as results arrive; onStoreComplete is called once per store.
+suspend fun checkStore(
+    client: HttpClient,
+    storeName: String,
+    baseUrl: String,
+    cards: List<String>,
+    browserSearcher: BrowserSearcher?,
+    onProgress: suspend (String) -> Unit,
+    onResults: suspend (List<SearchResult>) -> Unit,
+    onStoreComplete: suspend (String) -> Unit,
+) {
+    onProgress(storeName)
+    val platform = platformCache.getOrPut(baseUrl) {
+        KNOWN_PLATFORMS[baseUrl] ?: detectPlatform(client, baseUrl)
+    }
+
+    if (platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE) {
+        cards.forEach { card ->
+            onResults(listOf(SearchResult(
+                store = storeName, card = card, title = null,
+                priceZar = null, available = null, url = baseUrl,
+                note = "[${platform.name.lowercase()} — check manually]",
+            )))
+        }
+        onStoreComplete(storeName)
+        return
+    }
+
+    if (platform == Platform.BROWSER) {
+        if (browserSearcher == null) {
+            cards.forEach { card ->
+                onResults(listOf(SearchResult(
+                    store = storeName, card = card, title = null,
+                    priceZar = null, available = null, url = baseUrl,
+                    note = "[browser unavailable]",
+                )))
+            }
+        } else {
+            for (card in cards) {
+                val rows = try {
+                    val hits = browserSearcher.search(baseUrl, card)
+                    if (hits.isEmpty()) listOf(SearchResult(
+                        store = storeName, card = card, title = null,
+                        priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                    ))
+                    else hits.map { it.copy(store = storeName) }
+                } catch (e: Exception) {
+                    listOf(SearchResult(
+                        store = storeName, card = card, title = null,
+                        priceZar = null, available = null, url = baseUrl,
+                        note = "[error: ${e.message?.take(60)}]",
+                    ))
+                }
+                onResults(rows)
+            }
+        }
+        onStoreComplete(storeName)
+        return
+    }
+
+    val searcher: suspend (HttpClient, String, String) -> List<SearchResult> = when (platform) {
+        Platform.SHOPIFY      -> ::searchShopify
+        Platform.WOOCOMMERCE  -> ::searchWooCommerce
+        Platform.WC_STORE_API -> ::searchWcStoreApi
+        Platform.OPENCART     -> ::searchOpenCart
+        Platform.BIGCOMMERCE  -> ::searchBigCommerce
+        Platform.PRESTASHOP   -> ::searchPrestaShop
+        Platform.WARREN_API   -> ::searchWarrenApi
+        else                  -> { _, _, _ -> emptyList() }
+    }
+
+    // Process up to 4 cards concurrently — eliminates the per-card 400ms delay that
+    // made 100-card searches take 40s+ per store.
+    val sem = Semaphore(4)
+    coroutineScope {
+        cards.map { card ->
+            async {
+                sem.withPermit {
+                    val rows = try {
+                        val hits = searcher(client, baseUrl, card)
+                        if (hits.isEmpty()) listOf(SearchResult(
+                            store = storeName, card = card, title = null,
+                            priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                        ))
+                        else hits.map { it.copy(store = storeName) }
+                    } catch (e: Exception) {
+                        listOf(SearchResult(
+                            store = storeName, card = card, title = null,
+                            priceZar = null, available = null, url = baseUrl,
+                            note = "[error: ${e.message?.take(60)}]",
+                        ))
+                    }
+                    onResults(rows)
+                }
+            }
+        }.awaitAll()
+    }
+    onStoreComplete(storeName)
+}
+
+suspend fun runSearch(
+    cards: List<String>,
+    autoOpenLuckshack: Boolean,
+    onProgress: suspend (String) -> Unit,
+    onResults: suspend (List<SearchResult>) -> Unit,
+    onStoreComplete: suspend (String) -> Unit,
+) {
+    val client = buildHttpClient()
+    val hasBrowserStores = STORES.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
+    val browserSearcher = if (hasBrowserStores) BrowserSearcher(autoOpenLuckshack) else null
+    try {
+        coroutineScope {
+            STORES.map { (name, base) ->
+                async(Dispatchers.IO) {
+                    checkStore(client, name, base, cards, browserSearcher, onProgress, onResults, onStoreComplete)
+                }
+            }.awaitAll()
+        }
+    } finally {
+        client.close()
+        browserSearcher?.close()
+    }
+}
