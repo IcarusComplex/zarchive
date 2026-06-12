@@ -3,6 +3,7 @@ package ui
 import androidx.compose.runtime.*
 import data.SearchResult
 import data.STORES
+import data.luckshackSearchUrl
 import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.swing.Swing
@@ -18,6 +19,8 @@ class SearchViewModel {
     var searchedCards by mutableStateOf<List<String>>(emptyList())
     val totalStores = STORES.size
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
+    // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
+    val storeCardCounts = mutableStateMapOf<String, Int>()
 
     // Persisted user setting: whether a Luckshack search auto-opens in the browser.
     private val prefs = java.util.prefs.Preferences.userRoot().node("zarchive")
@@ -57,8 +60,13 @@ class SearchViewModel {
         completedStores = 0
         storeStatuses.clear()
         storeStatuses.putAll(STORES.keys.associateWith { StoreStatus.PENDING })
+        storeCardCounts.clear()
         isSearching = true
         statusText = "Starting search…"
+
+        // Luckshack isn't scraped (Cloudflare). If the user opted in, open each card's Luckshack
+        // search in their browser now; otherwise it's available as a click-through link in the UI.
+        if (autoOpenLuckshack) openLuckshackSearches(cards)
 
         searchJob = scope.launch {
             val imageService = CardImageService()
@@ -66,9 +74,16 @@ class SearchViewModel {
             val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
 
             try {
+                // Resolve art for the (clean) searched card names up front. These are keyed by the
+                // card name and act as a reliable fallback in the summary / order list / thumbnails
+                // whenever a messy store listing title fails to resolve its own specific printing.
+                imageJobs += scope.launch(Dispatchers.IO) {
+                    val resolved = imageService.resolveImages(cards.filter { requestedTitles.add(it) })
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                }
+
                 runSearch(
                     cards = cards,
-                    autoOpenLuckshack = autoOpenLuckshack,
                     onProgress = { storeName ->
                         withContext(Dispatchers.Swing) {
                             storeStatuses[storeName] = StoreStatus.CHECKING
@@ -76,7 +91,13 @@ class SearchViewModel {
                         }
                     },
                     onResults = { rows ->
-                        withContext(Dispatchers.Swing) { results.addAll(rows) }
+                        withContext(Dispatchers.Swing) {
+                            results.addAll(rows)
+                            // Each call to onResults is one card resolved at one store.
+                            rows.firstOrNull()?.store?.takeIf { it.isNotBlank() }?.let { store ->
+                                storeCardCounts[store] = (storeCardCounts[store] ?: 0) + 1
+                            }
+                        }
                         val newTitles = rows.mapNotNull { it.title }.filter { requestedTitles.add(it) }
                         if (newTitles.isNotEmpty()) {
                             imageJobs += scope.launch(Dispatchers.IO) {
@@ -127,6 +148,15 @@ class SearchViewModel {
 
         private fun String.removePrefix(regex: Regex): String =
             regex.find(this)?.let { substring(it.value.length) } ?: this
+    }
+
+    private fun openLuckshackSearches(cards: List<String>) {
+        runCatching {
+            val desktop = java.awt.Desktop.getDesktop()
+            if (java.awt.Desktop.isDesktopSupported() && desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
+                cards.forEach { card -> runCatching { desktop.browse(java.net.URI(luckshackSearchUrl(card))) } }
+            }
+        }
     }
 
     fun cancel() {

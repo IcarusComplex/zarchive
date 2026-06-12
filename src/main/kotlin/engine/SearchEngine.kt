@@ -14,7 +14,7 @@ import network.*
 import java.security.cert.X509Certificate
 import javax.net.ssl.X509TrustManager
 
-private val platformCache = mutableMapOf<String, Platform>()
+private val platformCache = java.util.concurrent.ConcurrentHashMap<String, Platform>()
 
 // Accept any certificate — small SA stores often have expired/self-signed certs
 private val permissiveTrustManager = object : X509TrustManager {
@@ -66,8 +66,16 @@ suspend fun checkStore(
     onStoreComplete: suspend (String) -> Unit,
 ) {
     onProgress(storeName)
-    val platform = platformCache.getOrPut(baseUrl) {
-        KNOWN_PLATFORMS[baseUrl] ?: detectPlatform(client, baseUrl)
+    // Only successful detections are cached for the session. UNKNOWN/UNREACHABLE results —
+    // which are usually a transient network blip or a momentary rate-limit — are NOT cached,
+    // so the store is retried on the next search instead of being stuck "check manually" until
+    // the app is restarted.
+    val platform = platformCache[baseUrl] ?: run {
+        val detected = KNOWN_PLATFORMS[baseUrl] ?: detectPlatform(client, baseUrl)
+        if (detected != Platform.UNKNOWN && detected != Platform.UNREACHABLE) {
+            platformCache[baseUrl] = detected
+        }
+        detected
     }
 
     if (platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE) {
@@ -156,14 +164,16 @@ suspend fun checkStore(
 
 suspend fun runSearch(
     cards: List<String>,
-    autoOpenLuckshack: Boolean,
     onProgress: suspend (String) -> Unit,
     onResults: suspend (List<SearchResult>) -> Unit,
     onStoreComplete: suspend (String) -> Unit,
 ) {
     val client = buildHttpClient()
     val hasBrowserStores = STORES.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
-    val browserSearcher = if (hasBrowserStores) BrowserSearcher(autoOpenLuckshack) else null
+    // Scale parallelism with card count: 1 lane per 3 cards, capped at 3.
+    // Each lane is a separate headless browser instance on its own thread.
+    val browserParallelism = if (hasBrowserStores) (cards.size / 3 + 1).coerceIn(1, 3) else 0
+    val browserSearcher = if (hasBrowserStores) BrowserSearcher(browserParallelism) else null
     try {
         coroutineScope {
             STORES.map { (name, base) ->
