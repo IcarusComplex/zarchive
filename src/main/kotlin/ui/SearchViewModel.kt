@@ -49,6 +49,14 @@ class SearchViewModel {
             prefs.putBoolean("ignoreBasicLands", value)
         }
 
+    private var earlyAccessState by mutableStateOf(prefs.getBoolean("earlyAccess", false))
+    var earlyAccess: Boolean
+        get() = earlyAccessState
+        set(value) {
+            earlyAccessState = value
+            prefs.putBoolean("earlyAccess", value)
+        }
+
     fun search() {
         val cards = parseCardList(query, ignoreBasicLands)
         if (cards.isEmpty()) return

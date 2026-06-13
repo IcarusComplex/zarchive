@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
+import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
 import data.SearchResult
 import data.OrderPlan
@@ -165,13 +166,20 @@ private fun WindowScope.AppHeader(
         Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth()) {
             Box(Modifier.fillMaxWidth()) {
                 // ── Window controls — top-right, standard Windows position ──
-                Row(Modifier.align(Alignment.TopEnd)) {
+                Row(
+                    Modifier.align(Alignment.TopEnd),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                     if (System.getProperty("mtg.debug") == "true") {
                         val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
                         GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
                             debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
                         }
                     }
+                    SettingsMenu(vm)
+                    Spacer(Modifier.width(2.dp))
+                    Box(Modifier.width(1.dp).height(14.dp).background(OutlineVariant.copy(alpha = 0.5f)))
+                    Spacer(Modifier.width(2.dp))
                     GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
                         runCatching { (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED }
                     }
@@ -339,6 +347,125 @@ private fun SearchInfoIcon() {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private const val SUPPORT_URL = "https://buymeacoffee.com/icaruscomplex"
+
+@Composable
+private fun SettingsMenu(vm: SearchViewModel) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        GhostIconButton(Icons.Default.Settings, "Settings", tint = OnSurfaceVariant, iconSize = 16.dp) {
+            expanded = !expanded
+        }
+        if (expanded) {
+            Popup(
+                alignment = Alignment.BottomEnd,
+                offset = IntOffset(0, 4),
+                onDismissRequest = { expanded = false },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = SurfaceContainerHigh,
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    modifier = Modifier.width(252.dp),
+                ) {
+                    Column(Modifier.padding(6.dp)) {
+                        Text(
+                            "Settings",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = OnSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f), modifier = Modifier.padding(bottom = 4.dp))
+                        SettingsCheckItem(
+                            label = "Early Access",
+                            sublabel = "Opt in to beta / pre-release builds",
+                            checked = vm.earlyAccess,
+                            onCheckedChange = { vm.earlyAccess = it },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        SettingsLinkItem(
+                            label = "Support ZArchive",
+                            sublabel = "Buy me a coffee ☕",
+                            url = SUPPORT_URL,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsCheckItem(
+    label: String,
+    sublabel: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (hovered) SurfaceContainerHighest else Color.Transparent)
+            .hoverable(interaction)
+            .clickable { onCheckedChange(!checked) }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = CheckboxDefaults.colors(
+                checkedColor = Primary,
+                checkmarkColor = OnPrimary,
+                uncheckedColor = OnSurfaceVariant.copy(alpha = 0.5f),
+            ),
+            modifier = Modifier.size(18.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, fontSize = 13.sp, color = OnSurface)
+            if (sublabel != null) {
+                Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsLinkItem(label: String, sublabel: String? = null, url: String) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (hovered) SurfaceContainerHighest else Color.Transparent)
+            .hoverable(interaction)
+            .clickable { runCatching { Desktop.getDesktop().browse(URI(url)) } }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Icon(
+            Icons.Default.Favorite,
+            contentDescription = null,
+            tint = if (hovered) ErrorColor else OnSurfaceVariant.copy(alpha = 0.45f),
+            modifier = Modifier.size(18.dp),
+        )
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, fontSize = 13.sp, color = if (hovered) Primary else OnSurface)
+            if (sublabel != null) {
+                Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
             }
         }
     }

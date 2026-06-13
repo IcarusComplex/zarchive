@@ -99,7 +99,9 @@ fun preferExactMatches(card: String, listings: List<SearchResult>): List<SearchR
     val exact = listings.filter { r ->
         val title = r.title ?: return@filter false
         val norm = normalizeCardName(title)
-        matchKey(norm) == want || norm.split("//").any { matchKey(it) == want }
+        // Split the raw title by "//" before normalising so DFC face names are checked
+        // individually — normalizeCardName strips "/" which would otherwise erase the boundary.
+        matchKey(norm) == want || title.split("//").any { matchKey(normalizeCardName(it.trim())) == want }
     }
     return if (exact.isNotEmpty()) exact else listings
 }
