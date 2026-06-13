@@ -140,7 +140,7 @@ class SearchViewModel {
                 .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("[") }
                 .mapNotNull { line ->
                     // Strip leading quantity (e.g. "1 ", "2x ", "1x ")
-                    val name = line.removePrefix(Regex("""^\d+x?\s+""")) ?: line
+                    val name = line.removePrefix(Regex("""^\d+[xX]?\s+""")) ?: line
                     name.trim().ifEmpty { null }
                 }
                 .filter { !ignoreBasicLands || it.lowercase() !in BASIC_LANDS }
