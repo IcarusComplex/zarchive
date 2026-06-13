@@ -352,7 +352,7 @@ private fun SearchInfoIcon() {
     }
 }
 
-private const val SUPPORT_URL = "https://buymeacoffee.com/icaruscomplex"
+private const val SUPPORT_URL = "https://buymeacoffee.com/icaruscomplexza"
 
 @Composable
 private fun SettingsMenu(vm: SearchViewModel) {

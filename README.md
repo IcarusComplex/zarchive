@@ -173,7 +173,7 @@ ZArchive pulls prices directly from each store's website at search time. If a pr
 
 ZArchive is free and always will be. If it saves you time or money hunting singles, a coffee is always appreciated — it helps cover ongoing development time.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-yellow?style=flat-square)](https://buymeacoffee.com/icaruscomplex)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-yellow?style=flat-square)](https://buymeacoffee.com/icaruscomplexza)
 
 No pressure at all — enjoy the app either way.
 
