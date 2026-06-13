@@ -211,8 +211,9 @@ bundles a JRE so end users install nothing.
   `packageName = "ZArchive"`, `includeAllModules = true` (fat-but-safe JRE — every JDK module, ~156 MB),
   and `windows { iconFile = build-tools/ZArchive.ico; menuGroup; menu; shortcut; upgradeUuid }`.
 - **App icon:** Windows needs a `.ico`. `build-tools\MakeIco.java` generates `build-tools\ZArchive.ico`
-  (multi-res 16–256px, PNG-compressed entries, padded to square) from `resources\app_icon.png`.
-  Regenerate with: `javac -d build-tools build-tools\MakeIco.java; java -cp build-tools MakeIco resources\app_icon.png build-tools\ZArchive.ico`.
+  (multi-res 16–256px, PNG-compressed entries, padded to square) from two source images:
+  `resources\app_icon.png` (sizes 256, 128, 64, 48, 32, 24) and `resources\low_res_icon.png` (size 16 only).
+  Regenerate with: `javac -d build-tools build-tools\MakeIco.java; java -cp build-tools MakeIco resources\app_icon.png resources\low_res_icon.png build-tools\ZArchive.ico`.
 - **MSI installer:** not built. `targetFormats(Msi)` is declared and the `windows{}` Start-Menu options
   are set, but `packageMsi` needs the **WiX 3.14 toolset** installed (absent here). The portable zip is
   the shipping artifact; it has no auto Start-Menu entry (users can pin `ZArchive.exe` manually).

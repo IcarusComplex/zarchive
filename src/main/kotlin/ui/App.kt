@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -38,9 +39,10 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.*
+import androidx.compose.ui.window.WindowScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -51,8 +53,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
-import androidx.compose.ui.window.WindowState
-import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
 import data.SearchResult
 import data.OrderPlan
@@ -107,10 +107,8 @@ private fun formatZar(v: Double): String {
 }
 
 @Composable
-fun App(
+fun WindowScope.App(
     onCloseRequest: () -> Unit = {},
-    windowState: WindowState = rememberWindowState(),
-    window: java.awt.Window? = null,
 ) {
     val vm = remember { SearchViewModel() }
     val colorScheme = darkColorScheme(
@@ -130,7 +128,7 @@ fun App(
             Modifier.fillMaxSize().background(Surface)
                 .border(1.dp, OutlineVariant)
         ) {
-            AppHeader(vm, onCloseRequest, windowState, window, tab.takeIf { hasSearch }) { tab = it }
+            AppHeader(vm, onCloseRequest, tab.takeIf { hasSearch }) { tab = it }
             HorizontalDivider(color = OutlineVariant)
             Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                 if (vm.isSearching || vm.statusText.isNotEmpty()) {
@@ -149,11 +147,9 @@ fun App(
 }
 
 @Composable
-private fun AppHeader(
+private fun WindowScope.AppHeader(
     vm: SearchViewModel,
     onCloseRequest: () -> Unit,
-    windowState: WindowState,
-    window: java.awt.Window?,
     tab: ResultsTab?,
     onSelectTab: (ResultsTab) -> Unit,
 ) {
@@ -165,73 +161,75 @@ private fun AppHeader(
         }.getOrNull()
     }
 
-    Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    val w = window ?: return@detectDragGestures
-                    val f = w as? java.awt.Frame
-                    if (f == null || f.extendedState and java.awt.Frame.MAXIMIZED_BOTH == 0) {
-                        w.location = java.awt.Point(
-                            (w.x + dragAmount.x).toInt(),
-                            (w.y + dragAmount.y).toInt(),
-                        )
+    WindowDraggableArea {
+        Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth()) {
+            Box(Modifier.fillMaxWidth()) {
+                // ── Window controls — top-right, standard Windows position ──
+                Row(Modifier.align(Alignment.TopEnd)) {
+                    if (System.getProperty("mtg.debug") == "true") {
+                        val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
+                        GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                            debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
+                        }
                     }
-                }
-            }
-        ) {
-            // ── Main row: logo | search + checkboxes | window buttons ───────
-            Row(
-                modifier = Modifier.fillMaxWidth()
-                    .padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    HeaderLogo(bannerBitmap)
-                }
-                Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    HeaderSearch(vm, Modifier.fillMaxWidth())
-                    Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
-                        LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+                    GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                        runCatching { (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED }
+                    }
+                    GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                        runCatching {
+                            val f = window as? java.awt.Frame ?: return@GhostIconButton
+                            f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
+                                java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
+                        }
+                    }
+                    GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 16.dp) {
+                        onCloseRequest()
                     }
                 }
 
-                if (vm.isSearching) {
-                    GhostIconButton(Icons.Default.Close, "Cancel", tint = ErrorColor, iconSize = 18.dp) { vm.cancel() }
-                } else {
-                    GhostIconButton(Icons.Default.Search, "Search", tint = Primary, iconSize = 18.dp) { vm.search() }
-                }
-
-                if (System.getProperty("mtg.debug") == "true") {
-                    val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
-                    GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                        debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
-                    }
-                }
-
-                GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                    (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED
-                }
-                GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                    val f = window as? java.awt.Frame ?: return@GhostIconButton
-                    f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
-                        java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
-                }
-                GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 16.dp) {
-                    onCloseRequest()
-                }
-            }
-
-            // ── Bottom strip: folder tabs ────────────────────────────────────
-            if (tab != null) {
+                // ── Main content ─────────────────────────────────────────────
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp),
-                    verticalAlignment = Alignment.Bottom,
+                    modifier = Modifier.fillMaxWidth()
+                        .padding(start = 20.dp, end = 96.dp, top = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    FolderTabs(tab, onSelectTab)
+                    // Left 1/3: logo with folder tabs overlaid at its bottom edge
+                    Box(Modifier.weight(1f).background(Color(0xFF00040B))) {
+                        HeaderLogo(bannerBitmap)
+                        if (tab != null) {
+                            FolderTabs(tab, onSelectTab, Modifier.align(Alignment.BottomStart))
+                        }
+                    }
+
+                    // Right 2/3: search row + checkboxes
+                    Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            HeaderSearch(vm, Modifier.weight(1f))
+                            SearchInfoIcon()
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy((-6).dp),
+                            ) {
+                                if (vm.isSearching) {
+                                    GhostIconButton(Icons.Default.Close, "Cancel", tint = ErrorColor, iconSize = 18.dp) { vm.cancel() }
+                                } else {
+                                    GhostIconButton(Icons.Default.Search, "Search", tint = Primary, iconSize = 18.dp) { vm.search() }
+                                }
+                                Text("Alt+Enter", fontSize = 8.sp, color = OnSurfaceVariant.copy(alpha = 0.35f))
+                            }
+                        }
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(16.dp),
+                            modifier = Modifier.padding(bottom = 6.dp),
+                        ) {
+                            IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
+                            LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+                        }
+                    }
                 }
             }
         }
@@ -260,9 +258,8 @@ private fun HeaderSearch(vm: SearchViewModel, modifier: Modifier) {
     OutlinedTextField(
         value = vm.query,
         onValueChange = { vm.query = it },
-        modifier = modifier.focusRequester(focusRequester).onKeyEvent { e ->
-            if (e.key == Key.Enter && e.type == KeyEventType.KeyDown &&
-                !e.isShiftPressed && !vm.isSearching
+        modifier = modifier.focusRequester(focusRequester).onPreviewKeyEvent { e ->
+            if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && e.isAltPressed
             ) { vm.search(); true } else false
         },
         placeholder = { Text("Search card name…  (one per line for multiple)", color = OnSurfaceVariant.copy(alpha = 0.5f), fontFamily = Mono, fontSize = 13.sp) },
@@ -297,6 +294,61 @@ private fun GhostIconButton(icon: ImageVector, desc: String, tint: Color, iconSi
             .padding(8.dp),
     ) {
         Icon(icon, contentDescription = desc, tint = tint, modifier = Modifier.size(iconSize))
+    }
+}
+
+@Composable
+private fun SearchInfoIcon() {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(Modifier.hoverable(interaction).padding(4.dp)) {
+        Icon(
+            Icons.Default.HelpOutline,
+            contentDescription = "Search help",
+            tint = OnSurfaceVariant.copy(alpha = if (hovered) 0.75f else 0.35f),
+            modifier = Modifier.size(16.dp),
+        )
+        if (hovered) {
+            Popup(alignment = Alignment.BottomEnd, offset = IntOffset(-240, 16)) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = SurfaceContainerHigh,
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    modifier = Modifier.width(296.dp),
+                ) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("Search format", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
+                        InfoLine("One card name per line")
+                        InfoLine("Alt+Enter or click ⌕ to search")
+                        Spacer(Modifier.height(2.dp))
+                        Text("Decklist format — quantity prefix is stripped:", fontSize = 11.sp, color = OnSurfaceVariant)
+                        Surface(color = SurfaceContainerLowest, shape = RoundedCornerShape(4.dp)) {
+                            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                listOf(
+                                    "4x Lightning Bolt",
+                                    "1 Shadowspear",
+                                    "[Creatures]   ← section header, ignored",
+                                    "# comment     ← ignored",
+                                ).forEach {
+                                    Text(it, fontSize = 11.sp, fontFamily = Mono,
+                                        color = if (it.startsWith("[") || it.startsWith("#"))
+                                            OnSurfaceVariant.copy(alpha = 0.45f) else OnSurface)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InfoLine(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text("•", fontSize = 11.sp, color = Primary)
+        Text(text, fontSize = 11.sp, color = OnSurfaceVariant)
     }
 }
 
@@ -974,16 +1026,15 @@ private fun CardThumbnail(path: String?, dimmed: Boolean) {
     var bitmap by remember(path) { mutableStateOf(path?.let { imageCache[it] }) }
     LaunchedEffect(path) {
         if (path != null && bitmap == null) {
-            withContext(Dispatchers.IO) {
+            val loaded = withContext(Dispatchers.IO) {
                 runCatching {
                     val f = java.io.File(path)
-                    if (f.exists()) {
-                        javax.imageio.ImageIO.read(f)?.toComposeImageBitmap()?.let {
-                            imageCache[path] = it
-                            bitmap = it
-                        }
-                    }
-                }
+                    if (f.exists()) javax.imageio.ImageIO.read(f)?.toComposeImageBitmap() else null
+                }.getOrNull()
+            }
+            if (loaded != null) {
+                imageCache[path] = loaded
+                bitmap = loaded
             }
         }
     }
@@ -1051,32 +1102,37 @@ private fun CardSummaryPanel(
     ) {
         Column {
             // Collapsible header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = !expanded }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Text("Card Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    "$foundCount / ${cards.size} found",
-                    fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Tertiary,
-                )
-                if (pendingCount > 0) {
-                    Spacer(Modifier.width(8.dp))
+                Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Card Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+                    Spacer(Modifier.width(10.dp))
                     Text(
-                        "$pendingCount pending",
-                        fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                        "$foundCount / ${cards.size} found",
+                        fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Tertiary,
                     )
+                    if (pendingCount > 0) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            "$pendingCount pending",
+                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
                 }
-                Spacer(Modifier.weight(1f))
+                Text(
+                    if (expanded) "click to collapse" else "click to expand",
+                    fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.align(Alignment.Center),
+                )
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse" else "Expand",
                     tint = OnSurfaceVariant,
-                    modifier = Modifier.size(18.dp),
+                    modifier = Modifier.align(Alignment.CenterEnd).size(18.dp),
                 )
             }
 

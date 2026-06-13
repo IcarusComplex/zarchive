@@ -1,3 +1,4 @@
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
@@ -38,6 +39,9 @@ fun main() = application {
         undecorated = true,
         icon = icon,
     ) {
-        App(::exitApplication, windowState, window)
+        // Fill the AWT window background with the app surface colour so the brief
+        // gap between a window move and the next Compose repaint is invisible.
+        SideEffect { window.background = java.awt.Color(0x0B, 0x13, 0x26) }
+        App(::exitApplication)
     }
 }
