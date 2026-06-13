@@ -308,6 +308,9 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): Li
     }
 }
 
+// This API endpoint requires an auth token that The Warren does not expose publicly.
+// Calls always return 401. The Warren is therefore searched via BrowserSearcher (Playwright headless),
+// which handles the JS token exchange. Do not attempt to fall back to this function.
 suspend fun searchWarrenApi(client: HttpClient, base: String, card: String): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/openapi/1.0.0fe/client/product/search?" +
