@@ -1777,7 +1777,9 @@ private fun CardSummaryEntry(
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hoveredRaw by interaction.collectIsHoveredAsState()
-    val showPopup = hoveredRaw
+    val popupInteraction = remember { MutableInteractionSource() }
+    val popupHovered by popupInteraction.collectIsHoveredAsState()
+    val showPopup = hoveredRaw || popupHovered
 
     // Eagerly load the image into the in-memory cache so the popup is instant on first hover.
     LaunchedEffect(imagePath) {
@@ -1865,7 +1867,9 @@ private fun CardSummaryEntry(
                     }
                 }
                 Popup(popupPositionProvider = provider) {
-                    CardImagePopup(bmp, width = SUMMARY_POPUP_W, height = SUMMARY_POPUP_H)
+                    Box(Modifier.hoverable(popupInteraction)) {
+                        CardImagePopup(bmp, width = SUMMARY_POPUP_W, height = SUMMARY_POPUP_H)
+                    }
                 }
             }
         }

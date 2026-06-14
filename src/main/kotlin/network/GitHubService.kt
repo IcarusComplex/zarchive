@@ -49,11 +49,23 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
         val htmlUrl = release["html_url"]?.jsonPrimitive?.content    ?: return@runCatching null
         if (!isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) return@runCatching null
 
-        // Find the Windows zip asset in the release.
-        val downloadUrl = release["assets"]?.jsonArray
+        // Pick the platform-appropriate zip from the release assets.
+        val os = System.getProperty("os.name", "").lowercase()
+        val platformKey = when {
+            os.contains("mac") -> "macos"
+            os.contains("win") -> "windows"
+            else               -> null
+        }
+        val zips = release["assets"]?.jsonArray
             ?.mapNotNull { it.jsonObject }
-            ?.firstOrNull { it["name"]?.jsonPrimitive?.content?.endsWith(".zip") == true }
-            ?.get("browser_download_url")?.jsonPrimitive?.content
+            ?.filter { it["name"]?.jsonPrimitive?.content?.endsWith(".zip") == true }
+            ?: emptyList()
+        val downloadUrl = (if (platformKey != null)
+            zips.firstOrNull { it["name"]?.jsonPrimitive?.content?.contains(platformKey) == true }
+                ?: zips.firstOrNull()
+        else
+            zips.firstOrNull()
+        )?.get("browser_download_url")?.jsonPrimitive?.content
 
         UpdateInfo(tag, htmlUrl, downloadUrl)
     }.also { client.close() }.getOrNull()
