@@ -1,4 +1,5 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.Properties
 
 plugins {
     kotlin("jvm") version "1.9.23"
@@ -60,6 +61,36 @@ compose.desktop {
                 upgradeUuid = "bb68f68c-b99b-48ae-a23b-bee6ac0e8f82"
             }
         }
+    }
+}
+
+// Generate BuildInfo.kt — injects app version + GitHub crash-report token from secrets.properties.
+// secrets.properties is gitignored; missing file → empty token (crash reports silently disabled).
+val generatedKotlinDir = layout.buildDirectory.dir("generated/kotlin")
+
+val generateBuildInfo by tasks.registering {
+    outputs.dir(generatedKotlinDir)
+    doLast {
+        val props = Properties()
+        val secretsFile = rootProject.file("secrets.properties")
+        if (secretsFile.exists()) secretsFile.reader().use { props.load(it) }
+        val token = props.getProperty("github.crash.token", "")
+        val out = generatedKotlinDir.get().file("data/BuildInfo.kt").asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            "package data\n\nobject BuildInfo {\n" +
+            "    const val VERSION = \"$version\"\n" +
+            "    const val GITHUB_CRASH_TOKEN = \"$token\"\n" +
+            "}\n"
+        )
+    }
+}
+
+tasks.named("compileKotlin") { dependsOn(generateBuildInfo) }
+
+sourceSets {
+    main {
+        kotlin.srcDir(generatedKotlinDir)
     }
 }
 

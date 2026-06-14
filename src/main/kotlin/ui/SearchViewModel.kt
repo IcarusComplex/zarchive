@@ -8,8 +8,11 @@ import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.swing.Swing
 import network.CardImageService
+import network.UpdateInfo
+import network.checkForUpdate
 
 enum class StoreStatus { PENDING, CHECKING, DONE }
+enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
 
 class SearchViewModel {
     var query by mutableStateOf("")
@@ -64,6 +67,23 @@ class SearchViewModel {
             earlyAccessState = value
             prefs.putBoolean("earlyAccess", value)
         }
+
+    var updateInfo by mutableStateOf<UpdateInfo?>(null)
+    var updateCheckState by mutableStateOf(UpdateCheckState.IDLE)
+
+    fun checkForUpdates() {
+        if (updateCheckState == UpdateCheckState.CHECKING) return
+        updateCheckState = UpdateCheckState.CHECKING
+        scope.launch(Dispatchers.IO) {
+            val info = runCatching { checkForUpdate(earlyAccess) }.getOrNull()
+            withContext(Dispatchers.Swing) {
+                updateInfo = info
+                updateCheckState = if (info != null) UpdateCheckState.UPDATE_FOUND else UpdateCheckState.UP_TO_DATE
+            }
+        }
+    }
+
+    fun dismissUpdateStatus() { updateCheckState = UpdateCheckState.IDLE }
 
     fun search() {
         val cards = parseCardList(query, ignoreBasicLands)

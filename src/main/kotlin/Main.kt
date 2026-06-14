@@ -9,7 +9,33 @@ import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import ui.App
 
-fun main() = application {
+private val crashLog = java.io.File(System.getProperty("user.home"), "zarchive-debug/crash.log")
+
+private fun installCrashLogger() {
+    Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+        runCatching {
+            crashLog.parentFile.mkdirs()
+            val ts = java.time.LocalDateTime.now()
+                .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+            crashLog.appendText("[$ts] Thread: ${thread.name}\n${e.stackTraceToString()}\n\n")
+        }
+    }
+}
+
+// Reads and deletes the crash log from the previous session, if any.
+private fun readAndClearCrashLog(): String? {
+    if (!crashLog.exists() || crashLog.length() == 0L) return null
+    return runCatching {
+        val content = crashLog.readText().trim()
+        crashLog.delete()
+        content.ifEmpty { null }
+    }.getOrNull()
+}
+
+fun main() {
+    installCrashLogger()
+    val pendingCrash = readAndClearCrashLog()
+    application {
     // Use the working area (screen minus taskbar) so the window never launches behind it.
     val genv = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment()
     val workArea = genv.maximumWindowBounds          // excludes taskbar on all platforms
@@ -42,6 +68,7 @@ fun main() = application {
         // Fill the AWT window background with the app surface colour so the brief
         // gap between a window move and the next Compose repaint is invisible.
         SideEffect { window.background = java.awt.Color(0x0B, 0x13, 0x26) }
-        App(::exitApplication)
+        App(::exitApplication, pendingCrash)
+    }
     }
 }

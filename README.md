@@ -2,7 +2,7 @@
 
 **ZArchive** searches South African Magic: The Gathering stores for card singles — all at once, in one place. Paste a list of cards you need, hit search, and see what's in stock and at what price across every supported SA store. Includes an order optimiser that tells you the cheapest buying plan and how to cover your list from the fewest shops.
 
-> **Supported stores:** The Unseen Hand · The Warren · Axion Now · Dragon's Lair · Something2Do · and more.
+> **Store owner?** If you'd like your store added or removed from ZArchive, please [open a GitHub Issue](https://github.com/IcarusComplex/zarchive/issues/new) with the label **`store-request`** and include your store's name and URL. I'll get back to you there.
 
 ---
 

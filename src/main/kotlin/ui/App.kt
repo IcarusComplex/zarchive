@@ -64,6 +64,7 @@ import data.fewestStoresPlan
 import data.preferExactMatches
 import data.luckshackSearchUrl
 import kotlinx.coroutines.Dispatchers
+import ui.UpdateCheckState
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.awt.Desktop
@@ -111,6 +112,7 @@ private fun formatZar(v: Double): String {
 @Composable
 fun WindowScope.App(
     onCloseRequest: () -> Unit = {},
+    pendingCrash: String? = null,
 ) {
     val vm = remember { SearchViewModel() }
     val colorScheme = darkColorScheme(
@@ -124,37 +126,67 @@ fun WindowScope.App(
 
     var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
     val hasSearch = vm.searchedCards.isNotEmpty() || vm.results.isNotEmpty()
+    var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
+
+    LaunchedEffect(Unit) { vm.checkForUpdates() }
+
+    // Auto-dismiss the update status footer after 5 seconds
+    LaunchedEffect(vm.updateCheckState) {
+        if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE ||
+            vm.updateCheckState == UpdateCheckState.UPDATE_FOUND
+        ) {
+            delay(5_000)
+            vm.dismissUpdateStatus()
+        }
+    }
 
     MaterialTheme(colorScheme = colorScheme) {
-        Column(Modifier.fillMaxSize().background(Surface).border(1.dp, OutlineVariant)) {
-            // Thin draggable title bar — OS controls only
-            TitleBar(vm, onCloseRequest)
-            HorizontalDivider(color = OutlineVariant)
-            Row(Modifier.fillMaxSize()) {
-                // Left search panel
-                LeftPanel(vm)
-                VerticalDivider(color = OutlineVariant)
-                // Right content area
-                Column(Modifier.weight(1f)) {
-                    if (hasSearch) {
-                        Box(Modifier.fillMaxWidth().background(HeaderBg)) {
-                            FolderTabs(tab, { tab = it }, Modifier.padding(start = 16.dp))
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().background(Surface).border(1.dp, OutlineVariant)) {
+                // Thin draggable title bar — OS controls only
+                TitleBar(vm, onCloseRequest)
+                HorizontalDivider(color = OutlineVariant)
+                Row(Modifier.weight(1f).fillMaxWidth()) {
+                    // Left search panel
+                    LeftPanel(vm)
+                    VerticalDivider(color = OutlineVariant)
+                    // Right content area
+                    Column(Modifier.weight(1f)) {
+                        if (hasSearch) {
+                            Box(Modifier.fillMaxWidth().background(HeaderBg)) {
+                                FolderTabs(tab, { tab = it }, Modifier.padding(start = 16.dp))
+                            }
+                            HorizontalDivider(color = OutlineVariant)
                         }
-                        HorizontalDivider(color = OutlineVariant)
-                    }
-                    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-                        if (vm.isSearching || vm.statusText.isNotEmpty()) {
-                            Spacer(Modifier.height(6.dp))
-                            StatusRow(vm)
-                        }
-                        if (vm.searchedCards.isNotEmpty() && tab == ResultsTab.RESULTS) {
+                        Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                            if (vm.isSearching || vm.statusText.isNotEmpty()) {
+                                Spacer(Modifier.height(6.dp))
+                                StatusRow(vm)
+                            }
+                            if (vm.searchedCards.isNotEmpty() && tab == ResultsTab.RESULTS) {
+                                Spacer(Modifier.height(8.dp))
+                                LuckshackLinks(vm.searchedCards)
+                            }
                             Spacer(Modifier.height(8.dp))
-                            LuckshackLinks(vm.searchedCards)
+                            ResultsPane(vm, tab)
                         }
-                        Spacer(Modifier.height(8.dp))
-                        ResultsPane(vm, tab)
                     }
                 }
+                // Background task status footer — slides in/out at the very bottom of the window
+                AnimatedVisibility(
+                    visible = vm.updateCheckState != UpdateCheckState.IDLE,
+                    enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                    exit  = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
+                ) {
+                    UpdateStatusFooter(vm.updateCheckState)
+                }
+            }
+            // Modal dialogs — rendered on top of the full app
+            if (vm.updateInfo != null) {
+                UpdateDialog(vm.updateInfo!!, onDismiss = { vm.updateInfo = null })
+            }
+            if (showCrashDialog && pendingCrash != null) {
+                CrashReportDialog(crashLog = pendingCrash, onDismiss = { showCrashDialog = false })
             }
         }
     }
@@ -392,6 +424,13 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             onCheckedChange = { vm.earlyAccess = it },
                         )
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        SettingsActionItem(
+                            label = if (vm.updateCheckState == UpdateCheckState.CHECKING) "Checking…" else "Check for updates",
+                            sublabel = "Current version: v${data.BuildInfo.VERSION}",
+                            icon = Icons.Default.Refresh,
+                            onClick = { if (vm.updateCheckState != UpdateCheckState.CHECKING) { vm.checkForUpdates(); expanded = false } },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsLinkItem(
                             label = "Support ZArchive",
                             sublabel = "Support on Ko-fi",
@@ -473,6 +512,220 @@ private fun SettingsLinkItem(label: String, sublabel: String? = null, url: Strin
     }
 }
 
+
+@Composable
+private fun SettingsActionItem(label: String, sublabel: String? = null, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (hovered) SurfaceContainerHighest else Color.Transparent)
+            .hoverable(interaction)
+            .clickable { onClick() }
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = if (hovered) Primary else OnSurfaceVariant.copy(alpha = 0.45f), modifier = Modifier.size(18.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, fontSize = 13.sp, color = if (hovered) Primary else OnSurface)
+            if (sublabel != null) {
+                Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateStatusFooter(state: UpdateCheckState) {
+    val borderColor = when (state) {
+        UpdateCheckState.UPDATE_FOUND -> Primary
+        UpdateCheckState.UP_TO_DATE   -> Tertiary
+        else                          -> OutlineVariant
+    }
+    Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
+        HorizontalDivider(color = borderColor.copy(alpha = 0.5f))
+        if (state == UpdateCheckState.CHECKING) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = Primary,
+                trackColor = SurfaceContainerHighest,
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (state) {
+                UpdateCheckState.CHECKING -> {
+                    Icon(Icons.Default.Refresh, contentDescription = null, tint = Primary, modifier = Modifier.size(13.dp))
+                    Text("Checking for updates…", fontSize = 11.sp, color = OnSurfaceVariant)
+                }
+                UpdateCheckState.UPDATE_FOUND -> {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = Primary, modifier = Modifier.size(13.dp))
+                    Text("Update available — open Settings → Check for updates to download.", fontSize = 11.sp, color = Primary)
+                }
+                UpdateCheckState.UP_TO_DATE -> {
+                    Icon(Icons.Default.Check, contentDescription = null, tint = Tertiary, modifier = Modifier.size(13.dp))
+                    Text("Already up to date", fontSize = 11.sp, color = Tertiary)
+                }
+                else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun ModalScrim(content: @Composable BoxScope.() -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.65f))
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {},
+        contentAlignment = Alignment.Center,
+        content = content,
+    )
+}
+
+@Composable
+private fun UpdateDialog(info: network.UpdateInfo, onDismiss: () -> Unit) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(380.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Update available", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                Text(
+                    "ZArchive ${info.tag} is available. You're on ${data.BuildInfo.VERSION}.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text(
+                    "Download the new version from GitHub Releases, extract, and replace your current ZArchive folder.",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Later", fontSize = 12.sp) }
+                    Button(
+                        onClick = {
+                            runCatching { Desktop.getDesktop().browse(URI(info.releaseUrl)) }
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Download", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CrashReportDialog(crashLog: String, onDismiss: () -> Unit) {
+    var description by remember { mutableStateOf("") }
+    var submitting by remember { mutableStateOf(false) }
+    var submitted by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(460.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("ZArchive crashed last session", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
+                if (submitted) {
+                    Text("Report submitted. Thank you!", fontSize = 13.sp, color = Tertiary)
+                    Spacer(Modifier.height(4.dp))
+                    Button(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Close", fontSize = 12.sp) }
+                } else {
+                    Text(
+                        "Would you like to submit a crash report? This helps us fix the problem.",
+                        fontSize = 13.sp, color = OnSurface,
+                    )
+                    Text("What were you doing when it crashed? (optional)", fontSize = 11.sp, color = OnSurfaceVariant)
+                    BasicTextField(
+                        value = description,
+                        onValueChange = { description = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(64.dp)
+                            .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
+                            .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                            .padding(8.dp),
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = OnSurface),
+                        cursorBrush = SolidColor(Primary),
+                        decorationBox = { inner ->
+                            if (description.isEmpty()) Text("e.g. I searched for Lightning Bolt and it crashed…", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.4f))
+                            inner()
+                        },
+                    )
+                    Text("Crash log preview", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f))
+                    Box(
+                        Modifier.fillMaxWidth().height(80.dp)
+                            .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
+                            .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                            .padding(8.dp)
+                    ) {
+                        val scroll = rememberScrollState()
+                        Text(
+                            crashLog.take(800),
+                            fontSize = 10.sp, fontFamily = Mono, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.verticalScroll(scroll),
+                        )
+                    }
+                    if (failed) {
+                        Text("Submission failed — report could not be sent.", fontSize = 11.sp, color = ErrorColor)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(4.dp),
+                            border = BorderStroke(1.dp, OutlineVariant),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                            enabled = !submitting,
+                        ) { Text("Dismiss", fontSize = 12.sp) }
+                        Button(
+                            onClick = {
+                                submitting = true; failed = false
+                                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                                    val ok = network.createCrashIssue(description, crashLog)
+                                    withContext(kotlinx.coroutines.Dispatchers.Main) {
+                                        submitting = false
+                                        if (ok) submitted = true else failed = true
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                            enabled = !submitting,
+                        ) { Text(if (submitting) "Submitting…" else "Submit report", fontSize = 12.sp) }
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun StatusRow(vm: SearchViewModel) {
@@ -815,6 +1068,19 @@ private fun TooltipSidebarToggle(
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val positionProvider = remember(density) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize,
+            ): IntOffset {
+                val gap = with(density) { 4.dp.roundToPx() }
+                return IntOffset(anchorBounds.left, anchorBounds.bottom + gap)
+            }
+        }
+    }
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -838,19 +1104,7 @@ private fun TooltipSidebarToggle(
             Text(label, fontSize = 12.sp, color = OnSurfaceVariant)
         }
         if (hovered) {
-            Popup(
-                popupPositionProvider = object : PopupPositionProvider {
-                    override fun calculatePosition(
-                        anchorBounds: IntRect,
-                        windowSize: IntSize,
-                        layoutDirection: LayoutDirection,
-                        popupContentSize: IntSize,
-                    ): IntOffset {
-                        val gap = with(density) { 4.dp.roundToPx() }
-                        return IntOffset(anchorBounds.left, anchorBounds.bottom + gap)
-                    }
-                }
-            ) {
+            Popup(popupPositionProvider = positionProvider) {
                 Surface(
                     shape = RoundedCornerShape(4.dp),
                     color = SurfaceContainerHigh,
