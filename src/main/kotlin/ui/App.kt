@@ -1,4 +1,4 @@
-package ui
+﻿package ui
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -85,7 +86,7 @@ private val Secondary                = Color(0xFFC0C1FF)
 private val OnSecondaryContainer     = Color(0xFFB0B2FF)
 private val Tertiary                 = Color(0xFF58E7AA)
 private val ErrorColor               = Color(0xFFFFB4AB)
-private val HeaderBg                 = Color(0xFF00060E)
+private val HeaderBg                 = Color(0xFF00020C)
 
 private val Mono = FontFamily.Monospace
 
@@ -125,35 +126,77 @@ fun WindowScope.App(
     val hasSearch = vm.searchedCards.isNotEmpty() || vm.results.isNotEmpty()
 
     MaterialTheme(colorScheme = colorScheme) {
-        Column(
-            Modifier.fillMaxSize().background(Surface)
-                .border(1.dp, OutlineVariant)
-        ) {
-            AppHeader(vm, onCloseRequest, tab.takeIf { hasSearch }) { tab = it }
+        Column(Modifier.fillMaxSize().background(Surface).border(1.dp, OutlineVariant)) {
+            // Thin draggable title bar — OS controls only
+            TitleBar(vm, onCloseRequest)
             HorizontalDivider(color = OutlineVariant)
-            Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
-                if (vm.isSearching || vm.statusText.isNotEmpty()) {
-                    Spacer(Modifier.height(6.dp))
-                    StatusRow(vm)
+            Row(Modifier.fillMaxSize()) {
+                // Left search panel
+                LeftPanel(vm)
+                VerticalDivider(color = OutlineVariant)
+                // Right content area
+                Column(Modifier.weight(1f)) {
+                    if (hasSearch) {
+                        Box(Modifier.fillMaxWidth().background(HeaderBg)) {
+                            FolderTabs(tab, { tab = it }, Modifier.padding(start = 16.dp))
+                        }
+                        HorizontalDivider(color = OutlineVariant)
+                    }
+                    Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                        if (vm.isSearching || vm.statusText.isNotEmpty()) {
+                            Spacer(Modifier.height(6.dp))
+                            StatusRow(vm)
+                        }
+                        if (vm.searchedCards.isNotEmpty() && tab == ResultsTab.RESULTS) {
+                            Spacer(Modifier.height(8.dp))
+                            LuckshackLinks(vm.searchedCards)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        ResultsPane(vm, tab)
+                    }
                 }
-                if (vm.searchedCards.isNotEmpty() && tab == ResultsTab.RESULTS) {
-                    Spacer(Modifier.height(8.dp))
-                    LuckshackLinks(vm.searchedCards)
-                }
-                Spacer(Modifier.height(8.dp))
-                ResultsPane(vm, tab)
             }
         }
     }
 }
 
 @Composable
-private fun WindowScope.AppHeader(
-    vm: SearchViewModel,
-    onCloseRequest: () -> Unit,
-    tab: ResultsTab?,
-    onSelectTab: (ResultsTab) -> Unit,
-) {
+private fun WindowScope.TitleBar(vm: SearchViewModel, onCloseRequest: () -> Unit) {
+    WindowDraggableArea {
+        Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth().height(32.dp)) {
+            Box(Modifier.fillMaxSize()) {
+                Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+                    if (System.getProperty("mtg.debug") == "true") {
+                        val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
+                        GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 14.dp) {
+                            debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
+                        }
+                    }
+                    SettingsMenu(vm)
+                    Spacer(Modifier.width(2.dp))
+                    Box(Modifier.width(1.dp).height(12.dp).background(OutlineVariant.copy(alpha = 0.5f)))
+                    Spacer(Modifier.width(2.dp))
+                    GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 14.dp) {
+                        runCatching { (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED }
+                    }
+                    GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 14.dp) {
+                        runCatching {
+                            val f = window as? java.awt.Frame ?: return@GhostIconButton
+                            f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
+                                java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
+                        }
+                    }
+                    GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 14.dp) {
+                        onCloseRequest()
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun LeftPanel(vm: SearchViewModel) {
     val bannerBitmap = remember {
         runCatching {
             Thread.currentThread().contextClassLoader.getResourceAsStream("banner_logo.png")
@@ -161,85 +204,74 @@ private fun WindowScope.AppHeader(
                 ?.toComposeImageBitmap()
         }.getOrNull()
     }
+    Column(
+        Modifier
+            .width(240.dp)
+            .fillMaxHeight()
+            .background(SurfaceContainerLowest),
+    ) {
+        // Logo
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .background(HeaderBg),
+        ) {
+            HeaderLogo(bannerBitmap)
+        }
+        HorizontalDivider(color = OutlineVariant)
 
-    WindowDraggableArea {
-        Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth()) {
-            Box(Modifier.fillMaxWidth()) {
-                // ── Window controls — top-right, standard Windows position ──
-                Row(
-                    Modifier.align(Alignment.TopEnd),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (System.getProperty("mtg.debug") == "true") {
-                        val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
-                        GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                            debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
-                        }
-                    }
-                    SettingsMenu(vm)
-                    Spacer(Modifier.width(2.dp))
-                    Box(Modifier.width(1.dp).height(14.dp).background(OutlineVariant.copy(alpha = 0.5f)))
-                    Spacer(Modifier.width(2.dp))
-                    GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                        runCatching { (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED }
-                    }
-                    GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 16.dp) {
-                        runCatching {
-                            val f = window as? java.awt.Frame ?: return@GhostIconButton
-                            f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
-                                java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
-                        }
-                    }
-                    GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 16.dp) {
-                        onCloseRequest()
-                    }
-                }
+        // Checkboxes
+        Column(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
+            WarrenToggle(vm.includeWarren) { vm.includeWarren = it }
+            LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+        }
+        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
 
-                // ── Main content ─────────────────────────────────────────────
-                Row(
-                    modifier = Modifier.fillMaxWidth()
-                        .padding(start = 20.dp, end = 96.dp, top = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    // Left 1/3: logo with folder tabs overlaid at its bottom edge
-                    Box(Modifier.weight(1f).background(Color(0xFF00040B))) {
-                        HeaderLogo(bannerBitmap)
-                        if (tab != null) {
-                            FolderTabs(tab, onSelectTab, Modifier.align(Alignment.BottomStart))
-                        }
-                    }
+        // Search label
+        Text(
+            "Cards to search",
+            fontSize = 11.sp,
+            color = OnSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 4.dp),
+        )
 
-                    // Right 2/3: search row + checkboxes
-                    Column(Modifier.weight(2f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            HeaderSearch(vm, Modifier.weight(1f))
-                            SearchInfoIcon()
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy((-6).dp),
-                            ) {
-                                if (vm.isSearching) {
-                                    GhostIconButton(Icons.Default.Close, "Cancel", tint = ErrorColor, iconSize = 18.dp) { vm.cancel() }
-                                } else {
-                                    GhostIconButton(Icons.Default.Search, "Search", tint = Primary, iconSize = 18.dp) { vm.search() }
-                                }
-                                Text("Alt+Enter", fontSize = 8.sp, color = OnSurfaceVariant.copy(alpha = 0.35f))
-                            }
-                        }
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(16.dp),
-                            modifier = Modifier.padding(bottom = 6.dp),
-                        ) {
-                            IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
-                            LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
-                        }
-                    }
-                }
+        // Search field — fills all remaining vertical space
+        PanelSearch(vm, Modifier.weight(1f).padding(horizontal = 12.dp))
+
+        Spacer(Modifier.height(8.dp))
+
+        // Search / Stop button + shortcut hint
+        Column(
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Button(
+                onClick = { if (vm.isSearching) vm.cancel() else vm.search() },
+                modifier = Modifier.fillMaxWidth().height(36.dp),
+                shape = RoundedCornerShape(4.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (vm.isSearching) ErrorColor.copy(alpha = 0.12f) else Primary.copy(alpha = 0.15f),
+                    contentColor   = if (vm.isSearching) ErrorColor else Primary,
+                ),
+                contentPadding = PaddingValues(0.dp),
+            ) {
+                Text(
+                    if (vm.isSearching) "Stop" else "Search",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
             }
+            Text(
+                "Alt+Enter",
+                fontSize = 9.sp,
+                color = OnSurfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }
@@ -251,7 +283,7 @@ private fun HeaderLogo(bannerBitmap: ImageBitmap?) {
             bitmap = bannerBitmap,
             contentDescription = "ZArchive",
             contentScale = ContentScale.Fit,
-            modifier = Modifier.fillMaxWidth(),  // width-constrained; height follows aspect ratio
+            modifier = Modifier.fillMaxWidth(),
             alignment = Alignment.CenterStart,
         )
     } else {
@@ -260,32 +292,48 @@ private fun HeaderLogo(bannerBitmap: ImageBitmap?) {
 }
 
 @Composable
-private fun HeaderSearch(vm: SearchViewModel, modifier: Modifier) {
+private fun PanelSearch(vm: SearchViewModel, modifier: Modifier) {
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(Unit) { runCatching { focusRequester.requestFocus() } }
-    OutlinedTextField(
+    var focused by remember { mutableStateOf(false) }
+    BasicTextField(
         value = vm.query,
         onValueChange = { vm.query = it },
-        modifier = modifier.focusRequester(focusRequester).onPreviewKeyEvent { e ->
-            if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && e.isAltPressed
-            ) { vm.search(); true } else false
+        modifier = modifier
+            .fillMaxWidth()
+            .focusRequester(focusRequester)
+            .onFocusChanged { focused = it.isFocused }
+            .onPreviewKeyEvent { e ->
+                if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && e.isAltPressed
+                ) { vm.search(); true } else false
+            },
+        textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Mono, fontSize = 13.sp, color = OnSurface),
+        cursorBrush = SolidColor(Primary),
+        decorationBox = { innerTextField ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(SurfaceContainerLow, RoundedCornerShape(4.dp))
+                    .border(1.dp, if (focused) Primary else OutlineVariant, RoundedCornerShape(4.dp))
+                    .padding(12.dp),
+                contentAlignment = Alignment.TopStart,
+            ) {
+                if (vm.query.isEmpty()) {
+                    Text(
+                        "One card name per line\n\n" +
+                        "Decklist format supported:\n" +
+                        "  4x Lightning Bolt\n" +
+                        "  1 Shadowspear\n" +
+                        "  [Creatures]   ← ignored\n" +
+                        "  # comment     ← ignored",
+                        color = OnSurfaceVariant.copy(alpha = 0.3f),
+                        fontFamily = Mono,
+                        fontSize = 12.sp,
+                    )
+                }
+                innerTextField()
+            }
         },
-        placeholder = { Text("Search card name…  (one per line for multiple)", color = OnSurfaceVariant.copy(alpha = 0.5f), fontFamily = Mono, fontSize = 13.sp) },
-        leadingIcon = { Icon(Icons.Default.Search, null, tint = OnSurfaceVariant) },
-        textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Mono, fontSize = 13.sp),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { if (!vm.isSearching) vm.search() }),
-        maxLines = 5,
-        shape = RoundedCornerShape(4.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor      = OnSurface,
-            unfocusedTextColor    = OnSurface,
-            focusedContainerColor   = SurfaceContainerLow,
-            unfocusedContainerColor = SurfaceContainerLow,
-            focusedBorderColor    = Primary,
-            unfocusedBorderColor  = OutlineVariant,
-            cursorColor           = Primary,
-        ),
     )
 }
 
@@ -305,54 +353,8 @@ private fun GhostIconButton(icon: ImageVector, desc: String, tint: Color, iconSi
     }
 }
 
-@Composable
-private fun SearchInfoIcon() {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    Box(Modifier.hoverable(interaction).padding(4.dp)) {
-        Icon(
-            Icons.Default.HelpOutline,
-            contentDescription = "Search help",
-            tint = OnSurfaceVariant.copy(alpha = if (hovered) 0.75f else 0.35f),
-            modifier = Modifier.size(16.dp),
-        )
-        if (hovered) {
-            Popup(alignment = Alignment.BottomEnd, offset = IntOffset(-240, 16)) {
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = SurfaceContainerHigh,
-                    border = BorderStroke(1.dp, OutlineVariant),
-                    modifier = Modifier.width(296.dp),
-                ) {
-                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("Search format", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
-                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
-                        InfoLine("One card name per line")
-                        InfoLine("Alt+Enter or click ⌕ to search")
-                        Spacer(Modifier.height(2.dp))
-                        Text("Decklist format — quantity prefix is stripped:", fontSize = 11.sp, color = OnSurfaceVariant)
-                        Surface(color = SurfaceContainerLowest, shape = RoundedCornerShape(4.dp)) {
-                            Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
-                                listOf(
-                                    "4x Lightning Bolt",
-                                    "1 Shadowspear",
-                                    "[Creatures]   ← section header, ignored",
-                                    "# comment     ← ignored",
-                                ).forEach {
-                                    Text(it, fontSize = 11.sp, fontFamily = Mono,
-                                        color = if (it.startsWith("[") || it.startsWith("#"))
-                                            OnSurfaceVariant.copy(alpha = 0.45f) else OnSurface)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
-private const val SUPPORT_URL = "https://buymeacoffee.com/icaruscomplexza"
+private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 
 @Composable
 private fun SettingsMenu(vm: SearchViewModel) {
@@ -392,7 +394,7 @@ private fun SettingsMenu(vm: SearchViewModel) {
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsLinkItem(
                             label = "Support ZArchive",
-                            sublabel = "Buy me a coffee ☕",
+                            sublabel = "Support on Ko-fi",
                             url = SUPPORT_URL,
                         )
                     }
@@ -471,13 +473,6 @@ private fun SettingsLinkItem(label: String, sublabel: String? = null, url: Strin
     }
 }
 
-@Composable
-private fun InfoLine(text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("•", fontSize = 11.sp, color = Primary)
-        Text(text, fontSize = 11.sp, color = OnSurfaceVariant)
-    }
-}
 
 @Composable
 private fun StatusRow(vm: SearchViewModel) {
@@ -789,26 +784,89 @@ private fun IgnoreBasicLandsToggle(checked: Boolean, onChange: (Boolean) -> Unit
 }
 
 @Composable
+private fun WarrenToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
+    TooltipSidebarToggle(
+        checked = checked,
+        label = "Include The Warren",
+        tooltip = "The Warren requires a headless browser to search, making it significantly " +
+            "slower than other stores. Off by default to keep searches fast.",
+        onChange = onChange,
+    )
+}
+
+@Composable
 private fun LuckshackToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .clickable { onChange(!checked) }
-            .padding(end = 8.dp),
-    ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = CheckboxDefaults.colors(
-                checkedColor = Primary,
-                uncheckedColor = Outline,
-                checkmarkColor = OnPrimary,
-            ),
-            modifier = Modifier.size(28.dp),
-        )
-        Spacer(Modifier.width(6.dp))
-        Text("Auto-open Luckshack", fontSize = 12.sp, color = OnSurfaceVariant)
+    TooltipSidebarToggle(
+        checked = checked,
+        label = "Auto-open Luckshack",
+        tooltip = "Luckshack is protected by Cloudflare and blocks automated searches. " +
+            "Enable to open each card's Luckshack search in your browser when a search runs.",
+        onChange = onChange,
+    )
+}
+
+@Composable
+private fun TooltipSidebarToggle(
+    checked: Boolean,
+    label: String,
+    tooltip: String,
+    onChange: (Boolean) -> Unit,
+) {
+    val density = LocalDensity.current
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .hoverable(interaction)
+                .clickable { onChange(!checked) }
+                .padding(end = 8.dp),
+        ) {
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onChange,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Primary,
+                    uncheckedColor = Outline,
+                    checkmarkColor = OnPrimary,
+                ),
+                modifier = Modifier.size(28.dp),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(label, fontSize = 12.sp, color = OnSurfaceVariant)
+        }
+        if (hovered) {
+            Popup(
+                popupPositionProvider = object : PopupPositionProvider {
+                    override fun calculatePosition(
+                        anchorBounds: IntRect,
+                        windowSize: IntSize,
+                        layoutDirection: LayoutDirection,
+                        popupContentSize: IntSize,
+                    ): IntOffset {
+                        val gap = with(density) { 4.dp.roundToPx() }
+                        return IntOffset(anchorBounds.left, anchorBounds.bottom + gap)
+                    }
+                }
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = SurfaceContainerHigh,
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    modifier = Modifier.widthIn(max = 220.dp),
+                ) {
+                    Text(
+                        tooltip,
+                        fontSize = 11.sp,
+                        color = OnSurfaceVariant,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1433,6 +1491,9 @@ private enum class OrderStrategy(val label: String, val icon: ImageVector, val b
 @Composable
 private fun OrderListsPane(vm: SearchViewModel) {
     var strategy by remember { mutableStateOf(OrderStrategy.CHEAPEST) }
+    // Map of listing URL → Unit; entries present = unchecked (excluded from totals)
+    val unchecked = remember { mutableStateMapOf<String, Unit>() }
+    LaunchedEffect(strategy) { unchecked.clear() }
 
     // Recomputed automatically whenever results stream in (reads the observable list).
     val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList()) } }
@@ -1440,6 +1501,13 @@ private fun OrderListsPane(vm: SearchViewModel) {
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
+
+    // Totals filtered to only checked (selected) lines
+    val activeStores = plan.storeOrders.count { so -> so.lines.any { !unchecked.containsKey(it.listing.url) } }
+    val activeItems  = plan.storeOrders.sumOf { so -> so.lines.count { !unchecked.containsKey(it.listing.url) } }
+    val activeTotal  = plan.storeOrders.sumOf { so ->
+        so.lines.filter { !unchecked.containsKey(it.listing.url) }.sumOf { it.listing.priceZar ?: 0.0 }
+    }
 
     Column(Modifier.fillMaxSize()) {
         // Strategy switcher
@@ -1486,13 +1554,13 @@ private fun OrderListsPane(vm: SearchViewModel) {
             return
         }
 
-        // Plan totals
+        // Plan totals (reflect checked items only)
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 10.dp)) {
-            PlanStat("${plan.storeCount}", if (plan.storeCount == 1) "store" else "stores")
+            PlanStat("$activeStores", if (activeStores == 1) "store" else "stores")
             Spacer(Modifier.width(20.dp))
-            PlanStat("${plan.itemCount}", if (plan.itemCount == 1) "card" else "cards")
+            PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
             Spacer(Modifier.width(20.dp))
-            PlanStat(formatZar(plan.grandTotal), "total", valueColor = Primary)
+            PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
             if (plan.uncoveredCards.isNotEmpty()) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
@@ -1504,7 +1572,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(plan.storeOrders, key = { it.store }) { so ->
-                StoreOrderCard(so, vm.images)
+                StoreOrderCard(so, vm.images, unchecked)
             }
             if (plan.uncoveredCards.isNotEmpty()) {
                 item { UncoveredCard(plan.uncoveredCards) }
@@ -1524,7 +1592,11 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 }
 
 @Composable
-private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>) {
+private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>) {
+    val activeLines  = order.lines.filter { !unchecked.containsKey(it.listing.url) }
+    val displayCount = activeLines.size
+    val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
+
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -1545,27 +1617,50 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>) {
                 Spacer(Modifier.width(8.dp))
                 Text(order.store, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSecondaryContainer)
                 Spacer(Modifier.width(8.dp))
-                CountBadge("${order.itemCount}")
+                CountBadge("$displayCount")
                 Spacer(Modifier.weight(1f))
-                Text(formatZar(order.total), fontFamily = Mono, fontSize = 16.sp,
+                Text(formatZar(displayTotal), fontFamily = Mono, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, color = Primary)
                 Spacer(Modifier.width(10.dp))
                 Icon(Icons.Default.OpenInNew, "Open store", tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
             }
             HorizontalDivider(color = OutlineVariant)
+            // Column header
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Include in order", fontSize = 9.sp, color = OnSurfaceVariant.copy(alpha = 0.4f),
+                    letterSpacing = 0.3.sp, modifier = Modifier.weight(1f))
+                Box(Modifier.width(COL_PRICE), contentAlignment = Alignment.CenterEnd) {
+                    Text("Price", fontSize = 9.sp, color = OnSurfaceVariant.copy(alpha = 0.4f))
+                }
+                Spacer(Modifier.width(COL_ACTION))
+            }
+            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
             order.lines.forEachIndexed { idx, line ->
                 if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
-                OrderLineRow(line, line.listing.title?.let { images[it] } ?: images[line.card])
+                val lineChecked = !unchecked.containsKey(line.listing.url)
+                OrderLineRow(
+                    line = line,
+                    imagePath = line.listing.title?.let { images[it] } ?: images[line.card],
+                    checked = lineChecked,
+                    onToggle = { isChecked ->
+                        if (!isChecked) unchecked[line.listing.url] = Unit
+                        else unchecked.remove(line.listing.url)
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun OrderLineRow(line: data.OrderLine, imagePath: String?) {
+private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Boolean, onToggle: (Boolean) -> Unit) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val contentAlpha = if (checked) 1f else 0.35f
 
     Box {
         Row(
@@ -1577,8 +1672,21 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?) {
                 .padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.width(COL_THUMB)) { CardThumbnail(imagePath, dimmed = false) }
-            Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            // Checkbox — click consumed here, does not propagate to the row's clickable
+            Checkbox(
+                checked = checked,
+                onCheckedChange = onToggle,
+                modifier = Modifier.size(20.dp),
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Primary,
+                    uncheckedColor = OutlineVariant,
+                    checkmarkColor = Color(0xFF3C2F00),
+                ),
+            )
+            Spacer(Modifier.width(8.dp))
+            // Content dims when unchecked
+            Box(Modifier.width(COL_THUMB).alpha(contentAlpha)) { CardThumbnail(imagePath, dimmed = false) }
+            Column(Modifier.weight(1f).padding(end = 12.dp).alpha(contentAlpha)) {
                 Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 line.listing.title?.takeIf { it != line.card }?.let {
@@ -1586,7 +1694,7 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?) {
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
-            Box(Modifier.width(COL_PRICE), contentAlignment = Alignment.CenterEnd) {
+            Box(Modifier.width(COL_PRICE).alpha(contentAlpha), contentAlignment = Alignment.CenterEnd) {
                 Text(line.listing.priceZar?.let { formatZar(it) } ?: "N/A", fontFamily = Mono,
                     fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
                     fontWeight = FontWeight.Bold,
@@ -1601,12 +1709,25 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?) {
         if (hovered && imagePath != null) {
             val bmp = imageCache[imagePath]
             if (bmp != null) {
-                Popup(
-                    alignment = Alignment.TopStart,
-                    offset = with(density) {
-                        IntOffset(24.dp.roundToPx(), -(POPUP_CARD_H + 6.dp).roundToPx())
-                    },
-                ) { CardImagePopup(bmp) }
+                // Prefer above the row; fall back to below if it would clip the top of the window.
+                val provider = remember(density) {
+                    object : PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: IntRect,
+                            windowSize: IntSize,
+                            layoutDirection: LayoutDirection,
+                            popupContentSize: IntSize,
+                        ): IntOffset {
+                            val gap = with(density) { 6.dp.roundToPx() }
+                            val x = (anchorBounds.left + with(density) { 24.dp.roundToPx() })
+                                .coerceAtMost(windowSize.width - popupContentSize.width)
+                            val aboveY = anchorBounds.top - popupContentSize.height - gap
+                            if (aboveY >= 0) return IntOffset(x, aboveY)
+                            return IntOffset(x, anchorBounds.bottom + gap)
+                        }
+                    }
+                }
+                Popup(popupPositionProvider = provider) { CardImagePopup(bmp) }
             }
         }
     }

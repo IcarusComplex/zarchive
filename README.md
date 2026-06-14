@@ -171,9 +171,9 @@ ZArchive pulls prices directly from each store's website at search time. If a pr
 
 ## Supporting ZArchive
 
-ZArchive is free and always will be. If it saves you time or money hunting singles, a coffee is always appreciated — it helps cover ongoing development time.
+ZArchive is free and always will be. If it saves you time or money hunting singles, a Ko-fi is always appreciated — it helps cover ongoing development time.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-%E2%98%95-yellow?style=flat-square)](https://buymeacoffee.com/icaruscomplexza)
+[![Support on Ko-fi](https://img.shields.io/badge/Support%20on%20Ko--fi-%23FF5E5B?style=flat-square&logo=ko-fi&logoColor=white)](https://ko-fi.com/icaruscomplexza)
 
 No pressure at all — enjoy the app either way.
 

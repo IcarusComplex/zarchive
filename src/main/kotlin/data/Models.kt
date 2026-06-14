@@ -42,12 +42,33 @@ fun luckshackSearchUrl(card: String): String =
     "https://luckshack.co.za/index.php?route=product/asearch&search=" +
         java.net.URLEncoder.encode(card, "UTF-8")
 
-/** Pre-known platforms — confirmed stores where auto-detection fails (e.g. Cloudflare-blocked). */
+/**
+ * Pre-known platforms — all confirmed stores pinned here so the concurrent 19-store detection
+ * burst doesn't trigger Cloudflare challenges. Detection is only attempted for new/unknown stores.
+ */
 val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
-    "https://thewarren.co.za"          to Platform.BROWSER,
-    "https://www.battlewizards.co.za"  to Platform.BIGCOMMERCE,
-    "https://store.ai-fest.co.za"      to Platform.PRESTASHOP,
-    "https://www.thehiddenrealm.co.za" to Platform.WC_STORE_API,
+    // Special-case platforms
+    "https://thewarren.co.za"                to Platform.BROWSER,
+    "https://www.battlewizards.co.za"        to Platform.BIGCOMMERCE,
+    "https://store.ai-fest.co.za"            to Platform.PRESTASHOP,
+    "https://www.thehiddenrealm.co.za"       to Platform.WC_STORE_API,
+    // Shopify stores (verified 2026-06)
+    "http://d20battleground.co.za"           to Platform.SHOPIFY,
+    "https://thetradeinn.co.za"              to Platform.SHOPIFY,
+    "https://cardcache.co.za"                to Platform.SHOPIFY,
+    "https://www.knightlygaming.co.za"       to Platform.SHOPIFY,
+    "https://wzrd.co.za"                     to Platform.SHOPIFY,
+    "https://armchairgenerals.co.za"         to Platform.SHOPIFY,
+    "https://swordandboard.co.za"            to Platform.SHOPIFY,
+    "https://bigbangshop.co.za"              to Platform.SHOPIFY,
+    "https://greedygold.co.za"               to Platform.SHOPIFY,
+    "https://magicandmonsters.co.za"         to Platform.SHOPIFY,
+    "https://thecantina.co.za"               to Platform.SHOPIFY,
+    "http://www.underworldconnections.co.za" to Platform.SHOPIFY,
+    // WooCommerce stores (verified 2026-06)
+    "https://www.andressidehustle.co.za"     to Platform.WOOCOMMERCE,
+    "http://www.dracoti.co.za"               to Platform.WOOCOMMERCE,
+    "http://www.geekhome.co.za"              to Platform.WOOCOMMERCE,
 )
 
 private val PRICE_RE = Regex("""R\s?([\d\s,.]+)""")

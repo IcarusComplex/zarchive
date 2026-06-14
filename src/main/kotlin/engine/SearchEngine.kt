@@ -16,6 +16,34 @@ import javax.net.ssl.X509TrustManager
 
 private val platformCache = java.util.concurrent.ConcurrentHashMap<String, Platform>()
 
+// Stores blocked by a Cloudflare challenge this search session.
+// Once one card hits a 429 from a store, all remaining cards skip it without firing a request.
+private val cfBlockedStores = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+// Retry delays for transient non-429 errors: immediate → 1 s → 5 s → propagate.
+private val RETRY_DELAYS_MS = listOf(1_000L, 5_000L)
+
+private suspend fun <T> withRetry(baseUrl: String, block: suspend () -> T): T {
+    if (baseUrl in cfBlockedStores) throw CloudflareBlockedException()
+
+    var lastError: Exception? = null
+    for (attempt in 0..2) {
+        if (attempt > 0) delay(RETRY_DELAYS_MS[attempt - 1])
+        try {
+            return block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: CloudflareBlockedException) {
+            // Mark immediately and give up — retrying a CF challenge makes it worse.
+            cfBlockedStores.add(baseUrl)
+            throw e
+        } catch (e: Exception) {
+            lastError = e
+        }
+    }
+    throw lastError!!
+}
+
 // Accept any certificate — small SA stores often have expired/self-signed certs
 private val permissiveTrustManager = object : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -133,15 +161,16 @@ suspend fun checkStore(
         else                  -> { _, _, _ -> emptyList() }
     }
 
-    // Process up to 4 cards concurrently — eliminates the per-card 400ms delay that
-    // made 100-card searches take 40s+ per store.
-    val sem = Semaphore(4)
+    // 2 concurrent lanes per store with a random 500–2000 ms jitter before each request.
+    // Keeps traffic human-looking and avoids Cloudflare bot detection.
+    val sem = Semaphore(2)
     coroutineScope {
         cards.map { card ->
             async {
                 sem.withPermit {
+                    delay((500L..2000L).random())
                     val rows = try {
-                        val hits = searcher(client, baseUrl, card)
+                        val hits = withRetry(baseUrl) { searcher(client, baseUrl, card) }
                         if (hits.isEmpty()) listOf(SearchResult(
                             store = storeName, card = card, title = null,
                             priceZar = null, available = null, url = baseUrl, note = "not stocked",
@@ -164,19 +193,21 @@ suspend fun checkStore(
 
 suspend fun runSearch(
     cards: List<String>,
+    stores: Map<String, String> = STORES,
     onProgress: suspend (String) -> Unit,
     onResults: suspend (List<SearchResult>) -> Unit,
     onStoreComplete: suspend (String) -> Unit,
 ) {
+    cfBlockedStores.clear()
     val client = buildHttpClient()
-    val hasBrowserStores = STORES.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
+    val hasBrowserStores = stores.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
     // Scale parallelism with card count: 1 lane per 3 cards, capped at 3.
     // Each lane is a separate headless browser instance on its own thread.
     val browserParallelism = if (hasBrowserStores) (cards.size / 3 + 1).coerceIn(1, 3) else 0
     val browserSearcher = if (hasBrowserStores) BrowserSearcher(browserParallelism) else null
     try {
         coroutineScope {
-            STORES.map { (name, base) ->
+            stores.map { (name, base) ->
                 async(Dispatchers.IO) {
                     checkStore(client, name, base, cards, browserSearcher, onProgress, onResults, onStoreComplete)
                 }

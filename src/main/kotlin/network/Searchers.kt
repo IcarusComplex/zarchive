@@ -14,6 +14,53 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 import org.jsoup.Jsoup
 import java.net.URI
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+private val IS_DEBUG = System.getProperty("mtg.debug") == "true"
+private val DEBUG_DIR by lazy {
+    java.io.File(System.getProperty("user.home"), "zarchive-debug").also { it.mkdirs() }
+}
+
+class CloudflareBlockedException : Exception("Cloudflare challenge — store skipped")
+
+private suspend fun checkStatus(response: HttpResponse) {
+    when (response.status.value) {
+        429 -> {
+            if (IS_DEBUG) dump429(response)
+            throw CloudflareBlockedException()
+        }
+        !in 200..299 -> throw Exception("HTTP ${response.status.value}")
+    }
+}
+
+private suspend fun dump429(response: HttpResponse) {
+    runCatching {
+        val req = response.call.request
+        val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HHmmss_SSS"))
+        val host = req.url.host.replace(Regex("[^a-zA-Z0-9]"), "_")
+        val body = runCatching { response.bodyAsText() }.getOrDefault("[body unreadable]")
+
+        val text = buildString {
+            appendLine("=== REQUEST ===")
+            appendLine("${req.method.value} ${req.url}")
+            appendLine()
+            req.headers.forEach { key, values -> values.forEach { v -> appendLine("$key: $v") } }
+            appendLine()
+            appendLine("=== RESPONSE ===")
+            appendLine("HTTP ${response.status.value} ${response.status.description}")
+            appendLine()
+            response.headers.forEach { key, values -> values.forEach { v -> appendLine("$key: $v") } }
+            appendLine()
+            appendLine("--- Body ---")
+            appendLine(body)
+        }
+
+        val file = DEBUG_DIR.resolve("429_${host}_$ts.txt")
+        file.writeText(text)
+        println("[DEBUG] 429 dump → ${file.absolutePath}")
+    }.onFailure { e -> println("[DEBUG] Failed to write 429 dump: ${e.message}") }
+}
 
 private fun resolveUrl(base: String, path: String): String {
     if (path.startsWith("http")) return path
@@ -49,11 +96,13 @@ private suspend fun detectFromHomepage(client: HttpClient, base: String): Platfo
 
 suspend fun searchShopify(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
     val url = "$base/search/suggest.json"
-    val body = client.get(url) {
+    val response = client.get(url) {
         parameter("q", card)
         parameter("resources[type]", "product")
         parameter("resources[limit]", "10")
-    }.bodyAsText()
+    }
+    checkStatus(response)
+    val body = response.bodyAsText()
 
     val products = try {
         Json.parseToJsonElement(body)
@@ -145,7 +194,9 @@ private suspend fun shopifyFirstVariantPrice(
 suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/?s=$encoded&post_type=product"
-    val body = client.get(url).bodyAsText()
+    val resp = client.get(url)
+    checkStatus(resp)
+    val body = resp.bodyAsText()
 
     val soup = Jsoup.parse(body)
     return soup.select("li.product").mapNotNull { li ->
@@ -175,9 +226,11 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
 suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/wp-json/wc/store/v1/products?search=$encoded&per_page=10"
-    val body = client.get(url) {
+    val resp = client.get(url) {
         header(HttpHeaders.Accept, "application/json")
-    }.bodyAsText()
+    }
+    checkStatus(resp)
+    val body = resp.bodyAsText()
 
     val products = try {
         Json.parseToJsonElement(body).jsonArray
@@ -213,7 +266,9 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
     for (route in listOf("product/asearch", "product/search")) {
         val url = "$base/index.php?route=$route&search=$encoded"
         val results = try {
-            val body = client.get(url).bodyAsText()
+            val resp = client.get(url)
+            checkStatus(resp)
+            val body = resp.bodyAsText()
             val soup = Jsoup.parse(body)
             soup.select(".product-thumb, .product-layout").mapNotNull { div ->
                 val a = div.selectFirst("h4 a, .caption a") ?: return@mapNotNull null
@@ -230,6 +285,8 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
                     note = availabilityNote(null),
                 )
             }
+        } catch (e: CloudflareBlockedException) {
+            throw e
         } catch (_: Exception) {
             emptyList()
         }
@@ -241,7 +298,9 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
 suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/search.php?search_query=$encoded"
-    val body = client.get(url).bodyAsText()
+    val resp = client.get(url)
+    checkStatus(resp)
+    val body = resp.bodyAsText()
     val soup = Jsoup.parse(body)
     return soup.select("li.product, article.card").mapNotNull { el ->
         val a = el.selectFirst(".card-title a, h4 a, h3 a") ?: return@mapNotNull null
@@ -267,7 +326,9 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
 suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/search?controller=search&search_query=$encoded"
-    val body = client.get(url).bodyAsText()
+    val resp = client.get(url)
+    checkStatus(resp)
+    val body = resp.bodyAsText()
     val soup = Jsoup.parse(body)
     return soup.select("article.product-miniature, .js-product-miniature").mapNotNull { el ->
         val a = el.selectFirst(".product-title a, h3 a, h2 a") ?: return@mapNotNull null

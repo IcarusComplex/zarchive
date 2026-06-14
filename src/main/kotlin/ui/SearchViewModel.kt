@@ -17,7 +17,7 @@ class SearchViewModel {
     var statusText by mutableStateOf("")
     var completedStores by mutableStateOf(0)
     var searchedCards by mutableStateOf<List<String>>(emptyList())
-    val totalStores = STORES.size
+    var totalStores by mutableStateOf(STORES.size)
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
     // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
     val storeCardCounts = mutableStateMapOf<String, Int>()
@@ -49,6 +49,14 @@ class SearchViewModel {
             prefs.putBoolean("ignoreBasicLands", value)
         }
 
+    private var includeWarrenState by mutableStateOf(prefs.getBoolean("includeWarren", false))
+    var includeWarren: Boolean
+        get() = includeWarrenState
+        set(value) {
+            includeWarrenState = value
+            prefs.putBoolean("includeWarren", value)
+        }
+
     private var earlyAccessState by mutableStateOf(prefs.getBoolean("earlyAccess", false))
     var earlyAccess: Boolean
         get() = earlyAccessState
@@ -61,13 +69,16 @@ class SearchViewModel {
         val cards = parseCardList(query, ignoreBasicLands)
         if (cards.isEmpty()) return
 
+        val storesToSearch = if (includeWarren) STORES else STORES.filterKeys { it != "The Warren" }
+
         searchedCards = cards
         searchJob?.cancel()
         results.clear()
         images.clear()
         completedStores = 0
+        totalStores = storesToSearch.size
         storeStatuses.clear()
-        storeStatuses.putAll(STORES.keys.associateWith { StoreStatus.PENDING })
+        storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
         storeCardCounts.clear()
         isSearching = true
         statusText = "Starting search…"
@@ -92,6 +103,7 @@ class SearchViewModel {
 
                 runSearch(
                     cards = cards,
+                    stores = storesToSearch,
                     onProgress = { storeName ->
                         withContext(Dispatchers.Swing) {
                             storeStatuses[storeName] = StoreStatus.CHECKING
