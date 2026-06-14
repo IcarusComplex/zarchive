@@ -96,14 +96,15 @@ class SearchViewModel {
                 val extractDir = tmp.resolve("ZArchive-update-extract")
 
                 // Phase 1: download
+                // Guard: only update if not cancelled (cancel sets downloadProgress = null)
                 downloadRelease(url, zip) { p ->
-                    scope.launch(Dispatchers.Swing) { downloadProgress = p }
+                    scope.launch(Dispatchers.Swing) { if (downloadProgress != null) downloadProgress = p }
                 }
 
                 // Phase 2: extract in-process so we can report progress before closing
                 withContext(Dispatchers.Swing) { downloadProgress = 0f; downloadPhase = "Extracting…" }
                 extractZipWithProgress(zip, extractDir) { p ->
-                    scope.launch(Dispatchers.Swing) { downloadProgress = p }
+                    scope.launch(Dispatchers.Swing) { if (downloadProgress != null) downloadProgress = p }
                 }
                 zip.delete()
 

@@ -7,7 +7,7 @@ import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
-import io.ktor.utils.io.jvm.javaio.*
+import io.ktor.utils.io.*
 import kotlinx.serialization.json.*
 import java.io.File
 
@@ -75,17 +75,19 @@ suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit
             header(HttpHeaders.Accept, "application/octet-stream")
         }
         if (!resp.status.isSuccess()) error("HTTP ${resp.status.value}")
-        val total = resp.contentLength() ?: -1L
+        val total   = resp.contentLength() ?: -1L
         var received = 0L
+        val channel = resp.bodyAsChannel()
+        val buf     = ByteArray(65_536)
         dest.outputStream().buffered(65_536).use { out ->
-            resp.bodyAsChannel().toInputStream().use { input ->
-                val buf = ByteArray(65_536)
-                var n: Int
-                while (input.read(buf).also { n = it } != -1) {
-                    out.write(buf, 0, n)
-                    received += n
-                    if (total > 0) onProgress(received.toFloat() / total)
-                }
+            // readAvailable is a suspend fun — it responds to coroutine cancellation,
+            // unlike toInputStream() which blocks the thread indefinitely.
+            while (!channel.isClosedForRead) {
+                val n = channel.readAvailable(buf)
+                if (n <= 0) break
+                out.write(buf, 0, n)
+                received += n
+                if (total > 0) onProgress(received.toFloat() / total)
             }
         }
         onProgress(1f)
