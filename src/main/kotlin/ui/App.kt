@@ -184,6 +184,7 @@ fun WindowScope.App(
             // Modal dialogs — rendered on top of the full app
             if (vm.downloadProgress != null) {
                 DownloadProgressDialog(
+                    phase    = vm.downloadPhase,
                     progress = vm.downloadProgress!!,
                     error    = vm.downloadError,
                     onCancel = { vm.cancelDownload() },
@@ -736,7 +737,7 @@ private fun UpdateDialog(
 }
 
 @Composable
-private fun DownloadProgressDialog(progress: Float, error: String?, onCancel: () -> Unit) {
+private fun DownloadProgressDialog(phase: String, progress: Float, error: String?, onCancel: () -> Unit) {
     ModalScrim {
         Surface(
             shape = RoundedCornerShape(8.dp),
@@ -746,7 +747,7 @@ private fun DownloadProgressDialog(progress: Float, error: String?, onCancel: ()
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (error != null) {
-                    Text("Download failed", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
+                    Text("Update failed", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
                     Text(error, fontSize = 12.sp, color = OnSurfaceVariant)
                     Button(
                         onClick = onCancel,
@@ -755,7 +756,7 @@ private fun DownloadProgressDialog(progress: Float, error: String?, onCancel: ()
                         modifier = Modifier.fillMaxWidth(),
                     ) { Text("Close", fontSize = 12.sp) }
                 } else {
-                    Text("Downloading update…", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                    Text(phase, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
                     LinearProgressIndicator(
                         progress = { progress.coerceIn(0f, 1f) },
                         modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),

@@ -75,6 +75,7 @@ class SearchViewModel {
 
     // null = idle, 0–1 = progress, -1 = error
     var downloadProgress by mutableStateOf<Float?>(null)
+    var downloadPhase    by mutableStateOf("Downloading update…")
     var downloadError    by mutableStateOf<String?>(null)
     private var downloadJob: Job? = null
 
@@ -86,26 +87,39 @@ class SearchViewModel {
         val targetDir = installDir       ?: return
         val isMac     = System.getProperty("os.name", "").lowercase().contains("mac")
         downloadProgress = 0f
+        downloadPhase    = "Downloading update…"
         downloadError    = null
         downloadJob = scope.launch(Dispatchers.IO) {
             runCatching {
                 val tmp = File(System.getProperty("java.io.tmpdir"), "ZArchive-update").also { it.mkdirs() }
-                val zip = tmp.resolve("ZArchive-update.zip")
+                val zip        = tmp.resolve("ZArchive-update.zip")
+                val extractDir = tmp.resolve("ZArchive-update-extract")
+
+                // Phase 1: download
                 downloadRelease(url, zip) { p ->
                     scope.launch(Dispatchers.Swing) { downloadProgress = p }
                 }
+
+                // Phase 2: extract in-process so we can report progress before closing
+                withContext(Dispatchers.Swing) { downloadProgress = 0f; downloadPhase = "Extracting…" }
+                extractZipWithProgress(zip, extractDir) { p ->
+                    scope.launch(Dispatchers.Swing) { downloadProgress = p }
+                }
+                zip.delete()
+
+                // Phase 3: hand off to a minimal swap script (rename + relaunch only)
                 val pb: ProcessBuilder = if (isMac) {
-                    val script = tmp.resolve("zarchive-updater.sh")
-                    script.writeText(buildMacUpdaterScript())
+                    val script = tmp.resolve("zarchive-swapper.sh")
+                    script.writeText(buildMacSwapScript())
                     script.setExecutable(true)
-                    ProcessBuilder("bash", script.absolutePath, zip.absolutePath, targetDir.absolutePath)
+                    ProcessBuilder("bash", script.absolutePath, extractDir.absolutePath, targetDir.absolutePath)
                 } else {
-                    val script = tmp.resolve("zarchive-updater.ps1")
-                    script.writeText(buildWindowsUpdaterScript())
+                    val script = tmp.resolve("zarchive-swapper.ps1")
+                    script.writeText(buildWindowsSwapScript())
                     ProcessBuilder(
                         "powershell.exe", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
                         "-File", script.absolutePath,
-                        "-ZipPath", zip.absolutePath,
+                        "-ExtractDir", extractDir.absolutePath,
                         "-InstallDir", targetDir.absolutePath,
                     )
                 }
@@ -116,7 +130,7 @@ class SearchViewModel {
             }.onFailure { e ->
                 withContext(Dispatchers.Swing) {
                     downloadProgress = -1f
-                    downloadError = e.message ?: "Download failed"
+                    downloadError = e.message ?: "Update failed"
                 }
             }
         }
@@ -126,7 +140,8 @@ class SearchViewModel {
         downloadJob?.cancel()
         downloadJob = null
         downloadProgress = null
-        downloadError = null
+        downloadPhase    = "Downloading update…"
+        downloadError    = null
     }
 
     fun checkForUpdates() {
@@ -241,37 +256,49 @@ class SearchViewModel {
             }.getOrNull()
         }
 
-        fun buildWindowsUpdaterScript(): String {
-            val D = "\$"  // \$ in a Kotlin string literal is a literal dollar sign
+        private fun extractZipWithProgress(zip: File, dest: File, onProgress: (Float) -> Unit) {
+            dest.deleteRecursively()
+            dest.mkdirs()
+            java.util.zip.ZipFile(zip).use { zf ->
+                val entries = zf.entries().toList()
+                val total   = entries.size.toFloat().coerceAtLeast(1f)
+                entries.forEachIndexed { idx, entry ->
+                    val out = dest.resolve(entry.name)
+                    if (entry.isDirectory) { out.mkdirs() }
+                    else {
+                        out.parentFile?.mkdirs()
+                        zf.getInputStream(entry).use { it.copyTo(out.outputStream()) }
+                    }
+                    onProgress((idx + 1) / total)
+                }
+            }
+        }
+
+        fun buildWindowsSwapScript(): String {
+            val D = "\$"
             return """
-param([string]${D}ZipPath, [string]${D}InstallDir)
+param([string]${D}ExtractDir, [string]${D}InstallDir)
 
 ${D}log = Join-Path ${D}env:TEMP 'zarchive-updater.log'
 function Log(${D}msg) { "$(Get-Date -f 'HH:mm:ss') ${D}msg" | Out-File -FilePath ${D}log -Append -Encoding utf8 }
 
-Log "Updater started. ZipPath=${D}ZipPath InstallDir=${D}InstallDir"
+Log "Swap started. ExtractDir=${D}ExtractDir InstallDir=${D}InstallDir"
 
 ${D}deadline = [datetime]::Now.AddSeconds(30)
 while ((Get-Process -Name 'ZArchive' -ErrorAction SilentlyContinue) -and ([datetime]::Now -lt ${D}deadline)) {
     Start-Sleep -Milliseconds 500
 }
 Start-Sleep -Seconds 2
-Log "ZArchive process exited (or deadline elapsed)"
+Log "ZArchive process exited"
 
 ${D}parent  = Split-Path ${D}InstallDir -Parent
 ${D}name    = Split-Path ${D}InstallDir -Leaf
 ${D}backup  = Join-Path ${D}parent (${D}name + '-backup')
-${D}extract = Join-Path ${D}env:TEMP 'ZArchive-update-extract'
 ${D}swapped = ${D}false
 
 try {
-    if (Test-Path ${D}extract) { Remove-Item ${D}extract -Recurse -Force }
-    Log "Extracting zip..."
-    Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::ExtractToDirectory(${D}ZipPath, ${D}extract)
-    ${D}extracted = Get-ChildItem ${D}extract -Directory | Select-Object -First 1
-    if (-not ${D}extracted) { throw "No directory found in extracted zip" }
-    Log "Extracted: ${D}(${D}extracted.FullName)"
+    ${D}extracted = Get-ChildItem ${D}ExtractDir -Directory | Select-Object -First 1
+    if (-not ${D}extracted) { throw "No directory found in extract dir" }
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
     Rename-Item ${D}InstallDir (${D}name + '-backup')
     Log "Renamed old install to backup"
@@ -290,22 +317,20 @@ Log "Launching ZArchive.exe (swapped=${D}swapped)"
 Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
 
 if (${D}swapped) { Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue }
-Remove-Item ${D}ZipPath -Force          -ErrorAction SilentlyContinue
-Remove-Item ${D}extract -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item ${D}ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
 Log "Done"
 """.trimIndent()
         }
 
-        fun buildMacUpdaterScript(): String = """
+        fun buildMacSwapScript(): String = """
 #!/usr/bin/env bash
 set -euo pipefail
 
-ZIP_PATH="${'$'}1"
+EXTRACT_DIR="${'$'}1"
 INSTALL_DIR="${'$'}2"
 INSTALL_PARENT="$(dirname "${'$'}INSTALL_DIR")"
 INSTALL_NAME="$(basename "${'$'}INSTALL_DIR")"
 BACKUP_DIR="${'$'}{INSTALL_PARENT}/${'$'}{INSTALL_NAME}-backup"
-EXTRACT_DIR="${'$'}{TMPDIR:-/tmp}/ZArchive-update-extract"
 
 # Wait for ZArchive to exit (up to 30 seconds)
 DEADLINE=$(( $(date +%s) + 30 ))
@@ -313,16 +338,12 @@ while pgrep -xq "ZArchive" 2>/dev/null; do
     [ "$(date +%s)" -ge "${'$'}DEADLINE" ] && break
     sleep 0.5
 done
+sleep 2
 
-# Extract zip
-rm -rf "${'$'}EXTRACT_DIR"
-mkdir -p "${'$'}EXTRACT_DIR"
-unzip -q "${'$'}ZIP_PATH" -d "${'$'}EXTRACT_DIR"
-
-# Find the .app bundle inside the extracted folder (may be nested one level)
+# Find the .app bundle in the already-extracted directory
 EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 2 -name "*.app" | head -1)
 if [ -z "${'$'}EXTRACTED" ]; then
-    echo "No .app bundle found in update zip" >&2
+    echo "No .app bundle found in ${'$'}EXTRACT_DIR" >&2
     exit 1
 fi
 
@@ -338,7 +359,7 @@ xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
 open "${'$'}INSTALL_DIR"
 
 # Cleanup
-rm -rf "${'$'}BACKUP_DIR" "${'$'}ZIP_PATH" "${'$'}EXTRACT_DIR"
+rm -rf "${'$'}BACKUP_DIR" "${'$'}EXTRACT_DIR"
 """.trimIndent()
 
         private val BASIC_LANDS = setOf("plains", "island", "swamp", "mountain", "forest",
