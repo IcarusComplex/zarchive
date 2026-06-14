@@ -7,7 +7,7 @@ plugins {
 }
 
 group = "co.za.mtg"
-version = "0.0.2"
+version = "0.0.3"
 
 repositories {
     mavenCentral()
@@ -43,7 +43,7 @@ compose.desktop {
             // deliverable is the portable app image from `createDistributable` (no WiX needed).
             targetFormats(TargetFormat.Msi)
             packageName = "ZArchive"
-            packageVersion = "0.0.2"
+            packageVersion = "0.0.3"
             description = "Search South African MTG stores for card singles"
             vendor = "ZArchive"
             copyright = "© 2026 ZArchive"
