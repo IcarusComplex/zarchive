@@ -258,7 +258,8 @@ ${D}extract = Join-Path ${D}env:TEMP 'ZArchive-update-extract'
 
 try {
     if (Test-Path ${D}extract) { Remove-Item ${D}extract -Recurse -Force }
-    Expand-Archive -Path ${D}ZipPath -DestinationPath ${D}extract -Force
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory(${D}ZipPath, ${D}extract)
     ${D}extracted = Get-ChildItem ${D}extract -Directory | Select-Object -First 1
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
     Rename-Item ${D}InstallDir (${D}name + '-backup')

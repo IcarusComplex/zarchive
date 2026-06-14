@@ -209,6 +209,10 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, onCloseRequest: () -> Unit
         Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth().height(32.dp)) {
             Box(Modifier.fillMaxSize()) {
                 Row(Modifier.align(Alignment.CenterEnd), verticalAlignment = Alignment.CenterVertically) {
+                    if (data.BuildInfo.VERSION.contains('-')) {
+                        PreReleaseBadge()
+                        Spacer(Modifier.width(4.dp))
+                    }
                     if (System.getProperty("mtg.debug") == "true") {
                         val debugDir = java.io.File(System.getProperty("user.home"), "zarchive-debug")
                         GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 14.dp) {
@@ -396,6 +400,64 @@ private fun GhostIconButton(icon: ImageVector, desc: String, tint: Color, iconSi
     }
 }
 
+
+@Composable
+private fun PreReleaseBadge() {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val density = LocalDensity.current
+    val positionProvider = remember(density) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect, windowSize: IntSize,
+                layoutDirection: LayoutDirection, popupContentSize: IntSize,
+            ) = IntOffset(
+                anchorBounds.right - popupContentSize.width,
+                anchorBounds.bottom + with(density) { 6.dp.roundToPx() },
+            )
+        }
+    }
+    Box {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .hoverable(interaction)
+                .clip(RoundedCornerShape(4.dp))
+                .background(Primary.copy(alpha = 0.12f))
+                .border(1.dp, Primary.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
+                .padding(horizontal = 7.dp, vertical = 3.dp),
+        ) {
+            Icon(Icons.Default.Warning, contentDescription = null, tint = Primary, modifier = Modifier.size(11.dp))
+            Text(
+                "PRE-RELEASE",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 0.6.sp,
+                color = Primary,
+            )
+        }
+        if (hovered) {
+            Popup(popupPositionProvider = positionProvider) {
+                Surface(
+                    shape = RoundedCornerShape(4.dp),
+                    color = SurfaceContainerHigh,
+                    border = BorderStroke(1.dp, Primary.copy(alpha = 0.4f)),
+                    modifier = Modifier.widthIn(max = 260.dp),
+                ) {
+                    Text(
+                        "You are running a pre-release build (v${data.BuildInfo.VERSION}). " +
+                            "It may be unstable. Stable builds are available in Settings → Early Access.",
+                        fontSize = 11.sp,
+                        color = OnSurface,
+                        lineHeight = 16.sp,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                    )
+                }
+            }
+        }
+    }
+}
 
 private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 
