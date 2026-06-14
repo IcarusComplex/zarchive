@@ -36,11 +36,19 @@ You only need to do this once per installation.
 
 #### First launch — macOS Gatekeeper
 
-Because ZArchive is not notarised with Apple, macOS will block it on first open.
+Because ZArchive is not notarised with Apple, macOS will block it on first open. Pick either method:
 
-1. Right-click (or Control-click) **ZArchive.app**.
-2. Click **"Open"**.
-3. Click **"Open"** again in the dialog that appears.
+**Option A — System Settings (no Terminal needed)**
+1. Try to open ZArchive.app — click **Done** on the warning dialog.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll down — you'll see *"ZArchive was blocked"*.
+4. Click **Open Anyway**, enter your password, then open the app again.
+
+**Option B — Terminal (one command)**
+```
+xattr -dr com.apple.quarantine /path/to/ZArchive.app
+```
+Then double-click normally — no more dialogs.
 
 You only need to do this once.
 
@@ -183,8 +191,8 @@ The image cache can be safely deleted at any time — ZArchive will re-download 
 **"Windows protected your PC" / can't open the app**
 Follow the SmartScreen steps above (More info → Run anyway). You only need to do this once.
 
-**macOS says the app is damaged or can't be opened**
-Right-click `ZArchive.app` → Open → Open. If that still fails, run this in Terminal:
+**macOS says the app can't be opened / "Done" or "Move to Bin" dialog**
+Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to ZArchive. Alternatively, run this in Terminal:
 ```
 xattr -dr com.apple.quarantine /path/to/ZArchive.app
 ```
