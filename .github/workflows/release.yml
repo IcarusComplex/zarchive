@@ -66,8 +66,10 @@ jobs:
         run: |
           VER="${{ github.ref_name }}"
           VER="${VER#v}"
-          cd build/compose/binaries/main/app
-          zip -r "$GITHUB_WORKSPACE/ZArchive-macos-arm64-$VER.zip" ZArchive.app
+          mkdir -p ZArchive
+          cp -r build/compose/binaries/main/app/ZArchive.app ZArchive/
+          cp build-tools/README-mac.txt ZArchive/README.txt
+          zip -r "ZArchive-macos-arm64-$VER.zip" ZArchive
           echo "Packaged ZArchive-macos-arm64-$VER.zip"
 
       - uses: actions/upload-artifact@v4

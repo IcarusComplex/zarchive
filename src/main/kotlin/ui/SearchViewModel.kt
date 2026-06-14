@@ -300,8 +300,8 @@ rm -rf "${'$'}EXTRACT_DIR"
 mkdir -p "${'$'}EXTRACT_DIR"
 unzip -q "${'$'}ZIP_PATH" -d "${'$'}EXTRACT_DIR"
 
-# Find the .app bundle inside the extracted folder
-EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 1 -name "*.app" | head -1)
+# Find the .app bundle inside the extracted folder (may be nested one level)
+EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 2 -name "*.app" | head -1)
 if [ -z "${'$'}EXTRACTED" ]; then
     echo "No .app bundle found in update zip" >&2
     exit 1
