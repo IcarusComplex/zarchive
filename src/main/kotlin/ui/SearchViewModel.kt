@@ -386,6 +386,9 @@ else
     if mv "${'$'}INSTALL_DIR" "${'$'}BACKUP_DIR"; then
         if mv "${'$'}EXTRACTED" "${'$'}INSTALL_DIR"; then
             xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
+            # Java zip extraction strips Unix execute bits — restore them.
+            chmod -R a+x "${'$'}INSTALL_DIR/Contents/MacOS" 2>/dev/null || true
+            find "${'$'}INSTALL_DIR/Contents/runtime" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
             rm -rf "${'$'}BACKUP_DIR"
             SWAPPED=true
             log "Swap complete"
