@@ -75,11 +75,12 @@ suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit
             header(HttpHeaders.Accept, "application/octet-stream")
         }
         if (!resp.status.isSuccess()) error("HTTP ${resp.status.value}")
-        val total   = resp.contentLength() ?: -1L
+        val total    = resp.contentLength() ?: -1L
         var received = 0L
-        val channel = resp.bodyAsChannel()
-        val buf     = ByteArray(65_536)
-        dest.outputStream().buffered(65_536).use { out ->
+        var lastProgressMs = 0L
+        val channel  = resp.bodyAsChannel()
+        val buf      = ByteArray(1_048_576) // 1 MB — fewer trips through the readAvailable loop
+        dest.outputStream().buffered(1_048_576).use { out ->
             // readAvailable is a suspend fun — it responds to coroutine cancellation,
             // unlike toInputStream() which blocks the thread indefinitely.
             while (!channel.isClosedForRead) {
@@ -87,7 +88,12 @@ suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit
                 if (n <= 0) break
                 out.write(buf, 0, n)
                 received += n
-                if (total > 0) onProgress(received.toFloat() / total)
+                // Throttle to ≤10 UI updates/sec — firing a coroutine per chunk bogs down the EDT.
+                val now = System.currentTimeMillis()
+                if (total > 0 && now - lastProgressMs >= 500) {
+                    onProgress(received.toFloat() / total)
+                    lastProgressMs = now
+                }
             }
         }
         onProgress(1f)

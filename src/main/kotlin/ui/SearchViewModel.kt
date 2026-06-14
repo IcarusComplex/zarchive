@@ -263,16 +263,24 @@ class SearchViewModel {
             java.util.zip.ZipFile(zip).use { zf ->
                 val entries = zf.entries().toList()
                 val total   = entries.size.toFloat().coerceAtLeast(1f)
+                var lastProgressMs = 0L
                 entries.forEachIndexed { idx, entry ->
                     val out = dest.resolve(entry.name)
                     if (entry.isDirectory) { out.mkdirs() }
                     else {
                         out.parentFile?.mkdirs()
-                        zf.getInputStream(entry).use { it.copyTo(out.outputStream()) }
+                        zf.getInputStream(entry).use { it.copyTo(out.outputStream(), bufferSize = 65_536) }
                     }
-                    onProgress((idx + 1) / total)
+                    // Throttle to ≤10 UI updates/sec — per-entry callbacks for a JRE (thousands
+                    // of files) saturate the EDT and slow extraction significantly.
+                    val now = System.currentTimeMillis()
+                    if (now - lastProgressMs >= 500) {
+                        onProgress((idx + 1) / total)
+                        lastProgressMs = now
+                    }
                 }
             }
+            onProgress(1f)
         }
 
         fun buildWindowsSwapScript(): String {
