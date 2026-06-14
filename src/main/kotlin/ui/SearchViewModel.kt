@@ -246,34 +246,53 @@ class SearchViewModel {
             return """
 param([string]${D}ZipPath, [string]${D}InstallDir)
 
+${D}log = Join-Path ${D}env:TEMP 'zarchive-updater.log'
+function Log(${D}msg) { "$(Get-Date -f 'HH:mm:ss') ${D}msg" | Out-File -FilePath ${D}log -Append -Encoding utf8 }
+
+Log "Updater started. ZipPath=${D}ZipPath InstallDir=${D}InstallDir"
+
 ${D}deadline = [datetime]::Now.AddSeconds(30)
 while ((Get-Process -Name 'ZArchive' -ErrorAction SilentlyContinue) -and ([datetime]::Now -lt ${D}deadline)) {
     Start-Sleep -Milliseconds 500
 }
+Start-Sleep -Seconds 2
+Log "ZArchive process exited (or deadline elapsed)"
 
 ${D}parent  = Split-Path ${D}InstallDir -Parent
 ${D}name    = Split-Path ${D}InstallDir -Leaf
 ${D}backup  = Join-Path ${D}parent (${D}name + '-backup')
 ${D}extract = Join-Path ${D}env:TEMP 'ZArchive-update-extract'
+${D}swapped = ${D}false
 
 try {
     if (Test-Path ${D}extract) { Remove-Item ${D}extract -Recurse -Force }
+    Log "Extracting zip..."
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [System.IO.Compression.ZipFile]::ExtractToDirectory(${D}ZipPath, ${D}extract)
     ${D}extracted = Get-ChildItem ${D}extract -Directory | Select-Object -First 1
+    if (-not ${D}extracted) { throw "No directory found in extracted zip" }
+    Log "Extracted: ${D}(${D}extracted.FullName)"
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
     Rename-Item ${D}InstallDir (${D}name + '-backup')
+    Log "Renamed old install to backup"
     Move-Item ${D}extracted.FullName ${D}InstallDir
-    Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
-    Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue
+    Log "Moved new install into place"
+    ${D}swapped = ${D}true
 } catch {
+    Log "Swap failed: ${D}_"
     if ((Test-Path ${D}backup) -and -not (Test-Path ${D}InstallDir)) {
         Rename-Item ${D}backup ${D}name
+        Log "Restored backup"
     }
 }
 
-Remove-Item ${D}ZipPath -Force         -ErrorAction SilentlyContinue
+Log "Launching ZArchive.exe (swapped=${D}swapped)"
+Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
+
+if (${D}swapped) { Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue }
+Remove-Item ${D}ZipPath -Force          -ErrorAction SilentlyContinue
 Remove-Item ${D}extract -Recurse -Force -ErrorAction SilentlyContinue
+Log "Done"
 """.trimIndent()
         }
 
