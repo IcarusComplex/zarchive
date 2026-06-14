@@ -8,37 +8,43 @@
 
 ## Download & Install
 
-### Step 1 — Download the latest release
+Go to the [**Releases page**](https://github.com/IcarusComplex/zarchive/releases) and download the zip for your platform from the latest **Stable** release.
 
-1. Go to the [**Releases page**](https://github.com/IcarusComplex/zarchive/releases).
-2. Under the latest **Stable** release, click the `.zip` file (e.g. `ZArchive-windows-x64-1.0.0.zip`) to download it.
+### Windows
 
-### Step 2 — Extract the zip
+1. Download `ZArchive-windows-x64-<version>.zip`.
+2. Right-click it → **Extract All…** → choose a destination (Desktop or Documents works well).
+3. Open the extracted `ZArchive` folder and double-click **ZArchive.exe**.
 
-1. Find the downloaded zip in your Downloads folder.
-2. Right-click it → **Extract All…**
-3. Choose a destination — your Desktop or Documents folder works well.
-4. Click **Extract**.
+Keep everything inside the `ZArchive` folder together — the `.exe` needs the `app\` and `runtime\` folders next to it. You can move or rename the folder freely; it's fully self-contained.
 
-You'll get a folder called `ZArchive`. Keep everything inside it together — the `.exe` needs the `app\` and `runtime\` folders next to it.
+#### First launch — Windows SmartScreen
 
-> **Tip:** You can rename or move the `ZArchive` folder anywhere you like. It's fully self-contained — no installer, no registry entries from this step.
+Because ZArchive is not commercially code-signed, Windows shows a "Windows protected your PC" warning the first time you run it.
 
-### Step 3 — Run ZArchive
-
-Double-click **ZArchive.exe** inside the extracted folder.
-
----
-
-## First Launch — Windows SmartScreen Warning
-
-Because ZArchive is not commercially code-signed, Windows may show a blue "Windows protected your PC" screen the first time you run it. This is normal for free, open-source software.
-
-**To proceed:**
-1. Click **"More info"** (small link below the main text).
+1. Click **"More info"**.
 2. Click **"Run anyway"**.
 
 You only need to do this once per installation.
+
+### macOS (Apple Silicon)
+
+1. Download `ZArchive-macos-arm64-<version>.zip`.
+2. Double-click the zip to extract it — you'll get **ZArchive.app**.
+3. Move `ZArchive.app` wherever you like (Desktop, Applications, anywhere).
+4. Double-click **ZArchive.app** to run it.
+
+#### First launch — macOS Gatekeeper
+
+Because ZArchive is not notarised with Apple, macOS will block it on first open.
+
+1. Right-click (or Control-click) **ZArchive.app**.
+2. Click **"Open"**.
+3. Click **"Open"** again in the dialog that appears.
+
+You only need to do this once.
+
+> **Intel Mac:** The current release targets Apple Silicon only. Intel support may be added in future.
 
 ---
 
@@ -46,9 +52,9 @@ You only need to do this once per installation.
 
 ### Searching for cards
 
-1. Type one card name per line in the search box.
-2. Press **Alt+Enter** (or click the **⌕** search button) to start searching.
-3. Results stream in as each store responds — you don't have to wait for every store to finish.
+1. Type one card name per line in the search box on the left.
+2. Press **Alt+Enter** (or click the **Search** button) to start.
+3. Results stream in per store as they respond — you don't have to wait for everything to finish.
 
 **Example:**
 ```
@@ -59,7 +65,7 @@ Thoughtseize
 
 ### Pasting a decklist
 
-ZArchive understands standard decklist format. Paste directly from MTGO, Moxfield, or any other deck builder — quantity prefixes are automatically stripped:
+ZArchive understands standard decklist format. Paste directly from MTGO, Moxfield, or any deck builder — quantity prefixes are stripped automatically:
 
 ```
 4x Lightning Bolt
@@ -71,7 +77,7 @@ ZArchive understands standard decklist format. Paste directly from MTGO, Moxfiel
 
 ### Reading the results
 
-Results are grouped per card. Each card section shows:
+Results are grouped per card. Each group shows:
 
 | Column | What it means |
 |---|---|
@@ -81,91 +87,123 @@ Results are grouped per card. Each card section shows:
 | **Price** | Listed price in ZAR |
 | **Action** | Opens the listing in your browser |
 
-**In Stock** and **Out of Stock** listings are split into separate tables. Click any row to open the product page.
-
-Hovering a card thumbnail shows a larger card art preview.
+In Stock and Out of Stock listings are split into separate tables. Click any row to open the product page. Hovering a thumbnail shows a larger card art preview.
 
 ### Card Summary panel
 
-A collapsible **Card Summary** panel above the results shows at a glance which cards were found and which weren't. Click it to expand or collapse.
+A collapsible **Card Summary** panel above the results shows at a glance which cards were found and which weren't.
 
 ### Order Lists tab
 
 Switch to the **Order Lists** tab (appears after a search) to see two buying plans:
 
-- **Cheapest total** — picks the single cheapest in-stock listing for each card, grouped by store. Best when price is everything.
-- **Fewest packages** — covers your full list from the smallest number of stores. Best when you want to minimise shipping costs / number of orders.
+- **Cheapest total** — picks the cheapest in-stock listing for each card, grouped by store. Best when price is everything.
+- **Fewest packages** — covers your full list from the smallest number of stores. Best when you want to minimise shipping costs.
 
-Each plan shows the total cost and flags any cards not in stock anywhere.
-
-Click a store name to open its homepage. Click a listing row to open the specific product page.
+Each plan shows the total cost and flags any cards not available anywhere. Click a store name to open its homepage; click a listing row to open the product page.
 
 ---
 
 ## Settings
 
-Two checkboxes are available in the header:
+Settings are available in the left panel and the gear menu in the title bar. All settings persist between sessions.
+
+### Left panel toggles
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Ignore basic lands** | On | Strips Plains, Island, Swamp, Mountain, Forest (and snow-covered variants) from your search list. Turn off if you genuinely need to buy basics. |
-| **Auto-open Luckshack** | Off | When on, each card's Luckshack search automatically opens in your browser when you start a search. Luckshack is Cloudflare-protected and can't be searched directly by ZArchive — this is the next best thing. |
+| **Ignore basic lands** | On | Strips Plains, Island, Swamp, Mountain, Forest (and snow variants) from your search list. |
+| **Include The Warren** | Off | Includes The Warren in searches. It's slower than other stores because it uses a headless browser to bypass JS protection — expect a few extra seconds per search. |
+| **Auto-open Luckshack** | Off | Opens each card's Luckshack search in your browser when a search starts. Luckshack is Cloudflare-protected and can't be searched directly — this is the next best thing. |
 
-Settings are remembered between sessions.
+### Gear menu (title bar)
+
+| Setting | What it does |
+|---|---|
+| **Early Access** | Opt in to pre-release builds. These may have new features or experimental fixes not yet in a stable release. |
+| **Check for updates** | Manually trigger an update check. Shows the current version. |
+| **Report a bug** | Opens a GitHub issue in your browser with the `bug` label pre-applied. |
 
 ### Luckshack links
 
-Even with Auto-open Luckshack off, each card in the results has a **Luckshack** chip you can click to open that card's search on Luckshack in your browser.
+Even with Auto-open Luckshack off, every card in the results has a **Luckshack** chip you can click to open that card's search in your browser.
 
 ---
 
 ## Automatic Updates
 
-ZArchive checks for updates when it launches. If a newer stable version is available on GitHub, it will prompt you — you can update with one click. The app downloads the new version, replaces itself, and relaunches automatically.
+ZArchive checks for updates every time it launches. A slim status bar appears at the bottom of the window while checking, and briefly shows the result.
 
-To opt in to early-access (beta) builds, enable **Early Access** in settings. Early builds may have new features or experimental fixes not yet in a stable release.
+If a newer version is available, a dialog appears. Click **Download & Install** — ZArchive will download the update in the background (progress shown), then close itself, replace its own files, and relaunch automatically. No manual zip extraction needed.
+
+To opt in to pre-release (Early Access) builds, enable **Early Access** in the gear menu. Pre-release builds may have new features not yet in a stable release.
 
 ---
 
 ## Where ZArchive stores data
 
-ZArchive never writes into its own program folder. Your data lives here:
+ZArchive never writes into its own installation folder at runtime.
+
+### Windows
 
 | What | Where |
 |---|---|
 | Card image cache | `C:\Users\<you>\.zarchive\images\` |
 | Settings | Windows registry: `HKCU\Software\JavaSoft\Prefs\zarchive` |
 
-The image cache can be safely deleted at any time — ZArchive will re-download art as needed.
+### macOS
+
+| What | Where |
+|---|---|
+| Card image cache | `~/.zarchive/images/` |
+| Settings | `~/Library/Preferences/co.za.zarchive.plist` (via Java Preferences API) |
+
+The image cache can be safely deleted at any time — ZArchive will re-download art on next search.
 
 ---
 
 ## Uninstalling
 
+### Windows
+
 1. Delete the `ZArchive` folder.
-2. Delete `C:\Users\<you>\.zarchive\` (card image cache — optional, ~varies).
+2. Delete `C:\Users\<you>\.zarchive\` (image cache — optional).
 3. To remove settings: open **Registry Editor**, navigate to `HKCU\Software\JavaSoft\Prefs\zarchive`, and delete the key.
 
-No other files are created anywhere on your system.
+### macOS
+
+1. Delete `ZArchive.app`.
+2. Delete `~/.zarchive/` (image cache — optional).
+3. To remove settings: delete `~/Library/Preferences/co.za.zarchive.plist`.
 
 ---
 
 ## Troubleshooting
 
-**"The app opened and immediately closed"**
-This usually means Windows blocked it. Run ZArchive.exe once from File Explorer (not a shortcut), follow the SmartScreen steps above, then it will work normally.
+**"Windows protected your PC" / can't open the app**
+Follow the SmartScreen steps above (More info → Run anyway). You only need to do this once.
+
+**macOS says the app is damaged or can't be opened**
+Right-click `ZArchive.app` → Open → Open. If that still fails, run this in Terminal:
+```
+xattr -dr com.apple.quarantine /path/to/ZArchive.app
+```
+Then double-click normally.
 
 **"A store always shows no results"**
-Some stores have Cloudflare protection or rate-limiting. Try searching again. If a store consistently returns nothing, it may be temporarily rate-limiting ZArchive.
+Some stores use Cloudflare protection or rate-limiting. Try searching again later. If a store consistently returns nothing, it may be temporarily blocking automated requests.
 
 **"Card art is not loading"**
-Art is fetched from Scryfall and cached locally. Check your internet connection. If art previously loaded but isn't now, delete `C:\Users\<you>\.zarchive\images\` and search again.
+Art is fetched from Scryfall and cached locally. Check your internet connection. If art was loading before but stopped, delete `~/.zarchive/images/` and search again.
 
 **"I can't see the Order Lists tab"**
 The tab only appears after you've run at least one search.
 
 **"Prices look wrong"**
-ZArchive pulls prices directly from each store's website at search time. If a price looks off, click the listing row to open the store's own page and verify.
+ZArchive pulls prices directly from each store at search time. If a price looks off, click the row to open the store's own product page and verify.
+
+**"The Warren is missing from results"**
+The Warren is excluded by default because it uses a headless browser and is noticeably slower. Enable **Include The Warren** in the left panel to include it.
 
 ---
 

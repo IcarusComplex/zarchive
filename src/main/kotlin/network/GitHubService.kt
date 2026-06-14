@@ -14,9 +14,11 @@ import java.io.File
 private const val REPO = "IcarusComplex/zarchive"
 private val ghJson = Json { ignoreUnknownKeys = true }
 
-// URL for opening a pre-labelled new issue in the browser — no token required.
+// URLs for opening pre-labelled GitHub issues in the browser — no token required.
 const val CRASH_REPORT_URL =
     "https://github.com/$REPO/issues/new?labels=bug%2Ccrash-report&title=%5BCrash+Report%5D"
+const val BUG_REPORT_URL =
+    "https://github.com/$REPO/issues/new?labels=bug"
 
 data class UpdateInfo(
     val tag: String,

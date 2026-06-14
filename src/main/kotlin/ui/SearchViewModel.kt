@@ -82,8 +82,9 @@ class SearchViewModel {
     val installDir: File? = resolveInstallDir()
 
     fun startDownload(info: UpdateInfo, onReadyToInstall: () -> Unit) {
-        val url        = info.downloadUrl ?: return
-        val targetDir  = installDir       ?: return
+        val url       = info.downloadUrl ?: return
+        val targetDir = installDir       ?: return
+        val isMac     = System.getProperty("os.name", "").lowercase().contains("mac")
         downloadProgress = 0f
         downloadError    = null
         downloadJob = scope.launch(Dispatchers.IO) {
@@ -93,15 +94,24 @@ class SearchViewModel {
                 downloadRelease(url, zip) { p ->
                     scope.launch(Dispatchers.Swing) { downloadProgress = p }
                 }
-                // Write updater script next to the zip so it can clean itself up.
-                val script = tmp.resolve("zarchive-updater.ps1")
-                script.writeText(buildUpdaterScript())
-                ProcessBuilder(
-                    "powershell.exe", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
-                    "-File", script.absolutePath,
-                    "-ZipPath", zip.absolutePath,
-                    "-InstallDir", targetDir.absolutePath,
-                ).start()
+                val pb: ProcessBuilder = if (isMac) {
+                    val script = tmp.resolve("zarchive-updater.sh")
+                    script.writeText(buildMacUpdaterScript())
+                    script.setExecutable(true)
+                    ProcessBuilder("bash", script.absolutePath, zip.absolutePath, targetDir.absolutePath)
+                } else {
+                    val script = tmp.resolve("zarchive-updater.ps1")
+                    script.writeText(buildWindowsUpdaterScript())
+                    ProcessBuilder(
+                        "powershell.exe", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+                        "-File", script.absolutePath,
+                        "-ZipPath", zip.absolutePath,
+                        "-InstallDir", targetDir.absolutePath,
+                    )
+                }
+                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                pb.redirectError(ProcessBuilder.Redirect.DISCARD)
+                pb.start()
                 withContext(Dispatchers.Swing) { onReadyToInstall() }
             }.onFailure { e ->
                 withContext(Dispatchers.Swing) {
@@ -217,16 +227,22 @@ class SearchViewModel {
         fun resolveInstallDir(): File? {
             if (System.getProperty("mtg.debug") == "true") return null
             return runCatching {
-                // Packaged layout: ZArchive/app/zarchive-X.Y.Z.jar  → parent.parent = ZArchive/
-                val loc    = object {}.javaClass.protectionDomain?.codeSource?.location ?: return null
-                val appDir = File(loc.toURI()).parentFile                               ?: return null
-                appDir.parentFile?.takeIf { it.resolve("ZArchive.exe").exists() }
+                val loc = object {}.javaClass.protectionDomain?.codeSource?.location ?: return null
+                val jar = File(loc.toURI())
+                // Windows layout: ZArchive/app/*.jar  →  jar.parent.parent = ZArchive/
+                val winCandidate = jar.parentFile?.parentFile
+                if (winCandidate?.resolve("ZArchive.exe")?.exists() == true) return winCandidate
+                // macOS layout:   ZArchive.app/Contents/app/*.jar  →  jar.parent.parent.parent = ZArchive.app/
+                val macCandidate = jar.parentFile?.parentFile?.parentFile
+                if (macCandidate?.name?.endsWith(".app") == true &&
+                    macCandidate.resolve("Contents/MacOS").exists()
+                ) return macCandidate
+                null
             }.getOrNull()
         }
 
-        fun buildUpdaterScript(): String {
-            // \$ in a Kotlin string literal produces a literal dollar sign.
-            val D = "\$"
+        fun buildWindowsUpdaterScript(): String {
+            val D = "\$"  // \$ in a Kotlin string literal is a literal dollar sign
             return """
 param([string]${D}ZipPath, [string]${D}InstallDir)
 
@@ -259,6 +275,51 @@ Remove-Item ${D}ZipPath -Force         -ErrorAction SilentlyContinue
 Remove-Item ${D}extract -Recurse -Force -ErrorAction SilentlyContinue
 """.trimIndent()
         }
+
+        fun buildMacUpdaterScript(): String = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+ZIP_PATH="${'$'}1"
+INSTALL_DIR="${'$'}2"
+INSTALL_PARENT="$(dirname "${'$'}INSTALL_DIR")"
+INSTALL_NAME="$(basename "${'$'}INSTALL_DIR")"
+BACKUP_DIR="${'$'}{INSTALL_PARENT}/${'$'}{INSTALL_NAME}-backup"
+EXTRACT_DIR="${'$'}{TMPDIR:-/tmp}/ZArchive-update-extract"
+
+# Wait for ZArchive to exit (up to 30 seconds)
+DEADLINE=$(( $(date +%s) + 30 ))
+while pgrep -xq "ZArchive" 2>/dev/null; do
+    [ "$(date +%s)" -ge "${'$'}DEADLINE" ] && break
+    sleep 0.5
+done
+
+# Extract zip
+rm -rf "${'$'}EXTRACT_DIR"
+mkdir -p "${'$'}EXTRACT_DIR"
+unzip -q "${'$'}ZIP_PATH" -d "${'$'}EXTRACT_DIR"
+
+# Find the .app bundle inside the extracted folder
+EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 1 -name "*.app" | head -1)
+if [ -z "${'$'}EXTRACTED" ]; then
+    echo "No .app bundle found in update zip" >&2
+    exit 1
+fi
+
+# Swap: backup old bundle, move new one into place
+rm -rf "${'$'}BACKUP_DIR"
+mv "${'$'}INSTALL_DIR" "${'$'}BACKUP_DIR"
+mv "${'$'}EXTRACTED"   "${'$'}INSTALL_DIR"
+
+# Remove quarantine flag so Gatekeeper doesn't block the relaunched app
+xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
+
+# Relaunch
+open "${'$'}INSTALL_DIR"
+
+# Cleanup
+rm -rf "${'$'}BACKUP_DIR" "${'$'}ZIP_PATH" "${'$'}EXTRACT_DIR"
+""".trimIndent()
 
         private val BASIC_LANDS = setOf("plains", "island", "swamp", "mountain", "forest",
             "wastes", "snow-covered plains", "snow-covered island", "snow-covered swamp",

@@ -442,6 +442,16 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             onClick = { if (vm.updateCheckState != UpdateCheckState.CHECKING) { vm.checkForUpdates(); expanded = false } },
                         )
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        SettingsActionItem(
+                            label = "Report a bug",
+                            sublabel = "Open a GitHub issue",
+                            icon = Icons.Default.BugReport,
+                            onClick = {
+                                runCatching { Desktop.getDesktop().browse(URI(network.BUG_REPORT_URL)) }
+                                expanded = false
+                            },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsLinkItem(
                             label = "Support ZArchive",
                             sublabel = "Support on Ko-fi",
