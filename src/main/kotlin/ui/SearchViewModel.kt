@@ -304,16 +304,14 @@ ${D}parent  = Split-Path ${D}InstallDir -Parent
 ${D}name    = Split-Path ${D}InstallDir -Leaf
 ${D}backup  = Join-Path ${D}parent (${D}name + '-backup')
 ${D}swapped = ${D}false
+${D}renamed = ${D}false
 
 try {
     ${D}extracted = Get-ChildItem ${D}ExtractDir -Directory | Select-Object -First 1
     if (-not ${D}extracted) { throw "No directory found in extract dir" }
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
 
-    # Rename with retry - JVM memory-mapped jar files may still be held by the OS
-    # for a moment after process exit. Rename-Item is non-terminating by default so
-    # we use -ErrorAction Stop to make failures catchable, then retry up to 5 times.
-    ${D}renamed = ${D}false
+    # Try rename first (clean swap). Retry up to 5x in case JVM handles linger.
     for (${D}i = 0; ${D}i -lt 5; ${D}i++) {
         try {
             Rename-Item ${D}InstallDir (${D}name + '-backup') -ErrorAction Stop
@@ -324,15 +322,22 @@ try {
             Start-Sleep -Seconds 2
         }
     }
-    if (-not ${D}renamed) { throw "Could not rename install dir after 5 attempts" }
-    Log "Renamed old install to backup"
 
-    Move-Item ${D}extracted.FullName ${D}InstallDir -ErrorAction Stop
-    Log "Moved new install into place"
+    if (${D}renamed) {
+        Move-Item ${D}extracted.FullName ${D}InstallDir -ErrorAction Stop
+        Log "Moved new install into place"
+    } else {
+        # Rename still failing (e.g. Explorer has the folder open) - copy in-place.
+        Log "Rename failed after 5 attempts - falling back to robocopy"
+        robocopy ${D}extracted.FullName ${D}InstallDir /E /IS /IT /PURGE /NFL /NDL /NJH /NJS
+        ${D}rc = ${D}LASTEXITCODE
+        if (${D}rc -ge 8) { throw "robocopy failed with exit code ${D}rc" }
+        Log "In-place update complete (robocopy exit: ${D}rc)"
+    }
     ${D}swapped = ${D}true
 } catch {
     Log "Swap failed: ${D}_"
-    if ((Test-Path ${D}backup) -and -not (Test-Path ${D}InstallDir)) {
+    if (${D}renamed -and (Test-Path ${D}backup) -and -not (Test-Path ${D}InstallDir)) {
         Rename-Item ${D}backup ${D}name
         Log "Restored backup"
     }
@@ -341,7 +346,7 @@ try {
 Log "Launching ZArchive.exe (swapped=${D}swapped)"
 Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
 
-if (${D}swapped) { Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue }
+if (${D}swapped -and (Test-Path ${D}backup)) { Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue }
 Remove-Item ${D}ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
 Log "Done"
 """.trimIndent()
