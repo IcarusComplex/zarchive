@@ -100,10 +100,11 @@ suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit
                 if (n <= 0) break
                 out.write(buf, 0, n)
                 received += n
-                // Throttle to ≤10 UI updates/sec — firing a coroutine per chunk bogs down the EDT.
+                // Throttle to ≤2 UI updates/sec. When Content-Length is absent (chunked CDN
+                // response), pass NaN so the UI shows an indeterminate bar instead of 0%.
                 val now = System.currentTimeMillis()
-                if (total > 0 && now - lastProgressMs >= 500) {
-                    onProgress(received.toFloat() / total)
+                if (now - lastProgressMs >= 500) {
+                    onProgress(if (total > 0) received.toFloat() / total else Float.NaN)
                     lastProgressMs = now
                 }
             }

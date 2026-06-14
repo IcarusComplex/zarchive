@@ -757,19 +757,27 @@ private fun DownloadProgressDialog(phase: String, progress: Float, error: String
                     ) { Text("Close", fontSize = 12.sp) }
                 } else {
                     Text(phase, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
-                    LinearProgressIndicator(
-                        progress = { progress.coerceIn(0f, 1f) },
-                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
-                        color = Primary,
-                        trackColor = SurfaceContainerHighest,
-                    )
+                    if (progress.isNaN()) {
+                        LinearProgressIndicator(
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                            color = Primary,
+                            trackColor = SurfaceContainerHighest,
+                        )
+                    } else {
+                        LinearProgressIndicator(
+                            progress = { progress.coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                            color = Primary,
+                            trackColor = SurfaceContainerHighest,
+                        )
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            "${(progress * 100).toInt()}%",
+                            if (progress.isNaN()) "…" else "${(progress * 100).toInt()}%",
                             fontSize = 12.sp, fontFamily = Mono, color = OnSurfaceVariant,
                         )
                         Text(
