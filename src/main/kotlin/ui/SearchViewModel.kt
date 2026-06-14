@@ -10,6 +10,8 @@ import kotlinx.coroutines.swing.Swing
 import network.CardImageService
 import network.UpdateInfo
 import network.checkForUpdate
+import network.downloadRelease
+import java.io.File
 
 enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
@@ -70,6 +72,52 @@ class SearchViewModel {
 
     var updateInfo by mutableStateOf<UpdateInfo?>(null)
     var updateCheckState by mutableStateOf(UpdateCheckState.IDLE)
+
+    // null = idle, 0–1 = progress, -1 = error
+    var downloadProgress by mutableStateOf<Float?>(null)
+    var downloadError    by mutableStateOf<String?>(null)
+    private var downloadJob: Job? = null
+
+    // Resolved once at startup — null in dev mode or if the exe is not found next to the jar.
+    val installDir: File? = resolveInstallDir()
+
+    fun startDownload(info: UpdateInfo, onReadyToInstall: () -> Unit) {
+        val url        = info.downloadUrl ?: return
+        val targetDir  = installDir       ?: return
+        downloadProgress = 0f
+        downloadError    = null
+        downloadJob = scope.launch(Dispatchers.IO) {
+            runCatching {
+                val tmp = File(System.getProperty("java.io.tmpdir"), "ZArchive-update").also { it.mkdirs() }
+                val zip = tmp.resolve("ZArchive-update.zip")
+                downloadRelease(url, zip) { p ->
+                    scope.launch(Dispatchers.Swing) { downloadProgress = p }
+                }
+                // Write updater script next to the zip so it can clean itself up.
+                val script = tmp.resolve("zarchive-updater.ps1")
+                script.writeText(buildUpdaterScript())
+                ProcessBuilder(
+                    "powershell.exe", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
+                    "-File", script.absolutePath,
+                    "-ZipPath", zip.absolutePath,
+                    "-InstallDir", targetDir.absolutePath,
+                ).start()
+                withContext(Dispatchers.Swing) { onReadyToInstall() }
+            }.onFailure { e ->
+                withContext(Dispatchers.Swing) {
+                    downloadProgress = -1f
+                    downloadError = e.message ?: "Download failed"
+                }
+            }
+        }
+    }
+
+    fun cancelDownload() {
+        downloadJob?.cancel()
+        downloadJob = null
+        downloadProgress = null
+        downloadError = null
+    }
 
     fun checkForUpdates() {
         if (updateCheckState == UpdateCheckState.CHECKING) return
@@ -166,6 +214,52 @@ class SearchViewModel {
     }
 
     companion object {
+        fun resolveInstallDir(): File? {
+            if (System.getProperty("mtg.debug") == "true") return null
+            return runCatching {
+                // Packaged layout: ZArchive/app/zarchive-X.Y.Z.jar  → parent.parent = ZArchive/
+                val loc    = object {}.javaClass.protectionDomain?.codeSource?.location ?: return null
+                val appDir = File(loc.toURI()).parentFile                               ?: return null
+                appDir.parentFile?.takeIf { it.resolve("ZArchive.exe").exists() }
+            }.getOrNull()
+        }
+
+        fun buildUpdaterScript(): String {
+            // \$ in a Kotlin string literal produces a literal dollar sign.
+            val D = "\$"
+            return """
+param([string]${D}ZipPath, [string]${D}InstallDir)
+
+${D}deadline = [datetime]::Now.AddSeconds(30)
+while ((Get-Process -Name 'ZArchive' -ErrorAction SilentlyContinue) -and ([datetime]::Now -lt ${D}deadline)) {
+    Start-Sleep -Milliseconds 500
+}
+
+${D}parent  = Split-Path ${D}InstallDir -Parent
+${D}name    = Split-Path ${D}InstallDir -Leaf
+${D}backup  = Join-Path ${D}parent (${D}name + '-backup')
+${D}extract = Join-Path ${D}env:TEMP 'ZArchive-update-extract'
+
+try {
+    if (Test-Path ${D}extract) { Remove-Item ${D}extract -Recurse -Force }
+    Expand-Archive -Path ${D}ZipPath -DestinationPath ${D}extract -Force
+    ${D}extracted = Get-ChildItem ${D}extract -Directory | Select-Object -First 1
+    if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
+    Rename-Item ${D}InstallDir (${D}name + '-backup')
+    Move-Item ${D}extracted.FullName ${D}InstallDir
+    Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
+    Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue
+} catch {
+    if ((Test-Path ${D}backup) -and -not (Test-Path ${D}InstallDir)) {
+        Rename-Item ${D}backup ${D}name
+    }
+}
+
+Remove-Item ${D}ZipPath -Force         -ErrorAction SilentlyContinue
+Remove-Item ${D}extract -Recurse -Force -ErrorAction SilentlyContinue
+""".trimIndent()
+        }
+
         private val BASIC_LANDS = setOf("plains", "island", "swamp", "mountain", "forest",
             "wastes", "snow-covered plains", "snow-covered island", "snow-covered swamp",
             "snow-covered mountain", "snow-covered forest")

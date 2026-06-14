@@ -182,8 +182,19 @@ fun WindowScope.App(
                 }
             }
             // Modal dialogs — rendered on top of the full app
-            if (vm.updateInfo != null) {
-                UpdateDialog(vm.updateInfo!!, onDismiss = { vm.updateInfo = null })
+            if (vm.downloadProgress != null) {
+                DownloadProgressDialog(
+                    progress = vm.downloadProgress!!,
+                    error    = vm.downloadError,
+                    onCancel = { vm.cancelDownload() },
+                )
+            } else if (vm.updateInfo != null) {
+                UpdateDialog(
+                    info      = vm.updateInfo!!,
+                    vm        = vm,
+                    onDismiss = { vm.updateInfo = null },
+                    onInstall = { vm.startDownload(vm.updateInfo!!) { onCloseRequest() } },
+                )
             }
             if (showCrashDialog && pendingCrash != null) {
                 CrashReportDialog(crashLog = pendingCrash, onDismiss = { showCrashDialog = false })
@@ -591,24 +602,37 @@ private fun ModalScrim(content: @Composable BoxScope.() -> Unit) {
 }
 
 @Composable
-private fun UpdateDialog(info: network.UpdateInfo, onDismiss: () -> Unit) {
+private fun UpdateDialog(
+    info: network.UpdateInfo,
+    vm: SearchViewModel,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    val canAutoInstall = info.downloadUrl != null && vm.installDir != null
     ModalScrim {
         Surface(
             shape = RoundedCornerShape(8.dp),
             color = SurfaceContainerLow,
             border = BorderStroke(1.dp, OutlineVariant),
-            modifier = Modifier.width(380.dp),
+            modifier = Modifier.width(400.dp),
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Update available", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
                 Text(
-                    "ZArchive ${info.tag} is available. You're on ${data.BuildInfo.VERSION}.",
+                    "ZArchive ${info.tag} is available. You're on v${data.BuildInfo.VERSION}.",
                     fontSize = 13.sp, color = OnSurface,
                 )
-                Text(
-                    "Download the new version from GitHub Releases, extract, and replace your current ZArchive folder.",
-                    fontSize = 12.sp, color = OnSurfaceVariant,
-                )
+                if (canAutoInstall) {
+                    Text(
+                        "ZArchive will download the update, then close and replace itself. It will relaunch automatically.",
+                        fontSize = 12.sp, color = OnSurfaceVariant,
+                    )
+                } else {
+                    Text(
+                        "Download the new version from GitHub Releases, extract, and replace your current ZArchive folder.",
+                        fontSize = 12.sp, color = OnSurfaceVariant,
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                     Spacer(Modifier.weight(1f))
                     OutlinedButton(
@@ -617,14 +641,76 @@ private fun UpdateDialog(info: network.UpdateInfo, onDismiss: () -> Unit) {
                         border = BorderStroke(1.dp, OutlineVariant),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
                     ) { Text("Later", fontSize = 12.sp) }
+                    if (canAutoInstall) {
+                        Button(
+                            onClick = onInstall,
+                            shape = RoundedCornerShape(4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                        ) { Text("Download & Install", fontSize = 12.sp) }
+                    } else {
+                        Button(
+                            onClick = {
+                                runCatching { Desktop.getDesktop().browse(URI(info.releaseUrl)) }
+                                onDismiss()
+                            },
+                            shape = RoundedCornerShape(4.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                        ) { Text("Open release page", fontSize = 12.sp) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadProgressDialog(progress: Float, error: String?, onCancel: () -> Unit) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(380.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (error != null) {
+                    Text("Download failed", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
+                    Text(error, fontSize = 12.sp, color = OnSurfaceVariant)
                     Button(
-                        onClick = {
-                            runCatching { Desktop.getDesktop().browse(URI(info.releaseUrl)) }
-                            onDismiss()
-                        },
+                        onClick = onCancel,
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                    ) { Text("Download", fontSize = 12.sp) }
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Close", fontSize = 12.sp) }
+                } else {
+                    Text("Downloading update…", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                    LinearProgressIndicator(
+                        progress = { progress.coerceIn(0f, 1f) },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                        color = Primary,
+                        trackColor = SurfaceContainerHighest,
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "${(progress * 100).toInt()}%",
+                            fontSize = 12.sp, fontFamily = Mono, color = OnSurfaceVariant,
+                        )
+                        Text(
+                            "ZArchive will relaunch automatically when done.",
+                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = onCancel,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text("Cancel", fontSize = 12.sp) }
                 }
             }
         }

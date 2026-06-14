@@ -3,19 +3,27 @@ package network
 import data.BuildInfo
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import io.ktor.utils.io.jvm.javaio.*
 import kotlinx.serialization.json.*
+import java.io.File
 
 private const val REPO = "IcarusComplex/zarchive"
 private val ghJson = Json { ignoreUnknownKeys = true }
 
-data class UpdateInfo(val tag: String, val releaseUrl: String)
-
 // URL for opening a pre-labelled new issue in the browser — no token required.
 const val CRASH_REPORT_URL =
     "https://github.com/$REPO/issues/new?labels=bug%2Ccrash-report&title=%5BCrash+Report%5D"
+
+data class UpdateInfo(
+    val tag: String,
+    val releaseUrl: String,
+    /** Direct download URL for the Windows zip asset, or null if no asset was found. */
+    val downloadUrl: String?,
+)
 
 suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
     val client = HttpClient(CIO)
@@ -35,10 +43,51 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
         } else {
             ghJson.parseToJsonElement(body).jsonObject
         }
-        val tag = release?.get("tag_name")?.jsonPrimitive?.content ?: return@runCatching null
-        val htmlUrl = release["html_url"]?.jsonPrimitive?.content ?: return@runCatching null
-        if (isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) UpdateInfo(tag, htmlUrl) else null
+        val tag     = release?.get("tag_name")?.jsonPrimitive?.content ?: return@runCatching null
+        val htmlUrl = release["html_url"]?.jsonPrimitive?.content    ?: return@runCatching null
+        if (!isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) return@runCatching null
+
+        // Find the Windows zip asset in the release.
+        val downloadUrl = release["assets"]?.jsonArray
+            ?.mapNotNull { it.jsonObject }
+            ?.firstOrNull { it["name"]?.jsonPrimitive?.content?.endsWith(".zip") == true }
+            ?.get("browser_download_url")?.jsonPrimitive?.content
+
+        UpdateInfo(tag, htmlUrl, downloadUrl)
     }.also { client.close() }.getOrNull()
+}
+
+/**
+ * Downloads [url] to [dest], calling [onProgress] with a 0..1 fraction as bytes arrive.
+ * Follows redirects (GitHub release assets redirect to CDN).
+ */
+suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit) {
+    val client = HttpClient(CIO) {
+        install(HttpRedirect) { checkHttpMethod = false }
+        // Large file — no timeout on the response body read, only on connect.
+        install(HttpTimeout) { connectTimeoutMillis = 15_000 }
+    }
+    runCatching {
+        val resp = client.get(url) {
+            header(HttpHeaders.UserAgent, "ZArchive/${BuildInfo.VERSION}")
+            header(HttpHeaders.Accept, "application/octet-stream")
+        }
+        if (!resp.status.isSuccess()) error("HTTP ${resp.status.value}")
+        val total = resp.contentLength() ?: -1L
+        var received = 0L
+        dest.outputStream().buffered(65_536).use { out ->
+            resp.bodyAsChannel().toInputStream().use { input ->
+                val buf = ByteArray(65_536)
+                var n: Int
+                while (input.read(buf).also { n = it } != -1) {
+                    out.write(buf, 0, n)
+                    received += n
+                    if (total > 0) onProgress(received.toFloat() / total)
+                }
+            }
+        }
+        onProgress(1f)
+    }.also { client.close() }.getOrThrow()
 }
 
 private fun isNewerVersion(latest: String, current: String): Boolean {
