@@ -194,7 +194,7 @@ fun WindowScope.App(
                     info      = vm.updateInfo!!,
                     vm        = vm,
                     onDismiss = { vm.updateInfo = null },
-                    onInstall = { vm.startDownload(vm.updateInfo!!) { onCloseRequest() } },
+                    onInstall = { vm.startDownload(vm.updateInfo!!) { kotlin.system.exitProcess(0) } },
                 )
             }
             if (showCrashDialog && pendingCrash != null) {
