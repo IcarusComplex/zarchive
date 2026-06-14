@@ -349,13 +349,18 @@ Log "Done"
 
         fun buildMacSwapScript(): String = """
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
+
+LOG="${'$'}TMPDIR/zarchive-updater.log"
+log() { echo "$(date '+%H:%M:%S') ${'$'}*" >> "${'$'}LOG"; }
 
 EXTRACT_DIR="${'$'}1"
 INSTALL_DIR="${'$'}2"
 INSTALL_PARENT="$(dirname "${'$'}INSTALL_DIR")"
 INSTALL_NAME="$(basename "${'$'}INSTALL_DIR")"
 BACKUP_DIR="${'$'}{INSTALL_PARENT}/${'$'}{INSTALL_NAME}-backup"
+
+log "Swap started. ExtractDir=${'$'}EXTRACT_DIR InstallDir=${'$'}INSTALL_DIR"
 
 # Wait for ZArchive to exit (up to 30 seconds)
 DEADLINE=$(( $(date +%s) + 30 ))
@@ -364,27 +369,34 @@ while pgrep -xq "ZArchive" 2>/dev/null; do
     sleep 0.5
 done
 sleep 2
+log "ZArchive process exited"
 
-# Find the .app bundle in the already-extracted directory
+SWAPPED=false
+
 EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 2 -name "*.app" | head -1)
 if [ -z "${'$'}EXTRACTED" ]; then
-    echo "No .app bundle found in ${'$'}EXTRACT_DIR" >&2
-    exit 1
+    log "No .app bundle found in ${'$'}EXTRACT_DIR"
+else
+    rm -rf "${'$'}BACKUP_DIR"
+    if mv "${'$'}INSTALL_DIR" "${'$'}BACKUP_DIR"; then
+        if mv "${'$'}EXTRACTED" "${'$'}INSTALL_DIR"; then
+            xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
+            rm -rf "${'$'}BACKUP_DIR"
+            SWAPPED=true
+            log "Swap complete"
+        else
+            log "Move new .app failed - restoring backup"
+            mv "${'$'}BACKUP_DIR" "${'$'}INSTALL_DIR" || true
+        fi
+    else
+        log "Rename old .app failed"
+    fi
 fi
 
-# Swap: backup old bundle, move new one into place
-rm -rf "${'$'}BACKUP_DIR"
-mv "${'$'}INSTALL_DIR" "${'$'}BACKUP_DIR"
-mv "${'$'}EXTRACTED"   "${'$'}INSTALL_DIR"
-
-# Remove quarantine flag so Gatekeeper doesn't block the relaunched app
-xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
-
-# Relaunch
+log "Launching ${'$'}INSTALL_DIR (swapped=${'$'}SWAPPED)"
 open "${'$'}INSTALL_DIR"
-
-# Cleanup
-rm -rf "${'$'}BACKUP_DIR" "${'$'}EXTRACT_DIR"
+rm -rf "${'$'}EXTRACT_DIR"
+log "Done"
 """.trimIndent()
 
         private val BASIC_LANDS = setOf("plains", "island", "swamp", "mountain", "forest",
