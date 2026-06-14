@@ -35,35 +35,43 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// jpackage requires a plain MAJOR.MINOR.PATCH version; strip any prerelease suffix (e.g. -beta.1).
+val packageVer = version.toString().substringBefore('-')
+
 compose.desktop {
     application {
         mainClass = "MainKt"
         nativeDistributions {
             // Msi is listed so `packageMsi` works if WiX is installed; the primary
             // deliverable is the portable app image from `createDistributable` (no WiX needed).
+            // Msi: available via packageMsi if WiX is installed.
+            // Dmg: available via packageDmg on macOS (requires MAJOR >= 1).
+            // Primary deliverable is createDistributable (no format-specific tooling needed).
             targetFormats(TargetFormat.Msi)
             packageName = "ZArchive"
-            packageVersion = "0.0.3"
+            packageVersion = packageVer
             description = "Search South African MTG stores for card singles"
             vendor = "ZArchive"
             copyright = "© 2026 ZArchive"
 
-            // Trim the bundled JRE to just the modules the app actually uses.
             includeAllModules = true
 
             windows {
                 iconFile.set(project.file("build-tools/ZArchive.ico"))
-                // Used by the MSI installer (Start Menu group + shortcuts); harmless for app image.
                 menuGroup = "ZArchive"
                 menu = true
                 shortcut = true
                 upgradeUuid = "bb68f68c-b99b-48ae-a23b-bee6ac0e8f82"
             }
+
+            macOS {
+                // Required by jpackage; used as the bundle identifier in Info.plist.
+                bundleID = "co.za.zarchive"
+            }
         }
     }
 }
 
-// Generate BuildInfo.kt — injects app version + GitHub crash-report token from secrets.properties.
 // Generates BuildInfo.kt with the app version baked in at compile time.
 val generatedKotlinDir = layout.buildDirectory.dir("generated/kotlin")
 
