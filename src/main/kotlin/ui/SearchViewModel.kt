@@ -309,9 +309,25 @@ try {
     ${D}extracted = Get-ChildItem ${D}ExtractDir -Directory | Select-Object -First 1
     if (-not ${D}extracted) { throw "No directory found in extract dir" }
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
-    Rename-Item ${D}InstallDir (${D}name + '-backup')
+
+    # Rename with retry — JVM memory-mapped jar files may still be held by the OS
+    # for a moment after process exit. Rename-Item is non-terminating by default so
+    # we use -ErrorAction Stop to make failures catchable, then retry up to 5 times.
+    ${D}renamed = ${D}false
+    for (${D}i = 0; ${D}i -lt 5; ${D}i++) {
+        try {
+            Rename-Item ${D}InstallDir (${D}name + '-backup') -ErrorAction Stop
+            ${D}renamed = ${D}true
+            break
+        } catch {
+            Log "Rename attempt $( ${D}i + 1 ) failed: ${D}_ — retrying in 2s"
+            Start-Sleep -Seconds 2
+        }
+    }
+    if (-not ${D}renamed) { throw "Could not rename install dir after 5 attempts" }
     Log "Renamed old install to backup"
-    Move-Item ${D}extracted.FullName ${D}InstallDir
+
+    Move-Item ${D}extracted.FullName ${D}InstallDir -ErrorAction Stop
     Log "Moved new install into place"
     ${D}swapped = ${D}true
 } catch {
