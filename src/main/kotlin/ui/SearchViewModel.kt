@@ -310,7 +310,7 @@ try {
     if (-not ${D}extracted) { throw "No directory found in extract dir" }
     if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
 
-    # Rename with retry — JVM memory-mapped jar files may still be held by the OS
+    # Rename with retry - JVM memory-mapped jar files may still be held by the OS
     # for a moment after process exit. Rename-Item is non-terminating by default so
     # we use -ErrorAction Stop to make failures catchable, then retry up to 5 times.
     ${D}renamed = ${D}false
@@ -320,7 +320,7 @@ try {
             ${D}renamed = ${D}true
             break
         } catch {
-            Log "Rename attempt $( ${D}i + 1 ) failed: ${D}_ — retrying in 2s"
+            Log "Rename attempt $( ${D}i + 1 ) failed: ${D}_ - retrying in 2s"
             Start-Sleep -Seconds 2
         }
     }
