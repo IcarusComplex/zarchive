@@ -58,6 +58,10 @@ jobs:
       - name: Build distributable
         run: ./gradlew createDistributable
 
+      - name: Print jpackage logs on failure
+        if: failure()
+        run: find build/compose/logs -name "*.txt" 2>/dev/null | while read f; do echo "=== $f ==="; cat "$f"; done
+
       - name: Package zip
         run: |
           VER="${{ github.ref_name }}"

@@ -37,6 +37,11 @@ tasks.test {
 
 // jpackage requires a plain MAJOR.MINOR.PATCH version; strip any prerelease suffix (e.g. -beta.1).
 val packageVer = version.toString().substringBefore('-')
+// macOS jpackage enforces MAJOR >= 1 for CFBundleVersion; remap 0.x.y → 1.0.y.
+val macPackageVer = packageVer.let { v ->
+    val parts = v.split(".")
+    if (parts[0] == "0") "1.0.${parts.getOrElse(2) { "0" }}" else v
+}
 
 compose.desktop {
     application {
@@ -67,6 +72,7 @@ compose.desktop {
             macOS {
                 // Required by jpackage; used as the bundle identifier in Info.plist.
                 bundleID = "co.za.zarchive"
+                packageVersion = macPackageVer
             }
         }
     }
