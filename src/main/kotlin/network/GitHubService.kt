@@ -13,6 +13,10 @@ private val ghJson = Json { ignoreUnknownKeys = true }
 
 data class UpdateInfo(val tag: String, val releaseUrl: String)
 
+// URL for opening a pre-labelled new issue in the browser — no token required.
+const val CRASH_REPORT_URL =
+    "https://github.com/$REPO/issues/new?labels=bug%2Ccrash-report&title=%5BCrash+Report%5D"
+
 suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
     val client = HttpClient(CIO)
     return runCatching {
@@ -35,27 +39,6 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
         val htmlUrl = release["html_url"]?.jsonPrimitive?.content ?: return@runCatching null
         if (isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) UpdateInfo(tag, htmlUrl) else null
     }.also { client.close() }.getOrNull()
-}
-
-suspend fun createCrashIssue(description: String, crashLog: String): Boolean {
-    val token = BuildInfo.GITHUB_CRASH_TOKEN
-    if (token.isBlank()) return false
-    val client = HttpClient(CIO)
-    return runCatching {
-        val body = buildJsonObject {
-            put("title", "[Crash Report] User-submitted crash")
-            put("body", "## What I was doing\n\n${description.ifBlank { "*(not provided)*" }}\n\n## Crash Log\n\n```\n$crashLog\n```")
-            putJsonArray("labels") { add("bug"); add("crash-report") }
-        }.toString()
-        val resp = client.post("https://api.github.com/repos/$REPO/issues") {
-            header(HttpHeaders.Authorization, "Bearer $token")
-            header(HttpHeaders.Accept, "application/vnd.github+json")
-            header(HttpHeaders.UserAgent, "ZArchive/${BuildInfo.VERSION}")
-            contentType(ContentType.Application.Json)
-            setBody(body)
-        }
-        resp.status.isSuccess()
-    }.also { client.close() }.getOrElse { false }
 }
 
 private fun isNewerVersion(latest: String, current: String): Boolean {

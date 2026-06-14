@@ -633,11 +633,7 @@ private fun UpdateDialog(info: network.UpdateInfo, onDismiss: () -> Unit) {
 
 @Composable
 private fun CrashReportDialog(crashLog: String, onDismiss: () -> Unit) {
-    var description by remember { mutableStateOf("") }
-    var submitting by remember { mutableStateOf(false) }
-    var submitted by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
+    var copied by remember { mutableStateOf(false) }
 
     ModalScrim {
         Surface(
@@ -648,79 +644,61 @@ private fun CrashReportDialog(crashLog: String, onDismiss: () -> Unit) {
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("ZArchive crashed last session", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
-                if (submitted) {
-                    Text("Report submitted. Thank you!", fontSize = 13.sp, color = Tertiary)
-                    Spacer(Modifier.height(4.dp))
-                    Button(
+                Text(
+                    "Would you like to report this? Copy the crash log, then open the GitHub issue page — it'll open pre-labelled and ready to paste into.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text("Crash log", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f))
+                Box(
+                    Modifier.fillMaxWidth().height(100.dp)
+                        .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
+                        .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                        .padding(8.dp)
+                ) {
+                    val scroll = rememberScrollState()
+                    Text(
+                        crashLog,
+                        fontSize = 10.sp, fontFamily = Mono, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.verticalScroll(scroll),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
                         onClick = onDismiss,
                         shape = RoundedCornerShape(4.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) { Text("Close", fontSize = 12.sp) }
-                } else {
-                    Text(
-                        "Would you like to submit a crash report? This helps us fix the problem.",
-                        fontSize = 13.sp, color = OnSurface,
-                    )
-                    Text("What were you doing when it crashed? (optional)", fontSize = 11.sp, color = OnSurfaceVariant)
-                    BasicTextField(
-                        value = description,
-                        onValueChange = { description = it },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(64.dp)
-                            .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
-                            .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
-                            .padding(8.dp),
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp, color = OnSurface),
-                        cursorBrush = SolidColor(Primary),
-                        decorationBox = { inner ->
-                            if (description.isEmpty()) Text("e.g. I searched for Lightning Bolt and it crashed…", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.4f))
-                            inner()
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Dismiss", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = {
+                            runCatching {
+                                val sel = java.awt.datatransfer.StringSelection(crashLog)
+                                java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
+                                copied = true
+                            }
                         },
-                    )
-                    Text("Crash log preview", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f))
-                    Box(
-                        Modifier.fillMaxWidth().height(80.dp)
-                            .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
-                            .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
-                            .padding(8.dp)
-                    ) {
-                        val scroll = rememberScrollState()
-                        Text(
-                            crashLog.take(800),
-                            fontSize = 10.sp, fontFamily = Mono, color = OnSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.verticalScroll(scroll),
-                        )
-                    }
-                    if (failed) {
-                        Text("Submission failed — report could not be sent.", fontSize = 11.sp, color = ErrorColor)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-                        Spacer(Modifier.weight(1f))
-                        OutlinedButton(
-                            onClick = onDismiss,
-                            shape = RoundedCornerShape(4.dp),
-                            border = BorderStroke(1.dp, OutlineVariant),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
-                            enabled = !submitting,
-                        ) { Text("Dismiss", fontSize = 12.sp) }
-                        Button(
-                            onClick = {
-                                submitting = true; failed = false
-                                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                                    val ok = network.createCrashIssue(description, crashLog)
-                                    withContext(kotlinx.coroutines.Dispatchers.Main) {
-                                        submitting = false
-                                        if (ok) submitted = true else failed = true
-                                    }
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, if (copied) Tertiary else OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (copied) Tertiary else OnSurface),
+                        modifier = Modifier.weight(1f),
+                    ) { Text(if (copied) "Copied!" else "Copy log", fontSize = 12.sp) }
+                    Button(
+                        onClick = {
+                            if (!copied) {
+                                runCatching {
+                                    val sel = java.awt.datatransfer.StringSelection(crashLog)
+                                    java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(sel, sel)
+                                    copied = true
                                 }
-                            },
-                            shape = RoundedCornerShape(4.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                            enabled = !submitting,
-                        ) { Text(if (submitting) "Submitting…" else "Submit report", fontSize = 12.sp) }
-                    }
+                            }
+                            runCatching { Desktop.getDesktop().browse(URI(network.CRASH_REPORT_URL)) }
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Open GitHub", fontSize = 12.sp) }
                 }
             }
         }

@@ -1,5 +1,4 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
-import java.util.Properties
 
 plugins {
     kotlin("jvm") version "1.9.23"
@@ -65,24 +64,16 @@ compose.desktop {
 }
 
 // Generate BuildInfo.kt — injects app version + GitHub crash-report token from secrets.properties.
-// secrets.properties is gitignored; missing file → empty token (crash reports silently disabled).
+// Generates BuildInfo.kt with the app version baked in at compile time.
 val generatedKotlinDir = layout.buildDirectory.dir("generated/kotlin")
 
 val generateBuildInfo by tasks.registering {
     outputs.dir(generatedKotlinDir)
+    inputs.property("version", version)
     doLast {
-        val props = Properties()
-        val secretsFile = rootProject.file("secrets.properties")
-        if (secretsFile.exists()) secretsFile.reader().use { props.load(it) }
-        val token = props.getProperty("github.crash.token", "")
         val out = generatedKotlinDir.get().file("data/BuildInfo.kt").asFile
         out.parentFile.mkdirs()
-        out.writeText(
-            "package data\n\nobject BuildInfo {\n" +
-            "    const val VERSION = \"$version\"\n" +
-            "    const val GITHUB_CRASH_TOKEN = \"$token\"\n" +
-            "}\n"
-        )
+        out.writeText("package data\n\nobject BuildInfo {\n    const val VERSION = \"$version\"\n}\n")
     }
 }
 
