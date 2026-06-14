@@ -7,11 +7,12 @@ and shows official card art from Scryfall.
 
 - `data/` — models (`SearchResult`, `Platform`, `STORES`, `KNOWN_PLATFORMS`) + price/relevance helpers
 - `network/` — per-platform searchers (`Searchers.kt`), `BrowserSearcher.kt` (Playwright for
-  Cloudflare/JS-token stores), `ScryfallFetcher.kt` (batch card-image lookup)
+  Cloudflare/JS-token stores), `ScryfallFetcher.kt` (batch card-image lookup),
+  `CardImageService.kt` (disk-cached Scryfall art), `GitHubService.kt` (update checks + downloads)
 - `engine/` — `SearchEngine.kt` orchestrates concurrent store searches + the shared Ktor client
 - `ui/` — Compose views (`App.kt`), `SearchViewModel.kt`
 - `build-tools/` — packaging helpers: `MakeIco.java` (PNG→multi-res `.ico` generator),
-  `ZArchive.ico` (generated app icon), `README.txt` (canonical end-user readme copied into builds)
+  `ZArchive.ico` (generated app icon), `README.txt` / `README-mac.txt` (end-user readmes copied into builds)
 
 Run with `.\gradlew.bat run` from the project root (injects `mtg.debug=true`).
 
@@ -114,6 +115,10 @@ These were the hard-won fixes — keep them:
   results-table popup (`POPUP_CARD_W`/`POPUP_CARD_H`). Images are eagerly pre-warmed into a shared
   `imageCache` via `LaunchedEffect` so the preview shows immediately, not only after a table row was
   hovered.
+  - **Flicker fix:** the popup `Box` has its own `MutableInteractionSource` (`popupInteraction`);
+    `showPopup = hoveredRaw || popupHovered` keeps the popup open while the cursor crosses the gap
+    between the entry and the card image. Without this, moving the mouse from the entry onto the popup
+    itself caused a hover-exit on the entry, collapsing the popup mid-hover.
 - **Top-level tabs (`ResultsTab`):** the app splits into two panes — **Search Results**
   (`SearchResultsTab`: the card summary + per-card sections) and **Order Lists** (`OrderListsPane`).
   The tabs render as **folder tabs in the header banner**, below the logo and just above the divider
@@ -196,7 +201,9 @@ gold accents for prices/primary actions; tonal layering (not drop shadows) for d
 - Search progress bar + status text; Cancel button while searching.
 - Debug chip (opens debug dump folder) when `mtg.debug=true`.
 
-## Building & distribution (Windows)
+## Building & distribution
+
+### Windows
 
 Self-contained Windows distribution via the Compose Desktop / jpackage `createDistributable` task —
 bundles a JRE so end users install nothing.
@@ -223,3 +230,110 @@ bundles a JRE so end users install nothing.
   (win32-only repack + jlink module detection ≈ halves the zip) if size ever matters.
 - **First-run friction:** the exe is **unsigned**, so Windows SmartScreen shows "Windows protected your
   PC" → users click "More info" → "Run anyway". Documented in `build-tools\README.txt`.
+
+### macOS
+
+- **Build:** run `./gradlew createDistributable` on a macOS machine (arm64). Produces
+  `build/compose/binaries/main/app/ZArchive/ZArchive.app`.
+- **Package for sharing:** zip `ZArchive/ZArchive.app` + `build-tools/README-mac.txt` into
+  `ZArchive-macos-arm64-<version>.zip`.
+- **macOS version constraint:** jpackage requires `CFBundleVersion` MAJOR ≥ 1. The `macPackageVer`
+  variable in `build.gradle.kts` remaps `0.x.y → 1.0.y`. At 1.0.0+ this passes through unchanged.
+- **Gatekeeper (macOS Sequoia):** the app is unsigned. First-run requires: right-click → Open, or
+  after the "can't be opened" block: System Settings → Privacy & Security → scroll down → "Open Anyway".
+  Documented in `build-tools/README-mac.txt`.
+- **CI:** GitHub Actions `release.yml`, `macos-latest` runner (Apple Silicon). Triggered on `v*` tag push.
+
+### CI / GitHub Actions (`.github/workflows/release.yml`)
+
+- Triggers on `v*` tag push to `main`.
+- Builds Windows on `windows-latest` and macOS on `macos-latest` in parallel.
+- Windows job zips `ZArchive/` (the full app folder including `README.txt`) → uploads as
+  `ZArchive-windows-x64-<version>.zip`.
+- macOS job zips `ZArchive/ZArchive.app` + `README-mac.txt` → uploads as
+  `ZArchive-macos-arm64-<version>.zip`.
+- Both assets are attached to the GitHub release created by the workflow.
+- **No tokens or PATs are bundled in the artifacts** — the GitHub API is hit unauthenticated for
+  update checks; only public release metadata and asset download URLs are needed.
+
+## Auto-update system (`network/GitHubService.kt`, `ui/SearchViewModel.kt`)
+
+Flow: app checks GitHub releases API → prompts user → downloads platform zip → extracts in-process
+→ writes a swap script to a temp file → calls `exitProcess(0)` → script runs after JVM exits,
+renames old install, moves new in, relaunches `ZArchive.exe` / `ZArchive.app`.
+
+**Security:** never bundle a PAT or GitHub token in the JAR — the jar is easily reverse-engineered.
+Update checks use the public `/releases/latest` endpoint (no auth required for public repos).
+
+### `network/GitHubService.kt`
+
+- `checkForUpdate(includePrerelease)`: hits `/releases/latest` (or `/releases` for prereleases),
+  compares tag to `BuildInfo.VERSION`. Filters release assets by platform keyword in filename
+  (`"windows"` or `"macos"` from `os.name`), falls back to first zip if no platform match found.
+- `downloadRelease(url, dest, onProgress)`: streams with a **1 MB buffer** and **500 ms progress
+  throttle** to avoid flooding the EDT. When the CDN response has no `Content-Length` header,
+  passes `Float.NaN` as progress so the UI shows an indeterminate bar instead of stuck-at-0%.
+  Uses `exitProcess(0)` (not `exitApplication()`) after install — `exitApplication()` waits for
+  Playwright threads to shut down, which can hold file handles open during the swap.
+
+### `ui/SearchViewModel.kt` — `buildWindowsSwapScript()`
+
+Generated as a `.ps1` to a temp file; launched via `ProcessBuilder("powershell.exe", "-File", ...)`.
+
+Critical constraints (all learned from failures):
+
+- **No non-ASCII characters** in the generated script. PowerShell 5.1 reads UTF-8-without-BOM as
+  ANSI — an em dash (`—`, bytes `0xE2 0x80 0x94`) crashes the parser before line 1 executes,
+  leaving no log at all. Every comment must use plain ASCII dashes only.
+- `$renamed` must be **initialised before the `try` block** so the `catch` restore guard can
+  reference it.
+- `Rename-Item` is a non-terminating cmdlet — errors do NOT trigger `catch` unless you add
+  `-ErrorAction Stop`. Without it, the script logs "Renamed" and falls through even on failure.
+- **5× retry loop** (2 s sleep between) before giving up on rename — JVM file handles may linger
+  a moment after `exitProcess(0)`.
+- **Robocopy fallback** if all rename attempts fail (Windows Explorer holds the folder open, which
+  blocks `Rename-Item` indefinitely but not robocopy's file-by-file copy):
+  `robocopy $src $dst /E /IS /IT /PURGE /NFL /NDL /NJH /NJS` — exit code < 8 = success.
+- **Always relaunches** `ZArchive.exe` outside the `try/catch`, regardless of swap outcome.
+- Log: `%TEMP%\zarchive-updater.log` — the first place to look when debugging a failed swap.
+
+### `ui/SearchViewModel.kt` — `buildMacSwapScript()`
+
+Generated as a `.sh` to a temp file; `chmod +x` applied before launch via `ProcessBuilder`.
+
+Critical constraints:
+
+- **No `set -e`** — `set -euo pipefail` (or even just `-e`) causes the script to exit silently on
+  any non-zero return, including benign commands like `xattr` cleanup, leaving no relaunch.
+  Use `set -uo pipefail` only (keeps undefined-var and pipe-fail protection).
+- Explicit `if/else` per step with restore-on-failure: if the second `mv` (new app into place) fails,
+  `mv "$BACKUP_DIR" "$INSTALL_DIR"` restores the original before relaunching.
+- **Always relaunches** via `open "$INSTALL_DIR"` at the end, regardless of swap outcome.
+- **`chmod` fix after extraction:** Java `ZipFile` strips Unix permission bits on extraction. After
+  moving the new `.app` into place:
+  - `chmod -R a+x "$INSTALL_DIR/Contents/MacOS"` — makes the main binary executable.
+  - `find "$INSTALL_DIR/Contents/runtime" -path "*/bin/*" -type f -exec chmod +x {} +` — makes
+    JRE binaries executable.
+  - `xattr -dr com.apple.quarantine "$INSTALL_DIR"` — clears Gatekeeper quarantine on the new copy.
+- Log: `$TMPDIR/zarchive-updater.log`.
+
+### `ui/App.kt` — `DownloadProgressDialog`
+
+Two-phase progress: `downloadPhase` state (`Downloading` / `Extracting`) shown in the dialog label.
+Progress bar: indeterminate (`LinearProgressIndicator` with no `progress` arg) when `progress.isNaN()`,
+determinate (`progress = { progress.coerceIn(0f, 1f) }`) otherwise. Label shows "…" when NaN.
+
+### Debugging the update chain
+
+The swap script that executes is **baked into the running version**, not the downloaded version.
+To test a script fix in version N, you must be running N and updating to N+1 — the script in N+1
+only runs the *next* time an update is applied.
+
+Log files (`%TEMP%\zarchive-updater.log` / `$TMPDIR/zarchive-updater.log`) are the primary
+diagnostic tool — check them first when a swap silently fails.
+
+### Launcher concept (planned, not implemented)
+
+A native `ZArchiveLauncher.exe` (Go binary, ~2 MB) that holds no JVM file handles and does the
+folder swap cleanly before starting the main JVM was discussed as a long-term improvement. Not
+implemented — the robocopy fallback is sufficient for now.
