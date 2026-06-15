@@ -414,49 +414,87 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
     }.distinctBy { it.url }
 }
 
-suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): List<SearchResult> {
+// PrestaShop has two types of products on AI Fest:
+// - Regular products: listing HTML has input.product_page_product_id with the cart ID
+// - Marketplace products: listing HTML only has data-id-product (catalog ID); the real
+//   cartable product ID is in a separate input.product_page_product_id on the product page
+// We prefer the listing form ID, fall back to a product-page fetch, then to data-id-product.
+suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/search?controller=search&search_query=$encoded"
     val resp = client.get(url)
     checkStatus(resp)
     val body = resp.bodyAsText()
     val soup = Jsoup.parse(body)
-    return soup.select("article.product-miniature, .js-product-miniature").mapNotNull { el ->
+    // PrestaShop embeds a site-wide static token in every page as a JS variable.
+    // It's an MD5 of server-side constants — same for all users and sessions.
+    val staticToken = Regex("""var static_token\s*=\s*"([a-f0-9]{32})"""")
+        .find(body)?.groupValues?.get(1)
+
+    data class Candidate(
+        val title: String, val productUrl: String, val price: Double?,
+        val available: Boolean, val listingId: Long?,
+    )
+    val candidates = soup.select("article.product-miniature, .js-product-miniature").mapNotNull { el ->
         val a = el.selectFirst(".product-title a, h3 a, h2 a") ?: return@mapNotNull null
         val title = a.text().trim()
         if (!isRelevant(card, title)) return@mapNotNull null
 
-        // AI Fest uses .market-rands with a bare number price; standard PS uses .price with R prefix
         val price: Double? = run {
             val marketEl = el.selectFirst(".market-rands")
-            if (marketEl != null) {
-                marketEl.text().trim().replace(",", "").toDoubleOrNull()
-            } else {
-                parsePrice(el.selectFirst(".price, .product-price")?.text() ?: "")
-            }
+            if (marketEl != null) marketEl.text().trim().replace(",", "").toDoubleOrNull()
+            else parsePrice(el.selectFirst(".price, .product-price")?.text() ?: "")
         }
 
-        // AI Fest shows .product-in-stock when marketplace stock is available;
-        // the PrestaShop-native out_of_stock flag is unreliable for marketplace stores.
         val inStockDiv = el.selectFirst(".product-in-stock")
         val qtyEl = el.selectFirst(".product-qty b, .product-qty strong")
         val explicitOutOfStock = el.selectFirst(".product-unavailable, .out-of-stock") != null
         val available: Boolean = when {
-            inStockDiv != null                     -> true
+            inStockDiv != null -> true
             qtyEl?.text()?.trim()?.toIntOrNull()?.let { it > 0 } == true -> true
-            explicitOutOfStock                     -> false
-            else                                   -> true  // appeared in results → assume listable
+            explicitOutOfStock -> false
+            else -> true
         }
 
-        SearchResult(
-            store = "",
-            card = card,
-            title = title,
-            priceZar = price,
-            available = available,
-            url = a.attr("href").takeIf { it.isNotEmpty() } ?: url,
-            note = availabilityNote(available),
-        )
+        // Prefer the form's product_page_product_id (correct for both regular and marketplace).
+        // data-id-product is the catalog ID and may differ from the cartable product ID.
+        val listingId = el.selectFirst("input.product_page_product_id")?.attr("value")?.toLongOrNull()
+            ?: el.attr("data-id-product").toLongOrNull()
+            ?: el.selectFirst("[data-id-product]")?.attr("data-id-product")?.toLongOrNull()
+        Candidate(title, a.attr("href").takeIf { it.isNotEmpty() } ?: url, price, available, listingId)
+    }
+
+    val sem = Semaphore(3)
+    candidates.map { c ->
+        async(Dispatchers.IO) {
+            sem.withPermit {
+                // Fetch the product page to get the definitive cart product ID.
+                // Marketplace items don't expose product_page_product_id in search listings,
+                // so the product page is the only reliable source.
+                val cartId = resolvePrestaShopCartId(client, c.productUrl) ?: c.listingId
+                SearchResult(
+                    store = "",
+                    card = card,
+                    title = c.title,
+                    priceZar = c.price,
+                    available = c.available,
+                    url = c.productUrl,
+                    note = availabilityNote(c.available),
+                    variantId = cartId,
+                    cartToken = staticToken,
+                )
+            }
+        }
+    }.awaitAll()
+}
+
+private suspend fun resolvePrestaShopCartId(client: HttpClient, productUrl: String): Long? {
+    return try {
+        val body = client.get(productUrl).bodyAsText()
+        Jsoup.parse(body).selectFirst("input.product_page_product_id")
+            ?.attr("value")?.toLongOrNull()
+    } catch (_: Exception) {
+        null
     }
 }
 

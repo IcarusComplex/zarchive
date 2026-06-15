@@ -70,6 +70,7 @@ import data.preferExactMatches
 import data.luckshackSearchUrl
 import data.KNOWN_PLATFORMS
 import data.Platform
+import network.BrowserSearcher
 import kotlinx.coroutines.Dispatchers
 import ui.UpdateCheckState
 import kotlinx.coroutines.launch
@@ -1217,7 +1218,7 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
                 ) {
                     // ── Stores ────────────────────────────────────────────────
                     OptionsSectionHeader("Stores")
-                    val regularStores = data.STORES.keys.filter { it != "The Warren" }.sorted()
+                    val regularStores = data.STORES.keys.sorted()
                     regularStores.chunked(2).forEach { pair ->
                         Row(Modifier.fillMaxWidth()) {
                             pair.forEach { store ->
@@ -1230,19 +1231,6 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
                             }
                             if (pair.size == 1) Spacer(Modifier.weight(1f))
                         }
-                    }
-
-                    // ── Slow stores ───────────────────────────────────────────
-                    OptionsSectionHeader("Slow Stores")
-                    Row(Modifier.fillMaxWidth()) {
-                        OptionToggle(
-                            checked = "The Warren" in vm.enabledStores,
-                            label = "The Warren",
-                            sublabel = "Requires a headless browser — much slower than other stores",
-                            onChange = { vm.setStoreEnabled("The Warren", it) },
-                            modifier = Modifier.weight(1f),
-                        )
-                        Spacer(Modifier.weight(1f))
                     }
 
                     HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
@@ -2055,9 +2043,13 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
     // WC_STORE_API (The Hidden Realm) is also WooCommerce under the hood — variation IDs are
     // resolved at search time from the product page, so the same ?add-to-cart= URL works.
     // BigCommerce uses GET /cart.php?action=add&product_id=X — same browser-session pattern.
+    // PrestaShop uses GET /cart?add=1&id_product=X&qty=1&token=STATIC_TOKEN&action=update.
     val isWooCart = platform == Platform.WOOCOMMERCE || platform == Platform.WC_STORE_API
     val isBigCommerceCart = platform == Platform.BIGCOMMERCE
-    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart || isBigCommerceCart)
+    val isPrestaCart = platform == Platform.PRESTASHOP &&
+        activeLines.isNotEmpty() && activeLines.first().listing.cartToken != null
+    val isWarren = order.store == "The Warren"
+    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart || isBigCommerceCart || isPrestaCart) && !isWarren
 
     var wooCartLoading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -2065,6 +2057,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
     val cartTooltip = when {
         isWooCart -> "Adds one card at a time (WooCommerce limitation).\nOpens your cart automatically after all cards are added."
         isBigCommerceCart -> "Adds one card at a time (BigCommerce limitation).\nOpens your cart automatically after all cards are added."
+        isPrestaCart -> "Adds one card at a time (PrestaShop limitation).\nOpens your cart automatically after all cards are added."
         else -> "Open cart with all items pre-added."
     }
 
@@ -2132,6 +2125,21 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     }
                                 }
                             }
+                            isPrestaCart -> {
+                                {
+                                    val token = activeLines.first().listing.cartToken!!
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(1000)
+                                            openUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=1&token=$token&action=update")
+                                        }
+                                        delay(2000)
+                                        openUrl("$base/cart")
+                                        wooCartLoading = false
+                                    }
+                                }
+                            }
                             else -> {
                                 {
                                     val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
@@ -2183,6 +2191,24 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                 Spacer(Modifier.width(COL_ACTION))
             }
             HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+            if (isWarren) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()
+                        .background(SurfaceContainerHigh.copy(alpha = 0.4f))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Default.Info, null, tint = OnSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Cart must be filled manually on The Warren — Cloudflare protection prevents automation.",
+                        fontSize = 11.sp,
+                        color = OnSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+                HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+            }
             order.lines.forEachIndexed { idx, line ->
                 if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
                 val lineChecked = !unchecked.containsKey(line.listing.url)

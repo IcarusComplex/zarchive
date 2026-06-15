@@ -197,24 +197,29 @@ suspend fun runSearch(
     onProgress: suspend (String) -> Unit,
     onResults: suspend (List<SearchResult>) -> Unit,
     onStoreComplete: suspend (String) -> Unit,
+    // Pass a long-lived BrowserSearcher from the ViewModel so the Playwright browser and its
+    // CF-clearance session survive between search clicks. If null, a temporary one is created.
+    sharedBrowserSearcher: BrowserSearcher? = null,
 ) {
     cfBlockedStores.clear()
     val client = buildHttpClient()
     val hasBrowserStores = stores.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
-    // Scale parallelism with card count: 1 lane per 3 cards, capped at 3.
-    // Each lane is a separate headless browser instance on its own thread.
-    val browserParallelism = if (hasBrowserStores) (cards.size / 3 + 1).coerceIn(1, 3) else 0
-    val browserSearcher = if (hasBrowserStores) BrowserSearcher(browserParallelism) else null
+    // Only create a local BrowserSearcher if the caller didn't supply one.
+    val localBrowserSearcher = if (hasBrowserStores && sharedBrowserSearcher == null) {
+        val parallelism = (cards.size / 3 + 1).coerceIn(1, 3)
+        BrowserSearcher(parallelism)
+    } else null
+    val effectiveBrowserSearcher = sharedBrowserSearcher ?: localBrowserSearcher
     try {
         coroutineScope {
             stores.map { (name, base) ->
                 async(Dispatchers.IO) {
-                    checkStore(client, name, base, cards, browserSearcher, onProgress, onResults, onStoreComplete)
+                    checkStore(client, name, base, cards, effectiveBrowserSearcher, onProgress, onResults, onStoreComplete)
                 }
             }.awaitAll()
         }
     } finally {
         client.close()
-        browserSearcher?.close()
+        localBrowserSearcher?.close() // never close the caller's shared searcher
     }
 }

@@ -1,13 +1,13 @@
 package network
 
 import com.microsoft.playwright.*
-import com.microsoft.playwright.options.LoadState
 import com.microsoft.playwright.options.WaitUntilState
 import data.SearchResult
 import data.isRelevant
 import data.parsePrice
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.*
 import org.jsoup.Jsoup
 import java.io.File
 import java.net.URLEncoder
@@ -21,6 +21,7 @@ private val IS_DEBUG = System.getProperty("mtg.debug") == "true"
 private val DEBUG_DIR by lazy {
     File(System.getProperty("user.home"), "zarchive-debug").also { it.mkdirs() }
 }
+
 
 private fun debugDump(store: String, card: String, html: String, summary: String) {
     if (!IS_DEBUG) return
@@ -46,6 +47,9 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
         var pw: Playwright? = null
         var browser: Browser? = null
         var ctx: BrowserContext? = null
+        // Persistent page kept on thewarren.co.za — avoids re-navigating for each card search.
+        // Warren results come from an API (evaluate/fetch), not from the page HTML.
+        var warrenPage: Page? = null
 
         fun init() {
             if (pw != null) return
@@ -54,8 +58,16 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
             ctx = createContext(browser!!)
         }
 
+        fun initWarrenPage() {
+            if (warrenPage != null) return
+            warrenPage = ctx!!.newPage()
+            warrenPage!!.navigate("https://thewarren.co.za",
+                Page.NavigateOptions().setTimeout(30_000.0).setWaitUntil(WaitUntilState.DOMCONTENTLOADED))
+        }
+
         fun close() {
             executor.submit {
+                runCatching { warrenPage?.close() }
                 runCatching { ctx?.close() }
                 runCatching { browser?.close() }
                 runCatching { pw?.close() }
@@ -72,7 +84,10 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
         val lane = lanes[robin.getAndIncrement() % lanes.size]
         return withContext(lane.dispatcher) {
             lane.init()
-            if ("thewarren" in base) searchWarren(card, lane.ctx!!) else emptyList()
+            if ("thewarren" in base) {
+                lane.initWarrenPage()
+                searchWarren(card, lane.warrenPage!!)
+            } else emptyList()
         }
     }
 
@@ -136,56 +151,82 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
 
     // ── The Warren ─────────────────────────────────────────────────────────────
 
-    private fun searchWarren(card: String, ctx: BrowserContext): List<SearchResult> {
+    // The Warren's /openapi/.../product/search endpoint requires a server-side session
+    // state that only the React app initialises — bare HTTP requests always return empty.
+    // Strategy: navigate to the search URL, intercept the React app's first API call via
+    // waitForResponse (gives us JSON with prices immediately), then fetch remaining pages
+    // via page.evaluate(fetch(...)) since the session is now properly initialised.
+    private fun searchWarren(card: String, page: Page): List<SearchResult> {
         val encoded = URLEncoder.encode(card, "UTF-8")
-        val url = "https://thewarren.co.za/search?f=1&q=$encoded&t=1&c=3&sc=7&is=1&o=0"
-        val page = ctx.newPage()
+        val searchUrl = "https://thewarren.co.za/search?f=1&q=$encoded&t=1&c=3&sc=7&is=1&o=0"
         return try {
-            page.navigate(url, Page.NavigateOptions()
-                .setTimeout(30_000.0)
-                .setWaitUntil(WaitUntilState.DOMCONTENTLOADED))
-            runCatching {
-                page.waitForSelector("a[href*='/mtg?id=']",
-                    Page.WaitForSelectorOptions().setTimeout(20_000.0))
+            val resp = page.waitForResponse("**/product/search**") {
+                page.navigate(searchUrl, Page.NavigateOptions()
+                    .setTimeout(30_000.0)
+                    .setWaitUntil(WaitUntilState.DOMCONTENTLOADED))
             }
-            runCatching {
-                page.waitForLoadState(LoadState.NETWORKIDLE,
-                    Page.WaitForLoadStateOptions().setTimeout(2_500.0))
+            val firstJson = resp.text()
+            debugDump("warren", card, firstJson, "card=$card  page1")
+            val results = parseWarrenApiJson(firstJson, card).toMutableList()
+
+            // Each item carries total_records. If more pages exist, fetch them via
+            // page.evaluate now that the session is properly initialised by the navigation.
+            val total = Json.parseToJsonElement(firstJson).jsonObject["data"]
+                ?.jsonArray?.firstOrNull()?.jsonObject?.get("total_records")
+                ?.jsonPrimitive?.intOrNull ?: 0
+            val pageSize = 20
+            if (total > pageSize) {
+                var offset = pageSize
+                while (offset < total) {
+                    val apiPath = "/openapi/1.0.0fe/client/product/search" +
+                        "?limit=$pageSize&offset=$offset&search_term=$encoded" +
+                        "&in_stock=1&cmc_filter=e&white=0&blue=0&black=0&red=0&green=0" +
+                        "&multicoloured=0&colourless=0&is_foil=0&is_token=0&is_art=0" +
+                        "&swu_cost_filter=e&swu_power_filter=e&swu_hp_filter=e&swu_is_foil=0"
+                    val moreJson = page.evaluate("""
+                        async () => {
+                            const r = await fetch('$apiPath');
+                            return r.text();
+                        }
+                    """.trimIndent()) as? String ?: break
+                    results.addAll(parseWarrenApiJson(moreJson, card))
+                    offset += pageSize
+                }
             }
-            val html = page.content()
-            val results = parseWarrenHtml(html, card)
-            debugDump("warren", card, html, buildString {
-                appendLine("URL: $url"); appendLine("Final: ${page.url()}")
-                appendLine("Results: ${results.size}")
-                results.forEach { appendLine("  ${it.title}  R${it.priceZar}  available=${it.available}") }
-                if (results.isEmpty()) appendLine("  (none — check .html)")
-            })
-            results
+            results.distinctBy { it.url }
         } catch (e: Exception) {
             debugDump("warren", card, "", "EXCEPTION: ${e.message}")
             emptyList()
-        } finally {
-            page.close()
         }
     }
 
-    private fun parseWarrenHtml(html: String, card: String): List<SearchResult> {
-        val soup = Jsoup.parse(html)
-        return soup.select("a[href*='/mtg?id=']").mapNotNull { a ->
-            val title = (a.selectFirst("[class*='name'],[class*='title'],[class*='Name'],[class*='Title']")
-                ?: a).text().trim().ifEmpty { return@mapNotNull null }
-            if (!isRelevant(card, title)) return@mapNotNull null
-            val priceEl = a.selectFirst("[class*='price'],[class*='Price']")
-                ?: a.parent()?.selectFirst("[class*='price'],[class*='Price']")
-            val href = a.attr("href").let {
-                if (it.startsWith("http")) it else "https://thewarren.co.za$it"
+    private fun parseWarrenApiJson(json: String, card: String): List<SearchResult> {
+        return try {
+            val arr = Json.parseToJsonElement(json).jsonObject["data"]?.jsonArray
+                ?: return emptyList()
+            arr.mapNotNull { el ->
+                val obj = el.jsonObject
+                val title = obj["product_name"]?.jsonPrimitive?.contentOrNull?.trim()
+                    ?: return@mapNotNull null
+                if (!isRelevant(card, title)) return@mapNotNull null
+                val available = (obj["stock_available"]?.jsonPrimitive?.intOrNull ?: 1) > 0
+                // Prefer discount_price when set, fall back to actual_price (both are numeric ZAR)
+                val priceRaw = obj["discount_price"]?.jsonPrimitive?.doubleOrNull?.takeIf { it > 0 }
+                    ?: obj["actual_price"]?.jsonPrimitive?.doubleOrNull
+                val variantId = obj["mtg_product_variant_id"]?.jsonPrimitive?.longOrNull
+                SearchResult(
+                    store = "", card = card, title = title,
+                    priceZar = priceRaw,
+                    available = available,
+                    url = "https://thewarren.co.za/mtg?id=$variantId",
+                    note = if (available) "In stock" else "Out of stock",
+                    variantId = variantId,
+                )
             }
-            SearchResult(
-                store = "", card = card, title = title,
-                priceZar = parsePrice(priceEl?.text() ?: ""),
-                available = true, url = href, note = "In stock",
-            )
-        }.distinctBy { it.url }
+        } catch (e: Exception) {
+            debugDump("warren", card, json, "JSON PARSE ERROR: ${e.message}")
+            emptyList()
+        }
     }
 
     override fun close() = lanes.forEach { it.close() }

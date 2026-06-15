@@ -8,7 +8,8 @@ data class SearchResult(
     val available: Boolean?,
     val url: String,
     val note: String,
-    val variantId: Long? = null,  // Shopify only; null for all other platforms
+    val variantId: Long? = null,   // Shopify variant ID, WC product/variation ID, BC product ID
+    val cartToken: String? = null, // PrestaShop static_token (same across all pages for a given store)
 )
 
 

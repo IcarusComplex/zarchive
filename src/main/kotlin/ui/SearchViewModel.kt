@@ -7,6 +7,7 @@ import data.luckshackSearchUrl
 import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.swing.Swing
+import network.BrowserSearcher
 import network.CardImageService
 import network.UpdateInfo
 import network.checkForUpdate
@@ -45,6 +46,11 @@ class SearchViewModel {
 
     private var searchJob: Job? = null
     private val scope = CoroutineScope(Dispatchers.Swing + SupervisorJob())
+
+    // Persists across search calls so the Playwright browser and its CF-clearance session
+    // stay alive — avoids a cold Cloudflare solve on every search click. 2 lanes handles
+    // most multi-card Warren searches without spawning a third idle browser instance.
+    private val warrenSearcher = BrowserSearcher(2)
 
     private var ignoreBasicLandsState by mutableStateOf(prefs.getBoolean("ignoreBasicLands", true))
     var ignoreBasicLands: Boolean
@@ -215,6 +221,7 @@ class SearchViewModel {
                 runSearch(
                     cards = cards,
                     stores = storesToSearch,
+                    sharedBrowserSearcher = warrenSearcher,
                     onProgress = { storeName ->
                         withContext(Dispatchers.Swing) {
                             storeStatuses[storeName] = StoreStatus.CHECKING
