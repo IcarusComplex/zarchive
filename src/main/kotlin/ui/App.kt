@@ -2044,22 +2044,29 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 
 @Composable
 private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>) {
-    val activeLines  = order.lines.filter { !unchecked.containsKey(it.listing.url) }
+    val activeLines  = order.lines
+        .filter { !unchecked.containsKey(it.listing.url) }
+        .distinctBy { it.listing.variantId ?: it.listing.url }
     val displayCount = activeLines.size
     val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
 
     val allHaveIds = activeLines.isNotEmpty() && activeLines.all { it.listing.variantId != null }
     val platform = KNOWN_PLATFORMS[order.storeUrl]
+    // WC_STORE_API (The Hidden Realm) is also WooCommerce under the hood — variation IDs are
+    // resolved at search time from the product page, so the same ?add-to-cart= URL works.
+    // BigCommerce uses GET /cart.php?action=add&product_id=X — same browser-session pattern.
     val isWooCart = platform == Platform.WOOCOMMERCE || platform == Platform.WC_STORE_API
-    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart)
+    val isBigCommerceCart = platform == Platform.BIGCOMMERCE
+    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart || isBigCommerceCart)
 
     var wooCartLoading by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    val cartTooltip = if (isWooCart)
-        "Adds one card at a time (WooCommerce limitation).\nOpens your cart automatically after all cards are added."
-    else
-        "Open cart with all items pre-added."
+    val cartTooltip = when {
+        isWooCart -> "Adds one card at a time (WooCommerce limitation).\nOpens your cart automatically after all cards are added."
+        isBigCommerceCart -> "Adds one card at a time (BigCommerce limitation).\nOpens your cart automatically after all cards are added."
+        else -> "Open cart with all items pre-added."
+    }
 
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -2095,23 +2102,41 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                             strokeWidth = 2.dp,
                         )
                     } else {
-                        val cartOnClick: () -> Unit = if (isWooCart) {
-                            {
-                                wooCartLoading = true
-                                scope.launch {
-                                    activeLines.forEachIndexed { idx, line ->
-                                        if (idx > 0) delay(1000)
-                                        openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                        val wooCartUrl = if (platform == Platform.WC_STORE_API) "$base/basket/" else "$base/cart/"
+                        val cartOnClick: () -> Unit = when {
+                            isWooCart -> {
+                                {
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(5000)
+                                            openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                                        }
+                                        delay(5000)
+                                        openUrl(wooCartUrl)
+                                        wooCartLoading = false
                                     }
-                                    delay(2000)
-                                    openUrl("$base/cart/")
-                                    wooCartLoading = false
                                 }
                             }
-                        } else {
-                            {
-                                val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
-                                openUrl(url)
+                            isBigCommerceCart -> {
+                                {
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(1000)
+                                            openUrl("$base/cart.php?action=add&product_id=${line.listing.variantId}")
+                                        }
+                                        delay(2000)
+                                        openUrl("$base/cart.php")
+                                        wooCartLoading = false
+                                    }
+                                }
+                            }
+                            else -> {
+                                {
+                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
+                                    openUrl(url)
+                                }
                             }
                         }
                         @OptIn(ExperimentalFoundationApi::class)

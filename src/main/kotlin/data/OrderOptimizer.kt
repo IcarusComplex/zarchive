@@ -54,11 +54,12 @@ private fun buildStoreOrders(lines: List<OrderLine>): List<StoreOrder> =
  * may spread the order across many stores.
  */
 fun cheapestPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
+    val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
         .mapValues { (card, ls) -> preferExactMatches(card, ls) }
     val chosen = mutableListOf<OrderLine>()
     val uncovered = mutableListOf<String>()
-    for (card in cards) {
+    for (card in uniqueCards) {
         val best = byCard[card]?.minWithOrNull(byPrice)
         if (best == null) uncovered += card else chosen += OrderLine(card, best)
     }
@@ -72,11 +73,12 @@ fun cheapestPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
  * regardless of price.
  */
 fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
+    val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
         .mapValues { (card, ls) -> preferExactMatches(card, ls) }
     val inStock = byCard.values.flatten()
-    val uncovered = cards.filter { byCard[it].isNullOrEmpty() }
-    val coverable = cards.filter { !byCard[it].isNullOrEmpty() }.toSet()
+    val uncovered = uniqueCards.filter { byCard[it].isNullOrEmpty() }
+    val coverable = uniqueCards.filter { !byCard[it].isNullOrEmpty() }.toSet()
 
     // store → set of (coverable) cards it can supply
     val storeCoverage: Map<String, Set<String>> = inStock

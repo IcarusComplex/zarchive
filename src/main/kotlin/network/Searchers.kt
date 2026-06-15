@@ -265,7 +265,10 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
 
 // WooCommerce Blocks Store API — works on WC stores that have Gutenberg blocks enabled.
 // Returns JSON with prices in minor currency units (divide by 10^currency_minor_unit).
-suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): List<SearchResult> {
+// For variable products we fetch each product page to extract the first in-stock variation ID
+// from the form's data-product_variations attribute — the parent product ID alone won't add
+// the correct variant to the cart.
+suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/wp-json/wc/store/v1/products?search=$encoded&per_page=10"
     val resp = client.get(url) {
@@ -277,10 +280,11 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
     val products = try {
         Json.parseToJsonElement(body).jsonArray
     } catch (_: Exception) {
-        return emptyList()
+        return@coroutineScope emptyList()
     }
 
-    return products.mapNotNull { p ->
+    data class Candidate(val title: String, val permalink: String, val price: Double?, val productId: Long?)
+    val candidates = products.mapNotNull { p ->
         val obj = p.jsonObject
         val title = obj["name"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
         if (!isRelevant(card, title)) return@mapNotNull null
@@ -290,17 +294,49 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
         val price = rawPrice?.let { it.toDouble() / Math.pow(10.0, minorUnit.toDouble()) }
         val permalink = obj["permalink"]?.jsonPrimitive?.contentOrNull ?: "$base/"
         val productId = obj["id"]?.jsonPrimitive?.longOrNull
-        // WC Store API only returns purchasable/in-stock products by default
-        SearchResult(
-            store = "",
-            card = card,
-            title = title,
-            priceZar = price,
-            available = true,
-            url = permalink,
-            note = availabilityNote(true),
-            variantId = productId,
-        )
+        Candidate(title, permalink, price, productId)
+    }
+
+    val sem = Semaphore(3)
+    candidates.map { c ->
+        async(Dispatchers.IO) {
+            sem.withPermit {
+                // Fetch the product page to resolve the variation ID for the cart URL.
+                // Falls back to the parent product ID if the page has no variations form.
+                val variantId = resolveWcVariationId(client, c.permalink) ?: c.productId
+                SearchResult(
+                    store = "",
+                    card = card,
+                    title = c.title,
+                    priceZar = c.price,
+                    available = true,
+                    url = c.permalink,
+                    note = availabilityNote(true),
+                    variantId = variantId,
+                )
+            }
+        }
+    }.awaitAll()
+}
+
+/**
+ * Fetches a WooCommerce product page and extracts the first in-stock variation ID from the
+ * form's data-product_variations attribute. Returns null if the product is not variable or
+ * the page can't be fetched. Jsoup auto-decodes the HTML entities in the attribute value.
+ */
+private suspend fun resolveWcVariationId(client: HttpClient, productUrl: String): Long? {
+    return try {
+        val body = client.get(productUrl).bodyAsText()
+        val soup = Jsoup.parse(body)
+        val variationsJson = soup.selectFirst("form.variations_form[data-product_variations]")
+            ?.attr("data-product_variations") ?: return null
+        val variations = Json.parseToJsonElement(variationsJson).jsonArray
+        val picked = variations.firstOrNull { v ->
+            v.jsonObject["is_in_stock"]?.jsonPrimitive?.booleanOrNull == true
+        } ?: variations.firstOrNull()
+        picked?.jsonObject?.get("variation_id")?.jsonPrimitive?.longOrNull
+    } catch (_: Exception) {
+        null
     }
 }
 
@@ -340,13 +376,19 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
 }
 
 suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): List<SearchResult> {
-    val encoded = java.net.URLEncoder.encode(card, "UTF-8")
+    // Quoting the query forces BigCommerce to match the exact phrase rather than individual
+    // keywords — without quotes "Dark Ritual" returns 500+ unrelated results (cards from
+    // "The Dark" set, cards with "Ritual" in the name, etc.) with the actual card buried.
+    val encoded = java.net.URLEncoder.encode("\"$card\"", "UTF-8")
     val url = "$base/search.php?search_query=$encoded"
     val resp = client.get(url)
     checkStatus(resp)
     val body = resp.bodyAsText()
     val soup = Jsoup.parse(body)
-    return soup.select("li.product, article.card").mapNotNull { el ->
+    // BigCommerce Stencil structure: ul.productGrid > li.product > article.card
+    // Selecting both "li.product, article.card" would match each product twice since article
+    // is nested inside li. Use li.product as the single outer container.
+    return soup.select("li.product").mapNotNull { el ->
         val a = el.selectFirst(".card-title a, h4 a, h3 a") ?: return@mapNotNull null
         val title = a.text().trim()
         if (!isRelevant(card, title)) return@mapNotNull null
@@ -355,6 +397,10 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
             ?: el.selectFirst(".price--withTax, .price--withoutTax")
         val outOfStock = el.selectFirst(".button--outofstock, [data-button-type='out-of-stock']") != null
         val available = !outOfStock
+        // Extract product ID from the add-to-cart link href or the quick-view data attribute
+        val cartHref = el.selectFirst("a[href*='action=add'][href*='product_id=']")?.attr("href") ?: ""
+        val productId = Regex("product_id=(\\d+)").find(cartHref)?.groupValues?.get(1)?.toLongOrNull()
+            ?: el.selectFirst("[data-product-id]")?.attr("data-product-id")?.toLongOrNull()
         SearchResult(
             store = "",
             card = card,
@@ -363,8 +409,9 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
             available = available,
             url = a.attr("href").let { if (it.startsWith("http")) it else "$base$it" },
             note = availabilityNote(available),
+            variantId = productId,
         )
-    }
+    }.distinctBy { it.url }
 }
 
 suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): List<SearchResult> {
