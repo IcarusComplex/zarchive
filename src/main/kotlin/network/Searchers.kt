@@ -128,20 +128,20 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
         )
     }
 
-    // Shopify suggest API only returns the minimum variant price. Fetch the product JSON
-    // for each result so we get the default (first) variant — typically NM/best condition.
-    // Availability comes from the suggest API (explicitly set by Shopify); the product JSON
-    // variant `available` field is unreliable on the public endpoint (often absent → null).
+    // Shopify suggest API only returns the minimum variant price. Fetch /products/{handle}.js
+    // for each result to get the default (first) variant price and the first available variant's
+    // cart ID. Availability for the result row comes from the suggest API (product-level).
+    // .js endpoint is used (not .json) because .json omits per-variant available fields.
     val sem = Semaphore(3)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
                 val handle = c.relUrl.removePrefix("/products/").substringBefore("?").trim('/')
-                val variantPrice = if (handle.isNotBlank())
-                    shopifyFirstVariantPrice(client, base, handle, c.suggestAvailable)
+                val variant = if (handle.isNotBlank())
+                    shopifyFirstVariant(client, base, handle)
                 else null
 
-                val price = variantPrice ?: c.suggestPrice
+                val price = variant?.price ?: c.suggestPrice
                 val available = c.suggestAvailable  // suggest API availability is authoritative
                 SearchResult(
                     store = "",
@@ -151,41 +151,44 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
                     available = available,
                     url = resolveUrl(base, c.relUrl),
                     note = availabilityNote(available),
+                    variantId = variant?.id,
                 )
             }
         }
     }.awaitAll()
 }
 
+private data class ShopifyVariant(val price: Double, val id: Long?)
+
 /**
- * Fetches /products/{handle}.json and returns the price of the most relevant variant:
- * - If the product is in stock (per suggest API): first in-stock variant price (NM/default).
- * - If out of stock: first variant price (so we still show a price for reference).
+ * Fetches /products/{handle}.js and returns the display price + the best cart variant ID.
+ *
+ * Price: variants[0] — what Shopify defaults to on the product page (typically NM non-foil).
+ * Cart ID: first variant where available==true, so the cart permalink doesn't bounce as
+ * out-of-stock. Falls back to variants[0].id when no variant has available info.
  * Availability is NOT returned here — the suggest API value is used by the caller.
+ *
+ * .js endpoint (not .json) is used because it includes per-variant "available" fields;
+ * the public .json endpoint omits them entirely.
  */
-private suspend fun shopifyFirstVariantPrice(
+private suspend fun shopifyFirstVariant(
     client: HttpClient,
     base: String,
     handle: String,
-    inStock: Boolean?,
-): Double? {
+): ShopifyVariant? {
     return try {
-        val body = client.get("$base/products/$handle.json").bodyAsText()
-        val variants = Json.parseToJsonElement(body)
-            .jsonObject["product"]?.jsonObject
-            ?.get("variants")?.jsonArray ?: return null
-
-        data class V(val price: Double, val available: Boolean?)
-        val vs = variants.mapNotNull { v ->
-            val obj = v.jsonObject
-            val price = obj["price"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: return@mapNotNull null
-            V(price, obj["available"]?.jsonPrimitive?.booleanOrNull)
-        }
-
-        // Use the first variant's price: Shopify defaults to variants[0] on the product page,
-        // which is what the store considers the "standard" listing (usually NM non-foil).
-        // The suggest API's `price` field is the minimum across all variants, which can differ.
-        vs.firstOrNull()?.price
+        val body = client.get("$base/products/$handle.js").bodyAsText()
+        val variantObjs = Json.parseToJsonElement(body)
+            .jsonObject["variants"]?.jsonArray
+            ?.mapNotNull { it.jsonObject } ?: return null
+        val first = variantObjs.firstOrNull() ?: return null
+        // .js prices are in minor currency units (cents): 8500 = R85.00
+        val price = (first["price"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: return null) / 100.0
+        val cartId = variantObjs
+            .firstOrNull { it["available"]?.jsonPrimitive?.booleanOrNull == true }
+            ?.get("id")?.jsonPrimitive?.longOrNull
+            ?: first["id"]?.jsonPrimitive?.longOrNull
+        ShopifyVariant(price, cartId)
     } catch (_: Exception) {
         null
     }

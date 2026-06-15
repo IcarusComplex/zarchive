@@ -35,6 +35,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.BasicAlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -268,16 +271,23 @@ private fun LeftPanel(vm: SearchViewModel) {
         }
         HorizontalDivider(color = OutlineVariant)
 
-        // Checkboxes
-        Column(
-            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
+        var showOptionsDialog by remember { mutableStateOf(false) }
+        OutlinedButton(
+            onClick = { showOptionsDialog = true },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            shape = RoundedCornerShape(4.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+            border = BorderStroke(1.dp, OutlineVariant),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         ) {
-            IgnoreBasicLandsToggle(vm.ignoreBasicLands) { vm.ignoreBasicLands = it }
-            WarrenToggle(vm.includeWarren) { vm.includeWarren = it }
-            LuckshackToggle(vm.autoOpenLuckshack) { vm.autoOpenLuckshack = it }
+            Icon(Icons.Default.Settings, null, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Search Options", fontSize = 12.sp)
         }
         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
+        if (showOptionsDialog) {
+            SearchOptionsDialog(vm) { showOptionsDialog = false }
+        }
 
         // Search label
         Text(
@@ -1157,14 +1167,131 @@ private fun SearchResultsTab(vm: SearchViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun IgnoreBasicLandsToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainer,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(560.dp),
+        ) {
+            Column {
+                // Header
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(HeaderBg)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Icon(Icons.Default.Settings, null, tint = Primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Search Options",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        Icons.Default.Close, "Close", tint = OnSurfaceVariant,
+                        modifier = Modifier.size(16.dp).clickable { onDismiss() },
+                    )
+                }
+                HorizontalDivider(color = OutlineVariant)
+
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    // ── Stores ────────────────────────────────────────────────
+                    OptionsSectionHeader("Stores")
+                    val regularStores = data.STORES.keys.filter { it != "The Warren" }.sorted()
+                    regularStores.chunked(2).forEach { pair ->
+                        Row(Modifier.fillMaxWidth()) {
+                            pair.forEach { store ->
+                                OptionToggle(
+                                    checked = store in vm.enabledStores,
+                                    label = store,
+                                    onChange = { vm.setStoreEnabled(store, it) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                    }
+
+                    // ── Slow stores ───────────────────────────────────────────
+                    OptionsSectionHeader("Slow Stores")
+                    Row(Modifier.fillMaxWidth()) {
+                        OptionToggle(
+                            checked = "The Warren" in vm.enabledStores,
+                            label = "The Warren",
+                            sublabel = "Requires a headless browser — much slower than other stores",
+                            onChange = { vm.setStoreEnabled("The Warren", it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        Spacer(Modifier.weight(1f))
+                    }
+
+                    HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+
+                    // ── Search behaviour ──────────────────────────────────────
+                    OptionsSectionHeader("Search Behaviour")
+                    OptionToggle(
+                        checked = vm.ignoreBasicLands,
+                        label = "Ignore Basic Lands",
+                        sublabel = "Plains, Island, Swamp, Mountain, Forest, Wastes",
+                        onChange = { vm.ignoreBasicLands = it },
+                    )
+
+                    // ── Luckshack ─────────────────────────────────────────────
+                    OptionsSectionHeader("Luckshack")
+                    OptionToggle(
+                        checked = vm.autoOpenLuckshack,
+                        label = "Auto-open in browser on search",
+                        sublabel = "Luckshack is Cloudflare-protected and cannot be scraped. " +
+                            "When enabled, opens each card's Luckshack search page automatically.",
+                        onChange = { vm.autoOpenLuckshack = it },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionsSectionHeader(title: String) {
+    Text(
+        title.uppercase(),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+        color = OnSurfaceVariant.copy(alpha = 0.5f),
+        letterSpacing = 1.sp,
+    )
+}
+
+@Composable
+private fun OptionToggle(
+    checked: Boolean,
+    label: String,
+    onChange: (Boolean) -> Unit,
+    sublabel: String? = null,
+    modifier: Modifier = Modifier,
+) {
     Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
+        verticalAlignment = if (sublabel != null) Alignment.Top else Alignment.CenterVertically,
+        modifier = modifier
             .clip(RoundedCornerShape(4.dp))
             .clickable { onChange(!checked) }
-            .padding(end = 4.dp),
+            .padding(top = 3.dp, bottom = 3.dp, end = 8.dp),
     ) {
         Checkbox(
             checked = checked,
@@ -1177,93 +1304,10 @@ private fun IgnoreBasicLandsToggle(checked: Boolean, onChange: (Boolean) -> Unit
             modifier = Modifier.size(28.dp),
         )
         Spacer(Modifier.width(4.dp))
-        Text("Ignore basic lands", fontSize = 12.sp, color = OnSurfaceVariant)
-    }
-}
-
-@Composable
-private fun WarrenToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
-    TooltipSidebarToggle(
-        checked = checked,
-        label = "Include The Warren",
-        tooltip = "The Warren requires a headless browser to search, making it significantly " +
-            "slower than other stores. Off by default to keep searches fast.",
-        onChange = onChange,
-    )
-}
-
-@Composable
-private fun LuckshackToggle(checked: Boolean, onChange: (Boolean) -> Unit) {
-    TooltipSidebarToggle(
-        checked = checked,
-        label = "Auto-open Luckshack",
-        tooltip = "Luckshack is protected by Cloudflare and blocks automated searches. " +
-            "Enable to open each card's Luckshack search in your browser when a search runs.",
-        onChange = onChange,
-    )
-}
-
-@Composable
-private fun TooltipSidebarToggle(
-    checked: Boolean,
-    label: String,
-    tooltip: String,
-    onChange: (Boolean) -> Unit,
-) {
-    val density = LocalDensity.current
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    val positionProvider = remember(density) {
-        object : PopupPositionProvider {
-            override fun calculatePosition(
-                anchorBounds: IntRect,
-                windowSize: IntSize,
-                layoutDirection: LayoutDirection,
-                popupContentSize: IntSize,
-            ): IntOffset {
-                val gap = with(density) { 4.dp.roundToPx() }
-                return IntOffset(anchorBounds.left, anchorBounds.bottom + gap)
-            }
-        }
-    }
-    Box {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .hoverable(interaction)
-                .clickable { onChange(!checked) }
-                .padding(end = 8.dp),
-        ) {
-            Checkbox(
-                checked = checked,
-                onCheckedChange = onChange,
-                colors = CheckboxDefaults.colors(
-                    checkedColor = Primary,
-                    uncheckedColor = Outline,
-                    checkmarkColor = OnPrimary,
-                ),
-                modifier = Modifier.size(28.dp),
-            )
-            Spacer(Modifier.width(6.dp))
-            Text(label, fontSize = 12.sp, color = OnSurfaceVariant)
-        }
-        if (hovered) {
-            Popup(popupPositionProvider = positionProvider) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = SurfaceContainerHigh,
-                    border = BorderStroke(1.dp, OutlineVariant),
-                    modifier = Modifier.widthIn(max = 220.dp),
-                ) {
-                    Text(
-                        tooltip,
-                        fontSize = 11.sp,
-                        color = OnSurfaceVariant,
-                        lineHeight = 16.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                    )
-                }
+        Column {
+            Text(label, fontSize = 12.sp, color = OnSurface)
+            if (sublabel != null) {
+                Text(sublabel, fontSize = 10.sp, color = OnSurfaceVariant, lineHeight = 14.sp)
             }
         }
     }
@@ -2000,6 +2044,12 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
     val displayCount = activeLines.size
     val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
 
+    // Cart permalink: only available when every active line has a Shopify variant ID.
+    val activeVariantIds = activeLines.mapNotNull { it.listing.variantId }
+    val cartUrl = if (activeLines.isNotEmpty() && activeVariantIds.size == activeLines.size)
+        order.storeUrl.trimEnd('/') + "/cart/" + activeVariantIds.joinToString(",") { "$it:1" }
+    else null
+
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -2025,6 +2075,15 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                 Text(formatZar(displayTotal), fontFamily = Mono, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, color = Primary)
                 Spacer(Modifier.width(10.dp))
+                if (cartUrl != null) {
+                    Icon(
+                        Icons.Default.ShoppingCart,
+                        contentDescription = "Add all to cart",
+                        tint = Primary,
+                        modifier = Modifier.size(16.dp).clickable { openUrl(cartUrl) },
+                    )
+                    Spacer(Modifier.width(10.dp))
+                }
                 Icon(Icons.Default.OpenInNew, "Open store", tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
             }
             HorizontalDivider(color = OutlineVariant)

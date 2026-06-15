@@ -8,6 +8,7 @@ data class SearchResult(
     val available: Boolean?,
     val url: String,
     val note: String,
+    val variantId: Long? = null,  // Shopify only; null for all other platforms
 )
 
 

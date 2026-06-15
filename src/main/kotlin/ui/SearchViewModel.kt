@@ -54,13 +54,30 @@ class SearchViewModel {
             prefs.putBoolean("ignoreBasicLands", value)
         }
 
-    private var includeWarrenState by mutableStateOf(prefs.getBoolean("includeWarren", false))
-    var includeWarren: Boolean
-        get() = includeWarrenState
+    private var enabledStoresState: Set<String> by mutableStateOf(loadEnabledStores())
+    var enabledStores: Set<String>
+        get() = enabledStoresState
         set(value) {
-            includeWarrenState = value
-            prefs.putBoolean("includeWarren", value)
+            enabledStoresState = value
+            val disabled = STORES.keys.filter { it !in value }
+            prefs.put("disabledStores", disabled.joinToString(","))
         }
+
+    fun setStoreEnabled(store: String, enabled: Boolean) {
+        enabledStores = if (enabled) enabledStores + store else enabledStores - store
+    }
+
+    private fun loadEnabledStores(): Set<String> {
+        val raw = prefs.get("disabledStores", null)
+        return if (raw != null) {
+            val disabled = raw.split(",").filter { it.isNotBlank() }.toSet()
+            STORES.keys.filter { it !in disabled }.toSet()
+        } else {
+            // First run: migrate legacy includeWarren flag; Warren off by default.
+            val warrenOn = prefs.getBoolean("includeWarren", false)
+            STORES.keys.filter { it != "The Warren" || warrenOn }.toSet()
+        }
+    }
 
     private var earlyAccessState by mutableStateOf(prefs.getBoolean("earlyAccess", false))
     var earlyAccess: Boolean
@@ -163,7 +180,7 @@ class SearchViewModel {
         val cards = parseCardList(query, ignoreBasicLands)
         if (cards.isEmpty()) return
 
-        val storesToSearch = if (includeWarren) STORES else STORES.filterKeys { it != "The Warren" }
+        val storesToSearch = STORES.filterKeys { it in enabledStores }
 
         searchedCards = cards
         searchJob?.cancel()
