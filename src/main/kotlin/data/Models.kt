@@ -18,7 +18,7 @@ val STORES: Map<String, String> = linkedMapOf(
     "A.I. Fest"              to "https://store.ai-fest.co.za",
     "Battle Wizards"         to "https://www.battlewizards.co.za",
     "D20 Battleground"       to "http://d20battleground.co.za",
-    "Dracoti"                to "http://www.dracoti.co.za",
+    "Dracoti"                to "https://shop.dracoti.co.za",
     "Geek Home"              to "http://www.geekhome.co.za",
     "The Warren"             to "https://thewarren.co.za",
     "Underworld Connections" to "http://www.underworldconnections.co.za",
@@ -68,7 +68,7 @@ val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
     "http://www.underworldconnections.co.za" to Platform.SHOPIFY,
     // WooCommerce stores (verified 2026-06)
     "https://www.andressidehustle.co.za"     to Platform.WOOCOMMERCE,
-    "http://www.dracoti.co.za"               to Platform.WOOCOMMERCE,
+    "https://shop.dracoti.co.za"             to Platform.WOOCOMMERCE,
     "http://www.geekhome.co.za"              to Platform.WOOCOMMERCE,
 )
 

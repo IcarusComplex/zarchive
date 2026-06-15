@@ -43,6 +43,8 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.*
@@ -66,6 +68,8 @@ import data.cheapestPlan
 import data.fewestStoresPlan
 import data.preferExactMatches
 import data.luckshackSearchUrl
+import data.KNOWN_PLATFORMS
+import data.Platform
 import kotlinx.coroutines.Dispatchers
 import ui.UpdateCheckState
 import kotlinx.coroutines.launch
@@ -2044,11 +2048,18 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
     val displayCount = activeLines.size
     val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
 
-    // Cart permalink: only available when every active line has a Shopify variant ID.
-    val activeVariantIds = activeLines.mapNotNull { it.listing.variantId }
-    val cartUrl = if (activeLines.isNotEmpty() && activeVariantIds.size == activeLines.size)
-        order.storeUrl.trimEnd('/') + "/cart/" + activeVariantIds.joinToString(",") { "$it:1" }
-    else null
+    val allHaveIds = activeLines.isNotEmpty() && activeLines.all { it.listing.variantId != null }
+    val platform = KNOWN_PLATFORMS[order.storeUrl]
+    val isWooCart = platform == Platform.WOOCOMMERCE || platform == Platform.WC_STORE_API
+    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart)
+
+    var wooCartLoading by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    val cartTooltip = if (isWooCart)
+        "Adds one card at a time (WooCommerce limitation).\nOpens your cart automatically after all cards are added."
+    else
+        "Open cart with all items pre-added."
 
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -2075,13 +2086,60 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                 Text(formatZar(displayTotal), fontFamily = Mono, fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, color = Primary)
                 Spacer(Modifier.width(10.dp))
-                if (cartUrl != null) {
-                    Icon(
-                        Icons.Default.ShoppingCart,
-                        contentDescription = "Add all to cart",
-                        tint = Primary,
-                        modifier = Modifier.size(16.dp).clickable { openUrl(cartUrl) },
-                    )
+                if (showCart) {
+                    val base = order.storeUrl.trimEnd('/')
+                    if (wooCartLoading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Primary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        val cartOnClick: () -> Unit = if (isWooCart) {
+                            {
+                                wooCartLoading = true
+                                scope.launch {
+                                    activeLines.forEachIndexed { idx, line ->
+                                        if (idx > 0) delay(1000)
+                                        openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                                    }
+                                    delay(2000)
+                                    openUrl("$base/cart/")
+                                    wooCartLoading = false
+                                }
+                            }
+                        } else {
+                            {
+                                val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
+                                openUrl(url)
+                            }
+                        }
+                        @OptIn(ExperimentalFoundationApi::class)
+                        TooltipArea(
+                            tooltip = {
+                                Surface(
+                                    color = SurfaceContainerHighest,
+                                    shape = RoundedCornerShape(4.dp),
+                                    border = BorderStroke(1.dp, OutlineVariant),
+                                ) {
+                                    Text(
+                                        cartTooltip,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                        fontSize = 11.sp,
+                                        color = OnSurface,
+                                    )
+                                }
+                            },
+                            delayMillis = 400,
+                        ) {
+                            Icon(
+                                Icons.Default.ShoppingCart,
+                                contentDescription = "Add all to cart",
+                                tint = Primary,
+                                modifier = Modifier.size(16.dp).clickable(onClick = cartOnClick),
+                            )
+                        }
+                    }
                     Spacer(Modifier.width(10.dp))
                 }
                 Icon(Icons.Default.OpenInNew, "Open store", tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))

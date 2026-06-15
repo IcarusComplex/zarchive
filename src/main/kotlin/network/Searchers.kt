@@ -202,6 +202,37 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
     val body = resp.bodyAsText()
 
     val soup = Jsoup.parse(body)
+
+    // WooCommerce redirects directly to the product page when there is exactly one result.
+    // Detect via the canonical URL tag — WooCommerce always sets it to the actual page URL,
+    // so /product/ in canonical means we landed on a product detail page, not a results list.
+    // (Can't use li.product count: product detail pages also include a related-products list.)
+    val canonicalUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: ""
+    if ("/product/" in canonicalUrl) {
+        val title = soup.selectFirst("h1.product_title")?.text()?.trim() ?: return emptyList()
+        if (!isRelevant(card, title)) return emptyList()
+        val priceEl = soup.selectFirst(".price ins") ?: soup.selectFirst(".price")
+        // Scope stock check to the main product summary — related-products lower on the page
+        // also have .stock elements which would give a false out-of-stock reading.
+        val summaryEl = soup.selectFirst("div.summary, .entry-summary") ?: soup
+        val stockEl = summaryEl.selectFirst(".stock")
+        val outOfStock = stockEl?.hasClass("out-of-stock") == true
+        val available = !outOfStock
+        val productId = summaryEl.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
+            ?: soup.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
+        val productUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: url
+        return listOf(SearchResult(
+            store = "",
+            card = card,
+            title = title,
+            priceZar = parsePrice(priceEl?.text() ?: ""),
+            available = available,
+            url = productUrl,
+            note = availabilityNote(available),
+            variantId = productId,
+        ))
+    }
+
     return soup.select("li.product").mapNotNull { li ->
         val a = li.selectFirst("a.woocommerce-LoopProduct-link, a")
         val titleEl = li.selectFirst(".woocommerce-loop-product__title, h2, h3")
@@ -212,6 +243,13 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
         val outOfStock = li.selectFirst(".out-of-stock, .outofstock") != null ||
             li.classNames().any { it.contains("outofstock") }
         val available = !outOfStock
+        // Try the add-to-cart button attribute first; fall back to the post-{ID} class
+        // that WooCommerce always adds to every li.product (works even when the theme
+        // omits the button from search result listings).
+        val productId = li.selectFirst("[data-product_id]")
+            ?.attr("data-product_id")?.toLongOrNull()
+            ?: li.classNames().firstOrNull { it.matches(Regex("post-\\d+")) }
+                ?.removePrefix("post-")?.toLongOrNull()
         SearchResult(
             store = "",
             card = card,
@@ -220,6 +258,7 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
             available = available,
             url = a?.attr("href")?.takeIf { it.isNotEmpty() } ?: url,
             note = availabilityNote(available),
+            variantId = productId,
         )
     }
 }
@@ -250,6 +289,7 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
         val rawPrice = prices?.get("price")?.jsonPrimitive?.contentOrNull?.toLongOrNull()
         val price = rawPrice?.let { it.toDouble() / Math.pow(10.0, minorUnit.toDouble()) }
         val permalink = obj["permalink"]?.jsonPrimitive?.contentOrNull ?: "$base/"
+        val productId = obj["id"]?.jsonPrimitive?.longOrNull
         // WC Store API only returns purchasable/in-stock products by default
         SearchResult(
             store = "",
@@ -259,6 +299,7 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
             available = true,
             url = permalink,
             note = availabilityNote(true),
+            variantId = productId,
         )
     }
 }
