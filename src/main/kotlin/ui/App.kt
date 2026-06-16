@@ -294,6 +294,9 @@ private fun LeftPanel(vm: SearchViewModel) {
             SearchOptionsDialog(vm) { showOptionsDialog = false }
         }
 
+        SavedListsPanel(vm)
+        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
+
         // Search label
         Text(
             "Cards to search",
@@ -351,6 +354,265 @@ private fun HeaderLogo(bannerBitmap: ImageBitmap?) {
         )
     } else {
         Text("ZArchive", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Primary)
+    }
+}
+
+@Composable
+private fun SavedListsPanel(vm: SearchViewModel) {
+    val lists by vm.savedLists.collectAsState()
+    var showSaveDialog  by remember { mutableStateOf(false) }
+    var showAllDialog   by remember { mutableStateOf(false) }
+    var saveNameDraft   by remember { mutableStateOf("") }
+    var editingList     by remember { mutableStateOf<data.SavedSearchList?>(null) }
+
+    val pinned   = lists.take(3)
+    val overflow = lists.size - 3
+
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+        ) {
+            Text("Saved lists", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f))
+            if (vm.query.isNotBlank()) {
+                @OptIn(ExperimentalFoundationApi::class)
+                TooltipArea(
+                    tooltip = {
+                        Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
+                            border = BorderStroke(1.dp, OutlineVariant)) {
+                            Text("Save current list", fontSize = 11.sp, color = OnSurface,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                        }
+                    },
+                    delayMillis = 400,
+                ) {
+                    Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
+                        modifier = Modifier.size(16.dp).clickable { saveNameDraft = ""; showSaveDialog = true })
+                }
+            }
+        }
+
+        if (lists.isEmpty()) {
+            Text("No saved lists yet", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.padding(start = 14.dp, bottom = 8.dp))
+        } else {
+            pinned.forEach { list ->
+                SavedListRow(list,
+                    onLoad   = { vm.loadSearchList(list) },
+                    onDelete = { vm.deleteSearchList(list.id) },
+                    onEdit   = { editingList = list })
+            }
+            if (overflow > 0) {
+                val interaction = remember { MutableInteractionSource() }
+                val hovered by interaction.collectIsHoveredAsState()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+                        .hoverable(interaction)
+                        .clickable { showAllDialog = true }
+                        .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                ) {
+                    Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("+$overflow more", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                }
+            }
+        }
+    }
+
+    if (showSaveDialog) {
+        AlertDialog(
+            onDismissRequest = { showSaveDialog = false },
+            title = { Text("Save list", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                OutlinedTextField(
+                    value = saveNameDraft,
+                    onValueChange = { saveNameDraft = it },
+                    label = { Text("List name", fontSize = 12.sp) },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Primary,
+                        focusedLabelColor    = Primary,
+                        cursorColor          = Primary,
+                        unfocusedBorderColor = OutlineVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick  = { vm.saveSearchList(saveNameDraft.trim()); showSaveDialog = false },
+                    enabled  = saveNameDraft.isNotBlank(),
+                ) { Text("Save", color = Primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+    }
+
+    // Edit dialog for pinned-row edits (outside the "view all" modal)
+    editingList?.let { target ->
+        if (!showAllDialog) {
+            EditListDialog(
+                list      = target,
+                onSave    = { name, cards -> vm.saveEditedList(target.id, name, cards); editingList = null },
+                onDismiss = { editingList = null },
+            )
+        }
+    }
+
+    if (showAllDialog) {
+        var modalEditTarget by remember { mutableStateOf<data.SavedSearchList?>(null) }
+        AlertDialog(
+            onDismissRequest = { showAllDialog = false },
+            title = { Text("Saved lists", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    items(lists, key = { it.id }) { list ->
+                        SavedListRow(
+                            list     = list,
+                            onLoad   = { vm.loadSearchList(list); showAllDialog = false },
+                            onDelete = { vm.deleteSearchList(list.id) },
+                            onEdit   = { modalEditTarget = list },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAllDialog = false }) { Text("Close", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+        modalEditTarget?.let { target ->
+            EditListDialog(
+                list      = target,
+                onSave    = { name, cards -> vm.saveEditedList(target.id, name, cards); modalEditTarget = null },
+                onDismiss = { modalEditTarget = null },
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditListDialog(
+    list: data.SavedSearchList,
+    onSave: (name: String, cards: List<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var nameDraft  by remember(list.id) { mutableStateOf(list.name) }
+    var cardsDraft by remember(list.id) { mutableStateOf(list.cards.joinToString("\n")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Edit list", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinedTextField(
+                    value         = nameDraft,
+                    onValueChange = { nameDraft = it },
+                    label         = { Text("List name", fontSize = 12.sp) },
+                    singleLine    = true,
+                    colors        = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Primary,
+                        focusedLabelColor    = Primary,
+                        cursorColor          = Primary,
+                        unfocusedBorderColor = OutlineVariant,
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value         = cardsDraft,
+                    onValueChange = { cardsDraft = it },
+                    label         = { Text("Cards (one per line)", fontSize = 12.sp) },
+                    colors        = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Primary,
+                        focusedLabelColor    = Primary,
+                        cursorColor          = Primary,
+                        unfocusedBorderColor = OutlineVariant,
+                        unfocusedTextColor   = OnSurface,
+                        focusedTextColor     = OnSurface,
+                    ),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 300.dp),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val cards = cardsDraft.lines().map { it.trim() }.filter { it.isNotBlank() }
+                    onSave(nameDraft.trim(), cards)
+                },
+                enabled = nameDraft.isNotBlank(),
+            ) { Text("Save", color = Primary) }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel", color = OnSurfaceVariant) }
+        },
+        containerColor    = SurfaceContainerLowest,
+        titleContentColor = OnSurface,
+    )
+}
+
+@Composable
+private fun SavedListRow(
+    list: data.SavedSearchList,
+    onLoad: () -> Unit,
+    onDelete: () -> Unit,
+    onEdit: (() -> Unit)? = null,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+            .hoverable(interaction)
+            .clickable(onClick = onLoad)
+            .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+    ) {
+        Icon(Icons.Default.FormatListBulleted, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(12.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(
+            list.name,
+            fontSize = 12.sp,
+            color = OnSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        Spacer(Modifier.width(4.dp))
+        Text("${list.cards.size}", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+            fontFamily = Mono)
+        Spacer(Modifier.width(4.dp))
+        if (onEdit != null) {
+            Icon(
+                Icons.Default.Edit, "Edit",
+                tint = if (hovered) OnSurfaceVariant else Color.Transparent,
+                modifier = Modifier.size(12.dp).clickable(onClick = onEdit),
+            )
+            Spacer(Modifier.width(4.dp))
+        }
+        Icon(
+            Icons.Default.Close, "Delete",
+            tint = if (hovered) ErrorColor else Color.Transparent,
+            modifier = Modifier.size(12.dp).clickable(onClick = onDelete),
+        )
     }
 }
 

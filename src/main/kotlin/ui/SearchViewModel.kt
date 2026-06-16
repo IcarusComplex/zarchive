@@ -1,11 +1,14 @@
 package ui
 
 import androidx.compose.runtime.*
+import data.AppDatabase
+import data.SearchListRepo
 import data.SearchResult
 import data.STORES
 import data.luckshackSearchUrl
 import engine.runSearch
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
 import network.BrowserSearcher
 import network.CardImageService
@@ -28,15 +31,10 @@ class SearchViewModel {
     // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
     val storeCardCounts = mutableStateMapOf<String, Int>()
 
-    // Persisted user setting: whether a Luckshack search auto-opens in the browser.
-    private val prefs = java.util.prefs.Preferences.userRoot().node("zarchive")
-    private var autoOpenLuckshackState by mutableStateOf(prefs.getBoolean("autoOpenLuckshack", false))
+    private var autoOpenLuckshackState by mutableStateOf(AppDatabase.getSettingBoolean("autoOpenLuckshack", false))
     var autoOpenLuckshack: Boolean
         get() = autoOpenLuckshackState
-        set(value) {
-            autoOpenLuckshackState = value
-            prefs.putBoolean("autoOpenLuckshack", value)
-        }
+        set(value) { autoOpenLuckshackState = value; AppDatabase.setSettingBoolean("autoOpenLuckshack", value) }
 
     val results = mutableStateListOf<SearchResult>()
 
@@ -52,13 +50,10 @@ class SearchViewModel {
     // most multi-card Warren searches without spawning a third idle browser instance.
     private val warrenSearcher = BrowserSearcher(2)
 
-    private var ignoreBasicLandsState by mutableStateOf(prefs.getBoolean("ignoreBasicLands", true))
+    private var ignoreBasicLandsState by mutableStateOf(AppDatabase.getSettingBoolean("ignoreBasicLands", true))
     var ignoreBasicLands: Boolean
         get() = ignoreBasicLandsState
-        set(value) {
-            ignoreBasicLandsState = value
-            prefs.putBoolean("ignoreBasicLands", value)
-        }
+        set(value) { ignoreBasicLandsState = value; AppDatabase.setSettingBoolean("ignoreBasicLands", value) }
 
     private var enabledStoresState: Set<String> by mutableStateOf(loadEnabledStores())
     var enabledStores: Set<String>
@@ -66,7 +61,7 @@ class SearchViewModel {
         set(value) {
             enabledStoresState = value
             val disabled = STORES.keys.filter { it !in value }
-            prefs.put("disabledStores", disabled.joinToString(","))
+            AppDatabase.setSetting("disabledStores", disabled.joinToString(","))
         }
 
     fun setStoreEnabled(store: String, enabled: Boolean) {
@@ -74,24 +69,43 @@ class SearchViewModel {
     }
 
     private fun loadEnabledStores(): Set<String> {
-        val raw = prefs.get("disabledStores", null)
+        val raw = AppDatabase.getSetting("disabledStores", "").ifBlank { null }
         return if (raw != null) {
             val disabled = raw.split(",").filter { it.isNotBlank() }.toSet()
             STORES.keys.filter { it !in disabled }.toSet()
         } else {
-            // First run: migrate legacy includeWarren flag; Warren off by default.
-            val warrenOn = prefs.getBoolean("includeWarren", false)
+            val warrenOn = AppDatabase.getSettingBoolean("includeWarren", false)
             STORES.keys.filter { it != "The Warren" || warrenOn }.toSet()
         }
     }
 
-    private var earlyAccessState by mutableStateOf(prefs.getBoolean("earlyAccess", false))
+    private var earlyAccessState by mutableStateOf(AppDatabase.getSettingBoolean("earlyAccess", false))
     var earlyAccess: Boolean
         get() = earlyAccessState
-        set(value) {
-            earlyAccessState = value
-            prefs.putBoolean("earlyAccess", value)
-        }
+        set(value) { earlyAccessState = value; AppDatabase.setSettingBoolean("earlyAccess", value) }
+
+    // ── Saved search lists ─────────────────────────────────────────────────────
+    val searchListRepo = SearchListRepo()
+    val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
+
+    fun saveSearchList(name: String) {
+        val cards = query.lines().map { it.trim() }.filter { it.isNotBlank() }
+        if (cards.isEmpty()) return
+        scope.launch(Dispatchers.IO) { searchListRepo.create(name, cards) }
+    }
+
+    fun loadSearchList(list: data.SavedSearchList) {
+        query = list.cards.joinToString("\n")
+        scope.launch(Dispatchers.IO) { searchListRepo.touch(list.id) }
+    }
+
+    fun deleteSearchList(id: Int) {
+        scope.launch(Dispatchers.IO) { searchListRepo.delete(id) }
+    }
+
+    fun saveEditedList(id: Int, name: String, cards: List<String>) {
+        scope.launch(Dispatchers.IO) { searchListRepo.update(id, name, cards) }
+    }
 
     var updateInfo by mutableStateOf<UpdateInfo?>(null)
     var updateCheckState by mutableStateOf(UpdateCheckState.IDLE)

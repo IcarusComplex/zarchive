@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import data.AppDatabase
 import ui.App
 
 private val crashLog = java.io.File(System.getProperty("user.home"), "zarchive-debug/crash.log")
@@ -34,6 +35,7 @@ private fun readAndClearCrashLog(): String? {
 
 fun main() {
     installCrashLogger()
+    AppDatabase.init()
     val pendingCrash = readAndClearCrashLog()
     application {
     // Use the working area (screen minus taskbar) so the window never launches behind it.

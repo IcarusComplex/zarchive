@@ -28,8 +28,12 @@ The app never writes into its own install/program folder at runtime:
 - **Image cache:** `~/.zarchive/images/<sha1>.jpg` (`CardImageService.dir`, under `user.home`). A
   packaged build's working dir may be read-only, so this MUST stay an absolute user-home path — never
   a relative path like `assets/`.
-- **Settings:** `java.util.prefs` node `zarchive` (on Windows: `HKCU\Software\JavaSoft\Prefs\zarchive`).
-  Holds the `ignoreBasicLands` and `autoOpenLuckshack` toggles.
+- **Local database:** `~/.zarchive/zarchive.mv.db` — H2 embedded file-mode database (JetBrains
+  Exposed 0.50.1 + H2 2.2.224). Stores settings (replacing `java.util.prefs` / Windows registry
+  after a one-time migration on first run) and saved search lists. `AppDatabase.kt` owns the
+  schema; `SearchListRepo.kt` owns list CRUD. On first run, a seed list "Aragorn & Arwen EDH" is
+  inserted. The `_migrated_from_prefs` and `_seed_v1_lists` flags in the `settings` table guard
+  both one-time operations.
 - **Debug dumps:** `~/zarchive-debug/` — only written when `mtg.debug=true` (i.e. `gradlew run`),
   never in a packaged distribution.
 

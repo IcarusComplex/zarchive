@@ -97,9 +97,9 @@ fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>): OrderPla
                 compareBy<Map.Entry<String, Set<String>>> { (it.value intersect remaining).size }
                     .thenByDescending { entry ->
                         val gain = entry.value intersect remaining
-                        -inStock.filter { it.store == entry.key && it.card in gain }
+                        inStock.filter { it.store == entry.key && it.card in gain }
                             .groupBy { it.card }
-                            .values.sumOf { rows -> rows.minWithOrNull(byPrice)?.priceZar ?: 0.0 }
+                            .values.sumOf { rows -> rows.minWithOrNull(byPrice)?.priceZar ?: 10_000.0 }
                     }
             ) ?: break
         val gain = best.value intersect remaining
