@@ -74,7 +74,7 @@ class SearchViewModel {
             val disabled = raw.split(",").filter { it.isNotBlank() }.toSet()
             STORES.keys.filter { it !in disabled }.toSet()
         } else {
-            val warrenOn = AppDatabase.getSettingBoolean("includeWarren", false)
+            val warrenOn = AppDatabase.getSettingBoolean("includeWarren", true)
             STORES.keys.filter { it != "The Warren" || warrenOn }.toSet()
         }
     }
