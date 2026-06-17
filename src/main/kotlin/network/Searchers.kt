@@ -115,16 +115,27 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
     }
 
     // Pre-filter by relevance before making extra requests
-    data class Candidate(val title: String, val relUrl: String, val suggestPrice: Double?, val suggestAvailable: Boolean?)
+    data class Candidate(val title: String, val relUrl: String, val suggestPrice: Double?, val suggestAvailable: Boolean?, val setHint: String?)
     val candidates = products.mapNotNull { p ->
         val obj = p.jsonObject
         val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
         if (!isRelevant(card, title)) return@mapNotNull null
+        // The suggest API returns a "body" field with the product's HTML description.
+        // Stores using structured TCG singles themes (e.g. D20 Battleground's singles-description-table)
+        // include a "Set:" table row — use it as an authoritative set hint for image resolution.
+        val bodyHtml = obj["body"]?.jsonPrimitive?.contentOrNull
+        val setHint = bodyHtml?.let { html ->
+            Jsoup.parse(html).select("tr")
+                .firstOrNull { tr -> tr.select("td").firstOrNull()?.text()?.trim() == "Set:" }
+                ?.select("td")?.getOrNull(1)?.text()?.trim()
+                ?.takeIf { it.isNotBlank() }
+        }
         Candidate(
             title = title,
             relUrl = obj["url"]?.jsonPrimitive?.contentOrNull ?: "",
             suggestPrice = obj["price"]?.jsonPrimitive?.doubleOrNull,
             suggestAvailable = obj["available"]?.jsonPrimitive?.booleanOrNull,
+            setHint = setHint,
         )
     }
 
@@ -152,16 +163,18 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
                     url = resolveUrl(base, c.relUrl),
                     note = availabilityNote(available),
                     variantId = variant?.id,
+                    setHint = variant?.setHint ?: c.setHint,
                 )
             }
         }
     }.awaitAll()
 }
 
-private data class ShopifyVariant(val price: Double, val id: Long?)
+private data class ShopifyVariant(val price: Double, val id: Long?, val setHint: String? = null)
 
 /**
- * Fetches /products/{handle}.js and returns the display price + the best cart variant ID.
+ * Fetches /products/{handle}.js and returns the display price, the best cart variant ID,
+ * and an optional set name when the store exposes a "Set" variant option (e.g. Wzrd TCG).
  *
  * Price: variants[0] — what Shopify defaults to on the product page (typically NM non-foil).
  * Cart ID: first variant where available==true, so the cart permalink doesn't bounce as
@@ -178,8 +191,8 @@ private suspend fun shopifyFirstVariant(
 ): ShopifyVariant? {
     return try {
         val body = client.get("$base/products/$handle.js").bodyAsText()
-        val variantObjs = Json.parseToJsonElement(body)
-            .jsonObject["variants"]?.jsonArray
+        val productObj = Json.parseToJsonElement(body).jsonObject
+        val variantObjs = productObj["variants"]?.jsonArray
             ?.mapNotNull { it.jsonObject } ?: return null
         val first = variantObjs.firstOrNull() ?: return null
         // .js prices are in minor currency units (cents): 8500 = R85.00
@@ -188,7 +201,15 @@ private suspend fun shopifyFirstVariant(
             .firstOrNull { it["available"]?.jsonPrimitive?.booleanOrNull == true }
             ?.get("id")?.jsonPrimitive?.longOrNull
             ?: first["id"]?.jsonPrimitive?.longOrNull
-        ShopifyVariant(price, cartId)
+        // Some stores (e.g. Wzrd TCG) expose a "Set" option whose value is the full set name.
+        val setPosition = productObj["options"]?.jsonArray
+            ?.mapNotNull { it.jsonObject }
+            ?.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull.equals("Set", ignoreCase = true) }
+            ?.get("position")?.jsonPrimitive?.intOrNull
+        val setHint = setPosition?.let { pos ->
+            first["option$pos"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+        }
+        ShopifyVariant(price, cartId, setHint)
     } catch (_: Exception) {
         null
     }
@@ -221,6 +242,11 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
         val productId = summaryEl.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
             ?: soup.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
         val productUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: url
+        // Some TCG-singles WC themes put "Rarity | #Number | Set Name" in the short description.
+        val shortDesc = summaryEl.selectFirst(".woocommerce-product-details__short-description")?.text()?.trim()
+        val setHint = if (shortDesc != null && shortDesc.count { it == '|' } >= 2)
+            shortDesc.substringAfterLast("|").trim().takeIf { it.length >= 4 }
+        else null
         return listOf(SearchResult(
             store = "",
             card = card,
@@ -230,6 +256,7 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
             url = productUrl,
             note = availabilityNote(available),
             variantId = productId,
+            setHint = setHint,
         ))
     }
 
@@ -250,6 +277,11 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
             ?.attr("data-product_id")?.toLongOrNull()
             ?: li.classNames().firstOrNull { it.matches(Regex("post-\\d+")) }
                 ?.removePrefix("post-")?.toLongOrNull()
+        // Some TCG-singles WC themes include a short description in listing tiles.
+        val shortDesc = li.selectFirst(".woocommerce-product-details__short-description, .short-description")?.text()?.trim()
+        val setHint = if (shortDesc != null && shortDesc.count { it == '|' } >= 2)
+            shortDesc.substringAfterLast("|").trim().takeIf { it.length >= 4 }
+        else null
         SearchResult(
             store = "",
             card = card,
@@ -259,6 +291,7 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
             url = a?.attr("href")?.takeIf { it.isNotEmpty() } ?: url,
             note = availabilityNote(available),
             variantId = productId,
+            setHint = setHint,
         )
     }
 }
@@ -283,7 +316,7 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
         return@coroutineScope emptyList()
     }
 
-    data class Candidate(val title: String, val permalink: String, val price: Double?, val productId: Long?)
+    data class Candidate(val title: String, val permalink: String, val price: Double?, val productId: Long?, val setHint: String?)
     val candidates = products.mapNotNull { p ->
         val obj = p.jsonObject
         val title = obj["name"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
@@ -294,16 +327,31 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
         val price = rawPrice?.let { it.toDouble() / Math.pow(10.0, minorUnit.toDouble()) }
         val permalink = obj["permalink"]?.jsonPrimitive?.contentOrNull ?: "$base/"
         val productId = obj["id"]?.jsonPrimitive?.longOrNull
-        Candidate(title, permalink, price, productId)
+        // short_description often contains "Rarity | #Number | Set Name" — take the last segment
+        // when ≥ 2 pipes are present. Short plain text (≤ 60 chars) is used as-is. Long flavor/
+        // mechanic text (no pipes, > 60 chars) is ignored — the SKU fallback covers it.
+        val shortDescHtml = obj["short_description"]?.jsonPrimitive?.contentOrNull
+        val descSetHint = shortDescHtml?.let { html ->
+            val text = Jsoup.parse(html).text().trim()
+            when {
+                text.count { it == '|' } >= 2 -> text.substringAfterLast("|").trim().takeIf { it.length >= 4 }
+                text.length in 4..60 -> text
+                else -> null
+            }
+        }
+        // SKU is often "CODE-NUMBER" (e.g. "RVR-347") — CardImageService resolves it to a set
+        // code via PAREN_SET_CODE_RE + isKnownCode when descSetHint is unavailable.
+        val sku = obj["sku"]?.jsonPrimitive?.contentOrNull?.trim()?.takeIf { it.isNotBlank() }
+        Candidate(title, permalink, price, productId, descSetHint ?: sku)
     }
 
     val sem = Semaphore(3)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                // Fetch the product page to resolve the variation ID for the cart URL.
-                // Falls back to the parent product ID if the page has no variations form.
-                val variantId = resolveWcVariationId(client, c.permalink) ?: c.productId
+                // Fetch the product page: get the variation ID and, as a fallback, the set hint
+                // from the page HTML (covers stores where the set isn't in short_description).
+                val (variantId, pageSetHint) = resolveWcProductPage(client, c.permalink)
                 SearchResult(
                     store = "",
                     card = card,
@@ -312,7 +360,8 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
                     available = true,
                     url = c.permalink,
                     note = availabilityNote(true),
-                    variantId = variantId,
+                    variantId = variantId ?: c.productId,
+                    setHint = c.setHint ?: pageSetHint,
                 )
             }
         }
@@ -320,23 +369,52 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): Li
 }
 
 /**
- * Fetches a WooCommerce product page and extracts the first in-stock variation ID from the
- * form's data-product_variations attribute. Returns null if the product is not variable or
- * the page can't be fetched. Jsoup auto-decodes the HTML entities in the attribute value.
+ * Fetches a WooCommerce product page and returns:
+ *  - The first in-stock variation ID (null for simple/non-variable products).
+ *  - A set hint extracted from the short-description area or product-attributes table.
+ *
+ * The set hint extraction covers two common TCG-singles patterns:
+ *   - "Rarity | #N | Set Name" short description → last | segment (requires ≥ 2 pipes).
+ *   - A short plain-text short description like "Magic 2013" (≤ 60 chars, no pipes).
+ *   - A product-attributes table row whose label contains "set" or "edition".
  */
-private suspend fun resolveWcVariationId(client: HttpClient, productUrl: String): Long? {
+private suspend fun resolveWcProductPage(client: HttpClient, productUrl: String): Pair<Long?, String?> {
     return try {
         val body = client.get(productUrl).bodyAsText()
         val soup = Jsoup.parse(body)
+
+        // Variation ID
         val variationsJson = soup.selectFirst("form.variations_form[data-product_variations]")
-            ?.attr("data-product_variations") ?: return null
-        val variations = Json.parseToJsonElement(variationsJson).jsonArray
-        val picked = variations.firstOrNull { v ->
-            v.jsonObject["is_in_stock"]?.jsonPrimitive?.booleanOrNull == true
-        } ?: variations.firstOrNull()
-        picked?.jsonObject?.get("variation_id")?.jsonPrimitive?.longOrNull
+            ?.attr("data-product_variations")
+        val variationId = variationsJson?.let {
+            val variations = runCatching { Json.parseToJsonElement(it).jsonArray }.getOrNull()
+                ?: return@let null
+            val picked = variations.firstOrNull { v ->
+                v.jsonObject["is_in_stock"]?.jsonPrimitive?.booleanOrNull == true
+            } ?: variations.firstOrNull()
+            picked?.jsonObject?.get("variation_id")?.jsonPrimitive?.longOrNull
+        }
+
+        // Set hint — try short-description area first, then product-attributes table
+        val shortDesc = soup
+            .selectFirst(".woocommerce-product-details__short-description, .short-description")
+            ?.text()?.trim()
+        val setHint = when {
+            shortDesc == null -> null
+            shortDesc.count { it == '|' } >= 2 ->
+                shortDesc.substringAfterLast("|").trim().takeIf { it.length >= 4 }
+            shortDesc.length in 4..60 -> shortDesc   // "Magic 2013", "The Lost Caverns of Ixalan", etc.
+            else -> null
+        } ?: soup.select("table.woocommerce-product-attributes tr").firstNotNullOfOrNull { row ->
+            val label = row.selectFirst("th")?.text()?.trim() ?: return@firstNotNullOfOrNull null
+            if (label.contains("set", ignoreCase = true) || label.contains("edition", ignoreCase = true))
+                row.selectFirst("td")?.text()?.trim()?.takeIf { it.length >= 4 }
+            else null
+        }
+
+        variationId to setHint
     } catch (_: Exception) {
-        null
+        null to null
     }
 }
 

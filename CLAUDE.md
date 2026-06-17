@@ -88,6 +88,57 @@ The originals also still exist in the top-level `resources/` dir (source of trut
 - MTGGoldfish price comparison was **removed** — SA secondary-market prices don't track USD and we
   don't always match the exact printing.
 
+### Per-platform set hint extraction (for correct Scryfall art)
+
+`SearchResult.setHint` carries an authoritative set name/code from the store's structured payload.
+`CardImageService.extractMeta` uses it in preference to title-derived guesses when present.
+`SearchViewModel` passes a `Map<title, setHint?>` to `resolveImages` so the hint travels through.
+
+| Platform | Payload source | What we extract | Notes |
+|---|---|---|---|
+| **Shopify** | `suggest.json` body HTML | `<td>Set:</td><td>SET NAME</td>` table row | D20 Battleground style; Jsoup parse of `body` field |
+| **Shopify** | `/products/{handle}.js` options array | `options[n].name == "Set"` → `option{n}` on first variant | Wzrd TCG style; variant setHint wins over body setHint |
+| **WC Store API** | `short_description` + `sku` JSON fields | `short_description`: last `\|` segment if ≥ 2 pipes, or full text if ≤ 60 chars; otherwise `sku` field (e.g. `"RVR-347"`) which `PAREN_SET_CODE_RE` resolves to a set code | The Hidden Realm; SKU is the reliable fallback — `short_description` contains card mechanic text, not set info |
+| **WooCommerce HTML** | Product page HTML (redirect case + list tiles) | `.woocommerce-product-details__short-description` last `\|` segment | Only if text contains ≥ 2 pipes; null otherwise |
+| **Warren (headless)** | `product_name` field | Not needed — `product_name` is always `"Card Name - Set Name"` | `DASH_SUFFIX_RE` in `extractSetNameHint` handles it |
+| **CardCache (Shopify)** | Title text `[SET - #N]` | Set code extracted by `SET_CODE_RE` | No `setHint` needed; title format is sufficient |
+| **BigCommerce** | Search result HTML tiles | Nothing — product tiles have no set field | `setHint` always null for Battle Wizards |
+| **OpenCart** | Search result HTML tiles | Nothing — product tiles have no set field | No stores currently active |
+| **PrestaShop** | Search listing HTML | Nothing structured available | Product page fetched for cart ID but no consistent set field in AI Fest's HTML |
+
+Key implementation points:
+- `PAREN_SUFFIX_RE` has **no end anchor** — it uses `findAll` so `"Card (Set Name) [#242]"` correctly finds the paren group and the `COLLECTOR_NUM_RE` filter (`^#\d+$`) rejects the bracket token.
+- `CODE_NUMBER_RE` (`^[A-Z]{2,6}-\d+$`) rejects `"WHO-823"` style collector-reference groups from paren/bracket extraction — without this, `"(WHO-823)"` would be returned as a setName, `findCode("WHO-823")` would fail (no set named that, and "who" is only 3 chars, below the step-3 minimum), and the `else`/`PAREN_SET_CODE_RE` branch would never be reached. Filtered here → `else` branch extracts `"WHO"` correctly.
+- `BRACKET_SET_NAME_RE` catches D20-style `[Long Set Name]` suffixes; `SET_CODE_RE` catches short `[RNA]` codes and `[PCY - 45]` with collector number.
+- `PAREN_SET_CODE_RE` catches `"(CODE-number...)"` paren notation where the set code is embedded with a collector number, e.g. `"(WHO-823 - Doctor Who Foil)"` → extracts `"WHO"`, validates against `ScryfallSetIndex.isKnownCode`. This runs **only when setCode and setName are both null** (the paren body was filtered by NOISE_RE), so it can't misfire on normal set-name parens. **NOISE_RE must never be the last resort** — if a paren group contains noise words (like "Foil") the body as a whole is filtered, but the embedded code prefix is still recoverable via this pattern.
+- `extractMeta` priority: **treatment** (showcase/borderless/etc.) → **setCode** from title brackets → **externalSetHint** from payload → **extractSetNameHint** (title parsing). Treatment overrides everything; set code and set name aren't combined.
+- `resolveImages` meta-resolution priority: setCode already set → setName → findCode() → `PAREN_SET_CODE_RE` + isKnownCode(). The last two passes handle: (a) `CODE-NUMBER` paren groups like `(WHO-823)` that NOISE_RE rejects as whole candidates but whose code prefix is still valid; (b) `CODE-NUMBER` SKUs like `"RVR-347"` passed as setName when findCode returns null.
+
+### Scryfall set index (`network/ScryfallSetIndex.kt`)
+
+`ScryfallSetIndex` downloads the full Scryfall set catalogue (`https://api.scryfall.com/sets`) once and caches it at `~/.zarchive/sets.json` (7-day TTL). It maps set names → set codes and tracks parent → child set relationships from Scryfall's `parent_set_code` field.
+
+**Token/minigame sets are excluded** from `nameToCode` during parsing — stores never sell singles from them, and including e.g. "Warhammer 40,000 Tokens" would cause `findCode("Warhammer 40,000")` to return `"t40k"` (shorter than "Warhammer 40,000 Commander") instead of `"40k"`.
+
+**`findCode(hint)`** resolves a store-supplied set name to a Scryfall set code:
+1. Strip `"Universes Beyond: "` brand prefix (stores include it; Scryfall set names don't).
+2. Exact name match (case-insensitive).
+3. Hint is a substring of a known set name → take shortest match. Handles "Warhammer 40,000" → "Warhammer 40,000 Commander" (`40k`).
+4. A known set name is a substring of the hint → take longest match. Handles extra category words.
+
+**`isKnownCode(code)`** returns true if a string is a valid Scryfall set code (e.g. `"WHO"` → true). Used by `CardImageService` to validate codes extracted from `PAREN_SET_CODE_RE`.
+
+**`childCodesOf(code)`** returns child set codes for a parent (e.g. `"blb"` → `["blc"]`). Used in `CardImageService.resolveImageUrls` step 1.5: if the card isn't found in the exact resolved set, the image service retries with child sets (Commander precons, etc.) before falling back to fuzzy search. Results are cached under the *parent* set's cache key — any printing from the same set family is acceptable.
+
+**Resolution pipeline in `CardImageService.resolveImages`:**
+1. `extractMeta` → base meta (setCode from title brackets, or setName from payload/title).
+2. `setIndex.findCode(setName)` or `PAREN_SET_CODE_RE` + `isKnownCode` → resolve to setCode.
+3. Batch `/cards/collection` with setCode (step 1).
+4. Child-set batch for metas not found in step 1 (step 1.5).
+5. `e:"setName"` search for remaining unresolved metas with a setName (step 2).
+6. Treatment-specific search (step 3).
+7. Fuzzy `/cards/named` fallback (step 4).
+
 ### Per-platform pricing & availability (matching what the store website shows)
 
 These were the hard-won fixes — keep them:

@@ -250,10 +250,12 @@ class SearchViewModel {
                                 storeCardCounts[store] = (storeCardCounts[store] ?: 0) + 1
                             }
                         }
-                        val newTitles = rows.mapNotNull { it.title }.filter { requestedTitles.add(it) }
-                        if (newTitles.isNotEmpty()) {
+                        val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
+                            .filter { (title, _) -> requestedTitles.add(title) }
+                            .toMap()
+                        if (newTitleHints.isNotEmpty()) {
                             imageJobs += scope.launch(Dispatchers.IO) {
-                                val resolved = imageService.resolveImages(newTitles)
+                                val resolved = imageService.resolveImages(newTitleHints)
                                 if (resolved.isNotEmpty()) {
                                     withContext(Dispatchers.Swing) { images.putAll(resolved) }
                                 }

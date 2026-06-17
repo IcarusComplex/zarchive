@@ -10,6 +10,7 @@ data class SearchResult(
     val note: String,
     val variantId: Long? = null,   // Shopify variant ID, WC product/variation ID, BC product ID
     val cartToken: String? = null, // PrestaShop static_token (same across all pages for a given store)
+    val setHint: String? = null,   // set name/code extracted from structured payload (body HTML, short_description, etc.)
 )
 
 
@@ -138,7 +139,7 @@ fun isRelevant(card: String, title: String): Boolean {
     return words.all { w -> Regex("""\b${Regex.escape(w)}\b""").containsMatchIn(t) }
 }
 
-private val NOISE_RE = Regex(
+internal val NOISE_RE = Regex(
     """(?i)\b(foil|etched|borderless|extended[ -]?art|showcase|retro|promo|prerelease|""" +
     """pre-release|near[ -]?mint|lightly[ -]?played|moderately[ -]?played|heavily[ -]?played|""" +
     """nm|lp|mp|hp|sp|dmg|damaged|played|mint|english|japanese|alt(?:ernate)?[ -]?art|""" +

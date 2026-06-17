@@ -213,12 +213,13 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
                 // Prefer discount_price when set, fall back to actual_price (both are numeric ZAR)
                 val priceRaw = obj["discount_price"]?.jsonPrimitive?.doubleOrNull?.takeIf { it > 0 }
                     ?: obj["actual_price"]?.jsonPrimitive?.doubleOrNull
-                val variantId = obj["mtg_product_variant_id"]?.jsonPrimitive?.longOrNull
+                val productId  = obj["product_id"]?.jsonPrimitive?.longOrNull
+                val variantId  = obj["mtg_product_variant_id"]?.jsonPrimitive?.longOrNull
                 SearchResult(
                     store = "", card = card, title = title,
                     priceZar = priceRaw,
                     available = available,
-                    url = "https://thewarren.co.za/mtg?id=$variantId",
+                    url = "https://thewarren.co.za/mtg?id=$productId",
                     note = if (available) "In stock" else "Out of stock",
                     variantId = variantId,
                 )

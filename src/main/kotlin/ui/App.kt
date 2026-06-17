@@ -33,7 +33,9 @@ import androidx.compose.ui.input.key.*
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -515,7 +517,10 @@ private fun EditListDialog(
     onDismiss: () -> Unit,
 ) {
     var nameDraft  by remember(list.id) { mutableStateOf(list.name) }
-    var cardsDraft by remember(list.id) { mutableStateOf(list.cards.joinToString("\n")) }
+    var cardsDraft by remember(list.id) { mutableStateOf(TextFieldValue(list.cards.joinToString("\n"))) }
+    val cardsScroll = rememberScrollState()
+    val cardsFocus = remember { FocusRequester() }
+    LaunchedEffect(list.id) { runCatching { cardsFocus.requestFocus() } }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Edit list", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
@@ -534,26 +539,39 @@ private fun EditListDialog(
                     ),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value         = cardsDraft,
-                    onValueChange = { cardsDraft = it },
-                    label         = { Text("Cards (one per line)", fontSize = 12.sp) },
-                    colors        = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor   = Primary,
-                        focusedLabelColor    = Primary,
-                        cursorColor          = Primary,
-                        unfocusedBorderColor = OutlineVariant,
-                        unfocusedTextColor   = OnSurface,
-                        focusedTextColor     = OnSurface,
-                    ),
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 300.dp),
-                )
+                // BasicTextField in an explicit scroll Box avoids the Compose Desktop bug where
+                // an internally-scrolled OutlinedTextField mis-maps click coordinates against the
+                // scroll offset, causing the cursor to land at the wrong position on focus.
+                Text("Cards (one per line)", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                // Outer Box clips to 260dp. Inner Box owns verticalScroll so pointer events are
+                // offset-corrected before reaching BasicTextField — fixes Compose Desktop's
+                // cursor-placement bug when scroll lives on the text field itself.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(260.dp)
+                        .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                ) {
+                    Box(modifier = Modifier.fillMaxWidth().verticalScroll(cardsScroll)) {
+                        BasicTextField(
+                            value         = cardsDraft,
+                            onValueChange = { cardsDraft = it },
+                            textStyle     = TextStyle(color = OnSurface, fontSize = 13.sp),
+                            cursorBrush   = SolidColor(Primary),
+                            modifier      = Modifier.fillMaxWidth().padding(10.dp).focusRequester(cardsFocus),
+                        )
+                    }
+                    VerticalScrollbar(
+                        adapter  = rememberScrollbarAdapter(cardsScroll),
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 2.dp),
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
                 onClick = {
-                    val cards = cardsDraft.lines().map { it.trim() }.filter { it.isNotBlank() }
+                    val cards = cardsDraft.text.lines().map { it.trim() }.filter { it.isNotBlank() }
                     onSave(nameDraft.trim(), cards)
                 },
                 enabled = nameDraft.isNotBlank(),
@@ -1480,8 +1498,44 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
                 ) {
                     // ── Stores ────────────────────────────────────────────────
                     OptionsSectionHeader("Stores")
-                    val regularStores = data.STORES.keys.sorted()
-                    regularStores.chunked(2).forEach { pair ->
+                    val allStores = data.STORES.keys.sorted()
+                    val allSelected = allStores.all { it in vm.enabledStores }
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = SurfaceContainerHigh,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clickable {
+                                    if (allSelected) vm.enabledStores = emptySet()
+                                    else vm.enabledStores = allStores.toSet()
+                                }
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        ) {
+                            Checkbox(
+                                checked = allSelected,
+                                onCheckedChange = {
+                                    if (allSelected) vm.enabledStores = emptySet()
+                                    else vm.enabledStores = allStores.toSet()
+                                },
+                                colors = CheckboxDefaults.colors(
+                                    checkedColor   = Primary,
+                                    checkmarkColor = Color(0xFF3C2F00),
+                                    uncheckedColor = OutlineVariant,
+                                ),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                if (allSelected) "Deselect all stores" else "Select all stores",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = OnSurface,
+                            )
+                        }
+                    }
+                    allStores.chunked(2).forEach { pair ->
                         Row(Modifier.fillMaxWidth()) {
                             pair.forEach { store ->
                                 OptionToggle(
@@ -2262,7 +2316,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
             PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
             Spacer(Modifier.width(20.dp))
             PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
-            if (plan.uncoveredCards.isNotEmpty()) {
+            if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
             }
@@ -2275,7 +2329,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
             items(plan.storeOrders, key = { it.store }) { so ->
                 StoreOrderCard(so, vm.images, unchecked)
             }
-            if (plan.uncoveredCards.isNotEmpty()) {
+            if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 item { UncoveredCard(plan.uncoveredCards) }
             }
             item { Spacer(Modifier.height(8.dp)) }

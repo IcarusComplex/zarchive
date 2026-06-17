@@ -1,5 +1,6 @@
 package network
 
+import data.NOISE_RE
 import data.normalizeCardName
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
@@ -41,6 +42,10 @@ class CardImageService : AutoCloseable {
     // (a packaged build's working dir may be read-only). ~/.zarchive/images/<sha1>.jpg
     private val dir = File(System.getProperty("user.home"), ".zarchive/images").also { it.mkdirs() }
 
+    // Scryfall set catalogue — resolves store-supplied set names to canonical set codes.
+    // Loaded lazily and cached at ~/.zarchive/sets.json (refreshed every 7 days).
+    private val setIndex = ScryfallSetIndex()
+
     // Treatment keyword regex → Scryfall search filter
     private val TREATMENT_FILTERS = listOf(
         Regex("""(?i)\bshowcase\b""")                         to "frame:showcase",
@@ -53,21 +58,68 @@ class CardImageService : AutoCloseable {
         Regex("""(?i)\balternate?[-\s]?art\b|alt[-\s]?art\b""") to "unique:art",
     )
 
-    private data class TitleMeta(val name: String, val setCode: String?, val treatment: String?) {
-        // Cache key includes treatment so showcase and default art don't collide on disk.
+    private data class TitleMeta(
+        val name: String,
+        val setCode: String?,
+        val setName: String?,   // full set name extracted from "Card - Set Name" or "Card (Set Name)"
+        val treatment: String?,
+    ) {
+        // Cache key includes set and treatment so different printings coexist on disk.
         val cacheKey: String get() = buildString {
             append(name.lowercase())
             if (setCode != null) append("|$setCode")
+            else if (setName != null) append("|${setName.lowercase()}")
             if (treatment != null) append("|$treatment")
         }
     }
 
-    private val SET_CODE_RE = Regex("""\[([A-Z0-9]{2,6})\]""")
+    // Matches both "[RNA]" and "[PCY - 45]" (set code + optional collector number).
+    private val SET_CODE_RE  = Regex("""\[([A-Z0-9]{2,6})(?:\s*[-/]\s*\d+)?\]""")
+    // Matches content inside parens or after " - " that isn't a condition/noise/treatment keyword.
+    // Used to detect set names like "(Multiverse Legends)" or "- Commander Masters".
+    private val PAREN_SUFFIX_RE   = Regex("""\(([^)]{4,})\)""")
+    private val DASH_SUFFIX_RE    = Regex(""" - (.{4,})$""")
+    // Shopify stores like D20 Battleground encode set names in square brackets: "Card [Set Name]"
+    // SET_CODE_RE already captures short codes like [RNA]; this catches longer names ([Multiverse Legends]).
+    private val BRACKET_SET_NAME_RE = Regex("""\[([^\]]{4,})\]\s*$""")
+    private val TREATMENT_WORD_RE = Regex(
+        """(?i)\b(showcase|extended.?art|borderless|etched|full.?art|retro|galaxy.?foil|alt(?:ernate)?.?art)\b"""
+    )
+    // Rejects bare collector number tokens like "#242" from square-bracket suffixes.
+    private val COLLECTOR_NUM_RE = Regex("""^#\d+$""")
+    // Rejects "CODE-number" tokens like "WHO-823" from paren/bracket groups — these are collector
+    // references, not set names. The code portion is handled separately by PAREN_SET_CODE_RE.
+    private val CODE_NUMBER_RE = Regex("""^[A-Z]{2,6}-\d+$""")
+    // Matches "CODE-number" notation anywhere in a title, e.g. "WHO-823" or "(WHO-823 - ...)".
+    // The code must start at a non-alphanumeric boundary (prevents matching mid-word).
+    // Validated against the set index before use to filter out non-set-code matches.
+    private val PAREN_SET_CODE_RE = Regex("""(?<![A-Za-z0-9])([A-Z][A-Z0-9]{1,5})-\d+""")
 
-    private fun extractMeta(title: String): TitleMeta {
+    private fun extractSetNameHint(title: String): String? {
+        for (re in listOf(PAREN_SUFFIX_RE, DASH_SUFFIX_RE, BRACKET_SET_NAME_RE)) {
+            for (match in re.findAll(title)) {
+                val candidate = match.groupValues.getOrNull(1)?.trim() ?: continue
+                if (candidate.isBlank()) continue
+                if (NOISE_RE.containsMatchIn(candidate)) continue
+                if (TREATMENT_WORD_RE.containsMatchIn(candidate)) continue
+                if (COLLECTOR_NUM_RE.matches(candidate)) continue
+                if (CODE_NUMBER_RE.matches(candidate)) continue
+                return candidate
+            }
+        }
+        return null
+    }
+
+    private fun extractMeta(title: String, externalSetHint: String? = null): TitleMeta {
         val setCode   = SET_CODE_RE.find(title)?.groupValues?.get(1)?.lowercase()
         val treatment = TREATMENT_FILTERS.firstOrNull { (re, _) -> re.containsMatchIn(title) }?.second
-        return TitleMeta(normalizeCardName(title), setCode, treatment)
+        val setName   = when {
+            treatment != null -> null                   // treatment filter overrides set
+            externalSetHint != null -> externalSetHint  // payload hint beats title parsing
+            setCode == null -> extractSetNameHint(title)
+            else -> null
+        }
+        return TitleMeta(normalizeCardName(title), setCode, setName, treatment)
     }
 
     private fun fileFor(meta: TitleMeta): File {
@@ -77,9 +129,45 @@ class CardImageService : AutoCloseable {
         return File(dir, "$sha.jpg")
     }
 
-    /** Map of listing title → local image file path. */
-    suspend fun resolveImages(titles: Collection<String>): Map<String, String> = coroutineScope {
-        val titleToMeta = titles.associateWith { extractMeta(it) }.filterValues { it.name.isNotBlank() }
+    /** Map of listing title → local image file path. No set hints; delegates to the hint overload. */
+    suspend fun resolveImages(titles: Collection<String>): Map<String, String> =
+        resolveImages(titles.associateWith { null })
+
+    /** Map of listing title → local image file path. titleToHint supplies optional per-title set hints. */
+    suspend fun resolveImages(titleToHint: Map<String, String?>): Map<String, String> = coroutineScope {
+        val baseMetas = titleToHint.entries
+            .associate { (title, hint) -> title to extractMeta(title, hint) }
+            .filterValues { it.name.isNotBlank() }
+
+        // Resolve store-supplied set names / embedded codes to Scryfall set codes.
+        // Priority: 1) already have a set code (SET_CODE_RE bracket), 2) setName hint from
+        // title/payload → findCode, 3) "(CODE-number...)" paren notation (e.g. WHO-823).
+        val titleToMeta = buildMap<String, TitleMeta> {
+            for ((title, meta) in baseMetas) {
+                val resolved = when {
+                    meta.setCode != null -> meta
+                    meta.setName != null -> {
+                        val code = setIndex.findCode(meta.setName)
+                        if (code != null) meta.copy(setCode = code)
+                        else {
+                            // setName might be a "CODE-NUMBER" SKU (e.g. "RVR-347") — extract code
+                            val extracted = PAREN_SET_CODE_RE.find(meta.setName)?.groupValues?.get(1)
+                            if (extracted != null && setIndex.isKnownCode(extracted))
+                                meta.copy(setCode = extracted.lowercase())
+                            else meta
+                        }
+                    }
+                    else -> {
+                        val parenCode = PAREN_SET_CODE_RE.find(title)?.groupValues?.get(1)
+                        if (parenCode != null && setIndex.isKnownCode(parenCode))
+                            meta.copy(setCode = parenCode.lowercase())
+                        else meta
+                    }
+                }
+                put(title, resolved)
+            }
+        }
+
         val uniqueMetas = titleToMeta.values.distinctBy { it.cacheKey }
 
         val metaToPath = mutableMapOf<String, String>()
@@ -163,7 +251,68 @@ class CardImageService : AutoCloseable {
             delay(100)
         }
 
-        // 2. Treatment override — replace the canonical art with the treatment-specific art.
+        // 1.5. Child-set fallback batch — if a card wasn't found in the resolved set (e.g. the store
+        //      says "Bloomburrow" but the card is only in "Bloomburrow Commander"), try child sets
+        //      using Scryfall's parent_set_code relationship.  Results are stored under the original
+        //      meta's cacheKey (base set), which is intentional — any Bloomburrow-family art is fine.
+        run {
+            data class ChildQuery(val originalMeta: TitleMeta, val childCode: String)
+            val childQueries = notFound
+                .filter { it.setCode != null }
+                .flatMap { meta ->
+                    setIndex.childCodesOf(meta.setCode!!).map { ChildQuery(meta, it) }
+                }
+            if (childQueries.isNotEmpty()) {
+                delay(100)
+                for (chunk in childQueries.chunked(75)) {
+                    val childBody = buildJsonObject {
+                        put("identifiers", buildJsonArray {
+                            chunk.forEach { (meta, childCode) ->
+                                add(buildJsonObject {
+                                    put("name", meta.name)
+                                    put("set", childCode)
+                                })
+                            }
+                        })
+                    }.toString()
+                    val childResp = runCatching {
+                        client.post("https://api.scryfall.com/cards/collection") {
+                            contentType(ContentType.Application.Json)
+                            setBody(childBody)
+                        }.bodyAsText()
+                    }.getOrNull()
+                    if (childResp != null) {
+                        runCatching { Json.parseToJsonElement(childResp).jsonObject["data"]?.jsonArray }
+                            .getOrNull()?.forEach { entry ->
+                                val obj  = entry.jsonObject
+                                val name = obj["name"]?.jsonPrimitive?.contentOrNull?.lowercase() ?: return@forEach
+                                val set  = obj["set"]?.jsonPrimitive?.contentOrNull?.lowercase() ?: return@forEach
+                                val img  = imageUrlOf(obj) ?: return@forEach
+                                // Map back to original meta via (name, childCode) lookup
+                                chunk.filter { it.originalMeta.name.lowercase() == name && it.childCode == set }
+                                    .forEach { q ->
+                                        if (!result.containsKey(q.originalMeta.cacheKey))
+                                            result[q.originalMeta.cacheKey] = img
+                                    }
+                            }
+                    }
+                    delay(100)
+                }
+                // Remove from notFound anything that was resolved by child-set batch
+                notFound.removeAll { result.containsKey(it.cacheKey) }
+            }
+        }
+
+        // 2. Set-name override — runs when a set name is available but we don't have (or couldn't
+        //    use) a set code. Uses Scryfall's e:"Set Name" operator.
+        //    - setCode == null: batch found generic art; override with set-specific printing.
+        //    - setCode != null but batch missed: fallback in case the code didn't match Scryfall.
+        for (meta in metas.filter { it.setName != null && (it.setCode == null || !result.containsKey(it.cacheKey)) }) {
+            setNameSearch(meta.name, meta.setName!!)?.let { result[meta.cacheKey] = it }
+            delay(80)
+        }
+
+        // 3. Treatment override — replace the canonical art with the treatment-specific art.
         //    Runs for every meta that has a detected treatment (showcase, borderless, etc.),
         //    regardless of whether the batch step found a result.
         for (meta in metas.filter { it.treatment != null }) {
@@ -172,7 +321,7 @@ class CardImageService : AutoCloseable {
             delay(80)
         }
 
-        // 3. Fuzzy fallback for anything still missing
+        // 4. Fuzzy fallback for anything still missing
         for (meta in notFound) {
             if (result.containsKey(meta.cacheKey)) continue
             fuzzyResolve(meta.name)?.let { result[meta.cacheKey] = it }
@@ -190,6 +339,20 @@ class CardImageService : AutoCloseable {
             append(" "); append(scryfallFilter)
         }
         val url = "https://api.scryfall.com/cards/search?q=${URLEncoder.encode(q, "UTF-8")}&unique=art"
+        val resp = runCatching { client.get(url).bodyAsText() }.getOrNull() ?: return null
+        val obj  = runCatching { Json.parseToJsonElement(resp).jsonObject }.getOrNull() ?: return null
+        if (obj["object"]?.jsonPrimitive?.contentOrNull == "error") return null
+        return obj["data"]?.jsonArray?.firstOrNull()?.jsonObject?.let { imageUrlOf(it) }
+    }
+
+    // Scryfall set-name search — resolves the exact printing for a known set name.
+    // "Friday Night Magic Promos" is a store-level category, not a Scryfall set name; use is:fnm.
+    private suspend fun setNameSearch(name: String, setName: String): String? {
+        val q = if (setName.contains("friday night magic", ignoreCase = true))
+            "!\"$name\" is:fnm"
+        else
+            "!\"$name\" e:\"$setName\""
+        val url = "https://api.scryfall.com/cards/search?q=${URLEncoder.encode(q, "UTF-8")}"
         val resp = runCatching { client.get(url).bodyAsText() }.getOrNull() ?: return null
         val obj  = runCatching { Json.parseToJsonElement(resp).jsonObject }.getOrNull() ?: return null
         if (obj["object"]?.jsonPrimitive?.contentOrNull == "error") return null
