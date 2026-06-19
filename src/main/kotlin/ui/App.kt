@@ -1943,7 +1943,10 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
     val hovered by interaction.collectIsHoveredAsState()
     val thumbInteraction = remember { MutableInteractionSource() }
     val thumbHovered by thumbInteraction.collectIsHoveredAsState()
-    val showPopup = if (hoverOnThumbnailOnly) thumbHovered else hovered
+    val popupInteraction = remember { MutableInteractionSource() }
+    val popupHovered by popupInteraction.collectIsHoveredAsState()
+    val rowTriggered = if (hoverOnThumbnailOnly) thumbHovered else hovered
+    val showPopup = rowTriggered || popupHovered
 
     Box {
         Row(
@@ -2022,19 +2025,31 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
             }
         }
 
-        // Card image popup above the row on hover
+        // Card image popup — above by default, below if too close to top of window.
+        // popupInteraction keeps it alive when the cursor crosses from the row into the popup.
         if (showPopup && imagePath != null) {
             val bmp = imageCache[imagePath]
             if (bmp != null) {
-                Popup(
-                    alignment = Alignment.TopStart,
-                    offset = with(density) {
-                        IntOffset(
-                            24.dp.roundToPx(),
-                            -(POPUP_CARD_H + 6.dp).roundToPx(),
-                        )
-                    },
-                ) { CardImagePopup(bmp) }
+                val provider = remember(density) {
+                    object : PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: IntRect,
+                            windowSize: IntSize,
+                            layoutDirection: LayoutDirection,
+                            popupContentSize: IntSize,
+                        ): IntOffset {
+                            val gap = with(density) { 4.dp.roundToPx() }
+                            val x = (anchorBounds.left + with(density) { 24.dp.roundToPx() })
+                                .coerceAtMost(windowSize.width - popupContentSize.width)
+                            val aboveY = anchorBounds.top - popupContentSize.height - gap
+                            if (aboveY >= 0) return IntOffset(x, aboveY)
+                            return IntOffset(x, anchorBounds.bottom + gap)
+                        }
+                    }
+                }
+                Popup(popupPositionProvider = provider) {
+                    Box(Modifier.hoverable(popupInteraction)) { CardImagePopup(bmp) }
+                }
             }
         }
     }
