@@ -106,7 +106,9 @@ private val COL_THUMB  = 72.dp
 private val COL_STORE  = 160.dp
 private val COL_STATUS = 110.dp
 private val COL_PRICE  = 112.dp
-private val COL_ACTION = 60.dp
+private val COL_PIN    = 130.dp  // "Use this Version" column in search results table
+private val COL_LINK   = 100.dp  // "External Link" column in search results table
+private val COL_ACTION = 60.dp   // action column in order list rows
 
 private fun List<SearchResult>.sortedByPrice(): List<SearchResult> =
     sortedWith(compareBy({ it.priceZar == null }, { it.priceZar ?: Double.MAX_VALUE }))
@@ -873,7 +875,7 @@ private fun SettingsLinkItem(label: String, sublabel: String? = null, url: Strin
             .clip(RoundedCornerShape(4.dp))
             .background(if (hovered) SurfaceContainerHighest else Color.Transparent)
             .hoverable(interaction)
-            .clickable { runCatching { Desktop.getDesktop().browse(URI(url)) } }
+            .clickable { openUrl(url) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         Icon(
@@ -1298,9 +1300,28 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
         }
         return
     }
-    when (tab) {
-        ResultsTab.RESULTS -> SearchResultsTab(vm)
-        ResultsTab.ORDERS  -> OrderListsPane(vm)
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = 6.dp),
+        ) {
+            Checkbox(
+                checked = vm.hoverOnThumbnailOnly,
+                onCheckedChange = { vm.hoverOnThumbnailOnly = it },
+                modifier = Modifier.size(16.dp),
+                colors = CheckboxDefaults.colors(
+                    checkedColor = Primary,
+                    uncheckedColor = OutlineVariant,
+                    checkmarkColor = Color(0xFF3C2F00),
+                ),
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("Preview card art on thumbnail hover only", fontSize = 12.sp, color = OnSurfaceVariant)
+        }
+        when (tab) {
+            ResultsTab.RESULTS -> SearchResultsTab(vm)
+            ResultsTab.ORDERS  -> OrderListsPane(vm)
+        }
     }
 }
 
@@ -1444,6 +1465,12 @@ private fun SearchResultsTab(vm: SearchViewModel) {
                         results = vm.results.filter { it.card == card },
                         images = vm.images,
                         isSearching = vm.isSearching,
+                        hoverOnThumbnailOnly = vm.hoverOnThumbnailOnly,
+                        pinnedUrl = vm.pinnedListings[card],
+                        onTogglePin = { url ->
+                            if (vm.pinnedListings[card] == url) vm.pinnedListings.remove(card)
+                            else vm.pinnedListings[card] = url
+                        },
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -1662,6 +1689,9 @@ private fun CardSection(
     results: List<SearchResult>,
     images: Map<String, String>,
     isSearching: Boolean = false,
+    hoverOnThumbnailOnly: Boolean = false,
+    pinnedUrl: String? = null,
+    onTogglePin: ((String) -> Unit)? = null,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -1729,7 +1759,8 @@ private fun CardSection(
 
                 if (allListings.isEmpty()) {
                     ListingTable(emptyList(), images, dimmed = false,
-                        emptyMessage = if (isSearching) "Searching…" else "No listings found at any store", card = card)
+                        emptyMessage = if (isSearching) "Searching…" else "No listings found at any store", card = card,
+                        hoverOnThumbnailOnly = hoverOnThumbnailOnly, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin)
                 } else if (listings.isEmpty()) {
                     Box(
                         Modifier.fillMaxWidth().padding(vertical = 12.dp),
@@ -1742,7 +1773,8 @@ private fun CardSection(
                     }
                 } else {
                     if (inStock.isNotEmpty()) {
-                        ListingTable(inStock, images, dimmed = false, emptyMessage = null, card = card)
+                        ListingTable(inStock, images, dimmed = false, emptyMessage = null, card = card,
+                            hoverOnThumbnailOnly = hoverOnThumbnailOnly, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin)
                     }
                     if (outOfStock.isNotEmpty()) {
                         Spacer(Modifier.height(8.dp))
@@ -1772,7 +1804,8 @@ private fun CardSection(
                             enter = expandVertically() + fadeIn(),
                             exit = shrinkVertically() + fadeOut(),
                         ) {
-                            ListingTable(outOfStock, images, dimmed = true, emptyMessage = null, card = card)
+                            ListingTable(outOfStock, images, dimmed = true, emptyMessage = null, card = card,
+                                hoverOnThumbnailOnly = hoverOnThumbnailOnly, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin)
                         }
                     }
                 }
@@ -1809,7 +1842,7 @@ private fun CountBadge(text: String, muted: Boolean = false) {
 }
 
 @Composable
-private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, dimmed: Boolean, emptyMessage: String?, card: String = "") {
+private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, dimmed: Boolean, emptyMessage: String?, card: String = "", hoverOnThumbnailOnly: Boolean = false, pinnedUrl: String? = null, onTogglePin: ((String) -> Unit)? = null) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = if (dimmed) SurfaceContainerLowest else SurfaceContainerLow,
@@ -1825,7 +1858,14 @@ private fun ListingTable(rows: List<SearchResult>, images: Map<String, String>, 
             }
             rows.forEachIndexed { idx, r ->
                 if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
-                ListingRow(r, (r.title?.let { images[it] }) ?: images[card], dimmed = dimmed)
+                ListingRow(
+                    result = r,
+                    imagePath = (r.title?.let { images[it] }) ?: images[card],
+                    dimmed = dimmed,
+                    hoverOnThumbnailOnly = hoverOnThumbnailOnly,
+                    isPinned = pinnedUrl == r.url,
+                    onTogglePin = onTogglePin?.let { fn -> { fn(r.url) } },
+                )
             }
         }
     }
@@ -1842,7 +1882,8 @@ private fun TableHeaderRow() {
         HeaderCell("Store", Modifier.width(COL_STORE))
         HeaderCell("Status", Modifier.width(COL_STATUS))
         HeaderCell("Price", Modifier.width(COL_PRICE), alignEnd = true)
-        HeaderCell("Action", Modifier.width(COL_ACTION), center = true)
+        HeaderCell("Use this Version", Modifier.width(COL_PIN), center = true)
+        HeaderCell("External Link", Modifier.width(COL_LINK), center = true)
     }
 }
 
@@ -1854,24 +1895,72 @@ private fun HeaderCell(text: String, modifier: Modifier, alignEnd: Boolean = fal
     }
 }
 
+// Standard icon button with a tooltip on hover. All interactive icons in the UI should use
+// this so their purpose is always discoverable. Pass onClick = null for display-only icons.
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean) {
+private fun IconTooltip(
+    icon: ImageVector,
+    tooltip: String,
+    tint: Color,
+    size: Dp = 16.dp,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    TooltipArea(
+        tooltip = {
+            Surface(
+                color = SurfaceContainerHighest,
+                shape = RoundedCornerShape(4.dp),
+                border = BorderStroke(1.dp, OutlineVariant),
+            ) {
+                Text(tooltip, modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                    fontSize = 11.sp, color = OnSurface)
+            }
+        },
+        delayMillis = 500,
+        modifier = modifier,
+    ) {
+        Icon(
+            icon,
+            contentDescription = tooltip,
+            tint = tint,
+            modifier = Modifier.size(size).then(
+                if (onClick != null) Modifier.clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onClick,
+                ) else Modifier
+            ),
+        )
+    }
+}
+
+@Composable
+private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean, hoverOnThumbnailOnly: Boolean = false, isPinned: Boolean = false, onTogglePin: (() -> Unit)? = null) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val thumbInteraction = remember { MutableInteractionSource() }
+    val thumbHovered by thumbInteraction.collectIsHoveredAsState()
+    val showPopup = if (hoverOnThumbnailOnly) thumbHovered else hovered
 
     Box {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(if (hovered && !dimmed) SurfaceContainerHigh else Color.Transparent)
+                .background(when {
+                    isPinned && !dimmed -> Primary.copy(alpha = 0.07f)
+                    hovered && !dimmed  -> SurfaceContainerHigh
+                    else                -> Color.Transparent
+                })
                 .hoverable(interaction)
                 .clickable { openUrl(result.url) }
                 .padding(horizontal = 16.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Card thumbnail
-            Box(Modifier.width(COL_THUMB)) {
+            Box(Modifier.width(COL_THUMB).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) {
                 CardThumbnail(imagePath, dimmed)
             }
             // Name & Set
@@ -1904,17 +1993,37 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
                     },
                 )
             }
-            // Action
-            Box(Modifier.width(COL_ACTION), contentAlignment = Alignment.Center) {
+            // Use this Version
+            Box(Modifier.width(COL_PIN), contentAlignment = Alignment.Center) {
+                if (onTogglePin != null) {
+                    IconTooltip(
+                        icon = if (isPinned) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                        tooltip = if (isPinned) "Locked to this version — click to unlock" else "Lock to this version for order lists",
+                        tint = when {
+                            isPinned -> Primary
+                            hovered  -> OnSurfaceVariant.copy(alpha = 0.7f)
+                            else     -> OnSurfaceVariant.copy(alpha = 0.3f)
+                        },
+                        size = 16.dp,
+                        onClick = onTogglePin,
+                    )
+                }
+            }
+            // External Link
+            Box(Modifier.width(COL_LINK), contentAlignment = Alignment.Center) {
                 if (!dimmed) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open in browser",
-                        tint = if (hovered) Primary else OnSurfaceVariant, modifier = Modifier.size(18.dp))
+                    IconTooltip(
+                        icon = Icons.Default.OpenInNew,
+                        tooltip = "Open listing in browser",
+                        tint = if (hovered) Primary else OnSurfaceVariant,
+                        size = 18.dp,
+                    )
                 }
             }
         }
 
         // Card image popup above the row on hover
-        if (hovered && imagePath != null) {
+        if (showPopup && imagePath != null) {
             val bmp = imageCache[imagePath]
             if (bmp != null) {
                 Popup(
@@ -2236,7 +2345,7 @@ private fun CardSummaryEntry(
     }
 }
 
-private enum class OrderStrategy(val label: String, val icon: ImageVector, val blurb: String) {
+enum class OrderStrategy(val label: String, val icon: ImageVector, val blurb: String) {
     CHEAPEST("Cheapest total", Icons.Default.Savings,
         "Lowest possible spend — each card from whichever store is cheapest, even if that means more parcels."),
     FEWEST("Fewest packages", Icons.Default.Inventory2,
@@ -2245,14 +2354,12 @@ private enum class OrderStrategy(val label: String, val icon: ImageVector, val b
 
 @Composable
 private fun OrderListsPane(vm: SearchViewModel) {
-    var strategy by remember { mutableStateOf(OrderStrategy.CHEAPEST) }
-    // Map of listing URL → Unit; entries present = unchecked (excluded from totals)
-    val unchecked = remember { mutableStateMapOf<String, Unit>() }
-    LaunchedEffect(strategy) { unchecked.clear() }
+    val strategy = vm.orderStrategy
+    val unchecked = vm.uncheckedOrderLines
 
     // Recomputed automatically whenever results stream in (reads the observable list).
-    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList()) } }
-    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList()) } }
+    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings) } }
+    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
@@ -2276,7 +2383,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
                         .clip(RoundedCornerShape(4.dp))
                         .background(if (active) Primary.copy(alpha = 0.12f) else SurfaceContainerLow)
                         .border(1.dp, if (active) Primary.copy(alpha = 0.5f) else OutlineVariant, RoundedCornerShape(4.dp))
-                        .clickable { strategy = s }
+                        .clickable { vm.orderStrategy = s }
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                 ) {
                     Icon(s.icon, null, tint = if (active) Primary else OnSurfaceVariant, modifier = Modifier.size(15.dp))
@@ -2327,7 +2434,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(plan.storeOrders, key = { it.store }) { so ->
-                StoreOrderCard(so, vm.images, unchecked)
+                StoreOrderCard(so, vm.images, unchecked, vm.hoverOnThumbnailOnly)
             }
             if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 item { UncoveredCard(plan.uncoveredCards) }
@@ -2347,7 +2454,7 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 }
 
 @Composable
-private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>) {
+private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, hoverOnThumbnailOnly: Boolean = false) {
     val activeLines  = order.lines
         .filter { !unchecked.containsKey(it.listing.url) }
         .distinctBy { it.listing.variantId ?: it.listing.url }
@@ -2536,6 +2643,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                         if (!isChecked) unchecked[line.listing.url] = Unit
                         else unchecked.remove(line.listing.url)
                     },
+                    hoverOnThumbnailOnly = hoverOnThumbnailOnly,
                 )
             }
         }
@@ -2543,10 +2651,13 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
 }
 
 @Composable
-private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Boolean, onToggle: (Boolean) -> Unit) {
+private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Boolean, onToggle: (Boolean) -> Unit, hoverOnThumbnailOnly: Boolean = false) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    val thumbInteraction = remember { MutableInteractionSource() }
+    val thumbHovered by thumbInteraction.collectIsHoveredAsState()
+    val showPopup = if (hoverOnThumbnailOnly) thumbHovered else hovered
     val contentAlpha = if (checked) 1f else 0.35f
 
     Box {
@@ -2572,7 +2683,7 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
             )
             Spacer(Modifier.width(8.dp))
             // Content dims when unchecked
-            Box(Modifier.width(COL_THUMB).alpha(contentAlpha)) { CardThumbnail(imagePath, dimmed = false) }
+            Box(Modifier.width(COL_THUMB).alpha(contentAlpha).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) { CardThumbnail(imagePath, dimmed = false) }
             Column(Modifier.weight(1f).padding(end = 12.dp).alpha(contentAlpha)) {
                 Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -2593,7 +2704,7 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
             }
         }
 
-        if (hovered && imagePath != null) {
+        if (showPopup && imagePath != null) {
             val bmp = imageCache[imagePath]
             if (bmp != null) {
                 // Prefer above the row; fall back to below if it would clip the top of the window.
@@ -2642,9 +2753,11 @@ private fun UncoveredCard(cards: List<String>) {
 }
 
 private fun openUrl(url: String) {
-    try {
-        if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
-            Desktop.getDesktop().browse(URI(url))
-        }
-    } catch (_: Exception) {}
+    Thread {
+        try {
+            if (Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)) {
+                Desktop.getDesktop().browse(URI(url))
+            }
+        } catch (_: Exception) {}
+    }.also { it.isDaemon = true }.start()
 }

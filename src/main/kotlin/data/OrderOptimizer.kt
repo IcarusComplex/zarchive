@@ -52,11 +52,17 @@ private fun buildStoreOrders(lines: List<OrderLine>): List<StoreOrder> =
  * **Cheapest total** plan: for every requested card pick the single lowest-priced
  * in-stock listing anywhere, then group those picks by store. Minimises spend,
  * may spread the order across many stores.
+ *
+ * If [pinnedListings] contains an entry for a card (card → listing URL), only that
+ * specific listing is considered for that card.
  */
-fun cheapestPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
+fun cheapestPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap()): OrderPlan {
     val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
-        .mapValues { (card, ls) -> preferExactMatches(card, ls) }
+        .mapValues { (card, ls) ->
+            val pin = pinnedListings[card]
+            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls)
+        }
     val chosen = mutableListOf<OrderLine>()
     val uncovered = mutableListOf<String>()
     for (card in uniqueCards) {
@@ -71,11 +77,17 @@ fun cheapestPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
  * which together stock every available card. Each card is then sourced from the
  * cheapest of the chosen stores that carries it. Minimises number of orders/shipments,
  * regardless of price.
+ *
+ * If [pinnedListings] contains an entry for a card (card → listing URL), only that
+ * specific listing is considered, which forces the set-cover to include that listing's store.
  */
-fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>): OrderPlan {
+fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap()): OrderPlan {
     val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
-        .mapValues { (card, ls) -> preferExactMatches(card, ls) }
+        .mapValues { (card, ls) ->
+            val pin = pinnedListings[card]
+            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls)
+        }
     val inStock = byCard.values.flatten()
     val uncovered = uniqueCards.filter { byCard[it].isNullOrEmpty() }
     val coverable = uniqueCards.filter { !byCard[it].isNullOrEmpty() }.toSet()

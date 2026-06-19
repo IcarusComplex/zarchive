@@ -84,6 +84,19 @@ class SearchViewModel {
         get() = earlyAccessState
         set(value) { earlyAccessState = value; AppDatabase.setSettingBoolean("earlyAccess", value) }
 
+    // ── Order list UI state (hoisted here so tab switches don't reset it) ───────
+    val pinnedListings = mutableStateMapOf<String, String>()  // card name -> pinned listing URL
+    val uncheckedOrderLines = mutableStateMapOf<String, Unit>()
+    private var orderStrategyState by mutableStateOf(OrderStrategy.CHEAPEST)
+    var orderStrategy: OrderStrategy
+        get() = orderStrategyState
+        set(value) { orderStrategyState = value }
+
+    private var hoverOnThumbnailOnlyState by mutableStateOf(AppDatabase.getSettingBoolean("hoverOnThumbnailOnly", false))
+    var hoverOnThumbnailOnly: Boolean
+        get() = hoverOnThumbnailOnlyState
+        set(value) { hoverOnThumbnailOnlyState = value; AppDatabase.setSettingBoolean("hoverOnThumbnailOnly", value) }
+
     // ── Saved search lists ─────────────────────────────────────────────────────
     val searchListRepo = SearchListRepo()
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
