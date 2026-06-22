@@ -195,11 +195,13 @@ private suspend fun shopifyFirstVariant(
         val variantObjs = productObj["variants"]?.jsonArray
             ?.mapNotNull { it.jsonObject } ?: return null
         val first = variantObjs.firstOrNull() ?: return null
+        // Use first available variant for price — matches what Shopify shows on the product page.
+        // variants[0] may be an out-of-stock condition (e.g. MP) cheaper than the available NM copy.
+        val firstAvailable = variantObjs.firstOrNull { it["available"]?.jsonPrimitive?.booleanOrNull == true }
+        val display = firstAvailable ?: first
         // .js prices are in minor currency units (cents): 8500 = R85.00
-        val price = (first["price"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: return null) / 100.0
-        val cartId = variantObjs
-            .firstOrNull { it["available"]?.jsonPrimitive?.booleanOrNull == true }
-            ?.get("id")?.jsonPrimitive?.longOrNull
+        val price = (display["price"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: return null) / 100.0
+        val cartId = firstAvailable?.get("id")?.jsonPrimitive?.longOrNull
             ?: first["id"]?.jsonPrimitive?.longOrNull
         // Some stores (e.g. Wzrd TCG) expose a "Set" option whose value is the full set name.
         val setPosition = productObj["options"]?.jsonArray
@@ -207,7 +209,7 @@ private suspend fun shopifyFirstVariant(
             ?.firstOrNull { it["name"]?.jsonPrimitive?.contentOrNull.equals("Set", ignoreCase = true) }
             ?.get("position")?.jsonPrimitive?.intOrNull
         val setHint = setPosition?.let { pos ->
-            first["option$pos"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            display["option$pos"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
         }
         ShopifyVariant(price, cartId, setHint)
     } catch (_: Exception) {

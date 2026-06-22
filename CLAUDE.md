@@ -145,11 +145,12 @@ These were the hard-won fixes — keep them:
 
 - **Shopify** (`searchShopify`): the `/search/suggest.json` endpoint only returns the *minimum* variant
   price, which often mismatches the website. So for each candidate we additionally fetch
-  `/products/{handle}.json` and use **`variants[0].price`** — Shopify's default displayed variant on
-  the product page (typically NM non-foil), which is what the site shows. Done concurrently with a
-  `Semaphore(3)`. **Availability comes from the suggest API**, not the product JSON — the product
-  JSON's per-variant `available` field is unreliable/absent on the public endpoint (defaulting it to
-  `true` made out-of-stock items show as in-stock).
+  `/products/{handle}.js` and use the **first available variant's price** — matching what Shopify
+  shows on the product page when a lower-priced condition variant (e.g. MP) is out of stock and the
+  NM copy is the live default. Falls back to `variants[0].price` if no variant reports available.
+  Done concurrently with a `Semaphore(3)`. **Availability comes from the suggest API**, not the
+  product JSON — the product JSON's per-variant `available` field is unreliable/absent on the public
+  endpoint (defaulting it to `true` made out-of-stock items show as in-stock).
 - **WooCommerce** (`searchWooCommerce`): SA prices use comma-as-decimal (`R30,00`). `data.parsePrice`
   detects European decimal format (`\d,\d{2}` ending) and parses it correctly — otherwise `R30,00`
   was read as `R3000`. Also prefer the sale price: select `.price ins` (sale) before `.price`
