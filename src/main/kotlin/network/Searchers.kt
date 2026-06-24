@@ -121,13 +121,18 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
         val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
         if (!isRelevant(card, title)) return@mapNotNull null
         // The suggest API returns a "body" field with the product's HTML description.
-        // Stores using structured TCG singles themes (e.g. D20 Battleground's singles-description-table)
-        // include a "Set:" table row — use it as an authoritative set hint for image resolution.
+        // Stores with structured TCG singles data include a "Set:" label — parse two known formats:
+        //   D20 Battleground: <table><tr><td>Set:</td><td>SET NAME</td></tr></table>
+        //   Wzrd TCG:         <b>Set:</b> Set Name (CODE)<br>
         val bodyHtml = obj["body"]?.jsonPrimitive?.contentOrNull
         val setHint = bodyHtml?.let { html ->
-            Jsoup.parse(html).select("tr")
+            val soup = Jsoup.parse(html)
+            soup.select("tr")
                 .firstOrNull { tr -> tr.select("td").firstOrNull()?.text()?.trim() == "Set:" }
                 ?.select("td")?.getOrNull(1)?.text()?.trim()
+                ?.takeIf { it.isNotBlank() }
+            ?: soup.select("b").firstOrNull { it.text().trim() == "Set:" }
+                ?.nextSibling()?.toString()?.trim()
                 ?.takeIf { it.isNotBlank() }
         }
         Candidate(

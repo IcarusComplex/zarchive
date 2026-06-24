@@ -114,7 +114,12 @@ class CardImageService : AutoCloseable {
         val setCode   = SET_CODE_RE.find(title)?.groupValues?.get(1)?.lowercase()
         val treatment = TREATMENT_FILTERS.firstOrNull { (re, _) -> re.containsMatchIn(title) }?.second
         val setName   = when {
-            treatment != null -> null                   // treatment filter overrides set
+            // When treatment is present but no bracket set code exists, still capture the set
+            // hint so resolveImages can narrow the treatment search to the correct printing.
+            // e.g. "Ledger Shredder (Extended Art) [Streets of New Capenna]" → setName="Streets of
+            // New Capenna" → resolved to setCode="snc" → treatmentSearch uses "set:snc frame:extendedart"
+            treatment != null && setCode != null -> null  // setCode already present; treatment search uses it
+            treatment != null -> externalSetHint ?: extractSetNameHint(title)
             externalSetHint != null -> externalSetHint  // payload hint beats title parsing
             setCode == null -> extractSetNameHint(title)
             else -> null
@@ -154,6 +159,9 @@ class CardImageService : AutoCloseable {
                             val extracted = PAREN_SET_CODE_RE.find(meta.setName)?.groupValues?.get(1)
                             if (extracted != null && setIndex.isKnownCode(extracted))
                                 meta.copy(setCode = extracted.lowercase())
+                            // setName might itself be a bare set code (e.g. "CHR") that findCode missed
+                            else if (setIndex.isKnownCode(meta.setName))
+                                meta.copy(setCode = meta.setName.lowercase())
                             else meta
                         }
                     }
@@ -321,9 +329,13 @@ class CardImageService : AutoCloseable {
             delay(80)
         }
 
-        // 4. Fuzzy fallback for anything still missing
+        // 4. Fuzzy fallback for anything still missing — only for metas with NO set hint.
+        //    Set-specific metas (setCode or setName present) are left unresolved rather than
+        //    permanently caching wrong art under a set-specific cache key; the UI falls back
+        //    to the card-name image instead, and the batch is retried on the next search.
         for (meta in notFound) {
             if (result.containsKey(meta.cacheKey)) continue
+            if (meta.setCode != null || meta.setName != null) continue
             fuzzyResolve(meta.name)?.let { result[meta.cacheKey] = it }
             delay(100)
         }
