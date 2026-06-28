@@ -1455,9 +1455,10 @@ private fun SearchResultsTab(vm: SearchViewModel) {
         }
         if (resultCards.isNotEmpty()) {
             Spacer(Modifier.height(10.dp))
+            Box(Modifier.fillMaxSize()) {
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().padding(end = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 items(resultCards) { card ->
@@ -1473,10 +1474,20 @@ private fun SearchResultsTab(vm: SearchViewModel) {
                             else vm.pinnedListings[card] = url
                         },
                         includePartialMatches = vm.includePartialMatches,
+                        excludedFromOrder = vm.excludedCards.containsKey(card),
+                        onToggleExcludeFromOrder = {
+                            if (vm.excludedCards.containsKey(card)) vm.excludedCards.remove(card)
+                            else vm.excludedCards[card] = Unit
+                        },
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
             }
+            VerticalScrollbar(
+                adapter = rememberScrollbarAdapter(listState),
+                modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            )
+            } // Box
         }
     }
 }
@@ -1702,6 +1713,8 @@ private fun CardSection(
     pinnedUrl: String? = null,
     onTogglePin: ((String) -> Unit)? = null,
     includePartialMatches: Boolean = false,
+    excludedFromOrder: Boolean = false,
+    onToggleExcludeFromOrder: () -> Unit = {},
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -1751,6 +1764,18 @@ private fun CardSection(
                 )
             }
             Spacer(Modifier.weight(1f))
+            IconButton(
+                onClick = onToggleExcludeFromOrder,
+                modifier = Modifier.size(24.dp),
+            ) {
+                Icon(
+                    if (excludedFromOrder) Icons.Default.RemoveShoppingCart else Icons.Default.ShoppingCart,
+                    contentDescription = if (excludedFromOrder) "Include in order" else "Exclude from order",
+                    tint = if (excludedFromOrder) ErrorColor else OnSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(15.dp),
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             Icon(
                 if (inStockExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                 null, tint = OnSurfaceVariant, modifier = Modifier.size(16.dp),
@@ -2384,6 +2409,9 @@ enum class OrderStrategy(val label: String, val icon: ImageVector, val blurb: St
 private fun OrderListsPane(vm: SearchViewModel) {
     val strategy = vm.orderStrategy
     val unchecked = vm.uncheckedOrderLines
+    val excludedCards = vm.excludedCards
+    val priceMax = vm.orderPriceFilter.toDoubleOrNull()
+    val orderListState = rememberLazyListState()
 
     // Recomputed automatically whenever results stream in (reads the observable list).
     val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
@@ -2392,12 +2420,15 @@ private fun OrderListsPane(vm: SearchViewModel) {
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
 
-    // Totals filtered to only checked (selected) lines
-    val activeStores = plan.storeOrders.count { so -> so.lines.any { !unchecked.containsKey(it.listing.url) } }
-    val activeItems  = plan.storeOrders.sumOf { so -> so.lines.count { !unchecked.containsKey(it.listing.url) } }
-    val activeTotal  = plan.storeOrders.sumOf { so ->
-        so.lines.filter { !unchecked.containsKey(it.listing.url) }.sumOf { it.listing.priceZar ?: 0.0 }
+    // Totals filtered to only active lines (checked, not card-excluded, within price filter)
+    val isLineActive = { line: data.OrderLine ->
+        !unchecked.containsKey(line.listing.url) &&
+        !excludedCards.containsKey(line.card) &&
+        (priceMax == null || (line.listing.priceZar ?: 0.0) <= priceMax)
     }
+    val activeStores = plan.storeOrders.count { so -> so.lines.any { isLineActive(it) } }
+    val activeItems  = plan.storeOrders.sumOf { so -> so.lines.count { isLineActive(it) } }
+    val activeTotal  = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { it.listing.priceZar ?: 0.0 } }
 
     Column(Modifier.fillMaxSize()) {
         // Strategy switcher
@@ -2444,7 +2475,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
             return
         }
 
-        // Plan totals (reflect checked items only)
+        // Plan totals + price filter
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 10.dp)) {
             PlanStat("$activeStores", if (activeStores == 1) "store" else "stores")
             Spacer(Modifier.width(20.dp))
@@ -2455,20 +2486,59 @@ private fun OrderListsPane(vm: SearchViewModel) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
             }
+            Spacer(Modifier.weight(1f))
+            // Price filter
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .height(28.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(SurfaceContainerLow)
+                    .border(1.dp, if (priceMax != null) Primary.copy(alpha = 0.5f) else OutlineVariant, RoundedCornerShape(4.dp))
+                    .padding(horizontal = 8.dp),
+            ) {
+                Icon(Icons.Default.FilterList, null, tint = if (priceMax != null) Primary else OnSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(13.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("Max R", fontSize = 12.sp, color = OnSurfaceVariant, fontFamily = Mono)
+                Box(Modifier.width(60.dp), contentAlignment = Alignment.CenterStart) {
+                    if (vm.orderPriceFilter.isEmpty()) {
+                        Text("any", color = OnSurfaceVariant.copy(alpha = 0.4f), fontFamily = Mono, fontSize = 12.sp)
+                    }
+                    BasicTextField(
+                        value = vm.orderPriceFilter,
+                        onValueChange = { vm.orderPriceFilter = it.filter { c -> c.isDigit() || c == '.' } },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(color = if (priceMax != null) Primary else OnSurface, fontFamily = Mono, fontSize = 12.sp),
+                        cursorBrush = SolidColor(Primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (vm.orderPriceFilter.isNotEmpty()) {
+                    Icon(Icons.Default.Close, "Clear price filter", tint = OnSurfaceVariant,
+                        modifier = Modifier.size(13.dp).clip(RoundedCornerShape(2.dp)).clickable { vm.orderPriceFilter = "" })
+                }
+            }
         }
 
+        Box(Modifier.fillMaxSize()) {
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            state = orderListState,
+            modifier = Modifier.fillMaxSize().padding(end = 10.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(plan.storeOrders, key = { it.store }) { so ->
-                StoreOrderCard(so, vm.images, unchecked, vm.hoverOnThumbnailOnly)
+                StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, vm.hoverOnThumbnailOnly)
             }
             if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 item { UncoveredCard(plan.uncoveredCards) }
             }
             item { Spacer(Modifier.height(8.dp)) }
         }
+        VerticalScrollbar(
+            adapter = rememberScrollbarAdapter(orderListState),
+            modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+        )
+        } // Box
     }
 }
 
@@ -2482,9 +2552,9 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 }
 
 @Composable
-private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, hoverOnThumbnailOnly: Boolean = false) {
+private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, excludedCards: MutableMap<String, Unit>, priceMax: Double? = null, hoverOnThumbnailOnly: Boolean = false) {
     val activeLines  = order.lines
-        .filter { !unchecked.containsKey(it.listing.url) }
+        .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
         .distinctBy { it.listing.variantId ?: it.listing.url }
     val displayCount = activeLines.size
     val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
@@ -2662,14 +2732,17 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
             }
             order.lines.forEachIndexed { idx, line ->
                 if (idx > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
-                val lineChecked = !unchecked.containsKey(line.listing.url)
+                val lineChecked = !unchecked.containsKey(line.listing.url) && !excludedCards.containsKey(line.card) && (priceMax == null || (line.listing.priceZar ?: 0.0) <= priceMax)
                 OrderLineRow(
                     line = line,
                     imagePath = line.listing.title?.let { images[it] } ?: images[line.card],
                     checked = lineChecked,
                     onToggle = { isChecked ->
                         if (!isChecked) unchecked[line.listing.url] = Unit
-                        else unchecked.remove(line.listing.url)
+                        else {
+                            unchecked.remove(line.listing.url)
+                            excludedCards.remove(line.card)
+                        }
                     },
                     hoverOnThumbnailOnly = hoverOnThumbnailOnly,
                 )

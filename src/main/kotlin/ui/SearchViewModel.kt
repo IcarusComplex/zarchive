@@ -92,6 +92,8 @@ class SearchViewModel {
     // ── Order list UI state (hoisted here so tab switches don't reset it) ───────
     val pinnedListings = mutableStateMapOf<String, String>()  // card name -> pinned listing URL
     val uncheckedOrderLines = mutableStateMapOf<String, Unit>()
+    val excludedCards = mutableStateMapOf<String, Unit>()     // card name -> excluded from order plans
+    var orderPriceFilter by mutableStateOf("")                // numeric string; lines above this price are inactive
     private var orderStrategyState by mutableStateOf(OrderStrategy.CHEAPEST)
     var orderStrategy: OrderStrategy
         get() = orderStrategyState
