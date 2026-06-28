@@ -56,12 +56,12 @@ private fun buildStoreOrders(lines: List<OrderLine>): List<StoreOrder> =
  * If [pinnedListings] contains an entry for a card (card → listing URL), only that
  * specific listing is considered for that card.
  */
-fun cheapestPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap()): OrderPlan {
+fun cheapestPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap(), includePartialMatches: Boolean = false): OrderPlan {
     val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
         .mapValues { (card, ls) ->
             val pin = pinnedListings[card]
-            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls)
+            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls, exactOnly = !includePartialMatches)
         }
     val chosen = mutableListOf<OrderLine>()
     val uncovered = mutableListOf<String>()
@@ -81,12 +81,12 @@ fun cheapestPlan(cards: List<String>, results: List<SearchResult>, pinnedListing
  * If [pinnedListings] contains an entry for a card (card → listing URL), only that
  * specific listing is considered, which forces the set-cover to include that listing's store.
  */
-fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap()): OrderPlan {
+fun fewestStoresPlan(cards: List<String>, results: List<SearchResult>, pinnedListings: Map<String, String> = emptyMap(), includePartialMatches: Boolean = false): OrderPlan {
     val uniqueCards = cards.distinct()
     val byCard = results.inStockOnly().groupBy { it.card }
         .mapValues { (card, ls) ->
             val pin = pinnedListings[card]
-            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls)
+            if (pin != null) ls.filter { it.url == pin } else preferExactMatches(card, ls, exactOnly = !includePartialMatches)
         }
     val inStock = byCard.values.flatten()
     val uncovered = uniqueCards.filter { byCard[it].isNullOrEmpty() }

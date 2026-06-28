@@ -116,7 +116,8 @@ private fun matchKey(s: String): String =
  * Bolt". Falls back to all candidates when nothing matches exactly, so messy titles that don't
  * normalise cleanly still show up rather than vanishing.
  */
-fun preferExactMatches(card: String, listings: List<SearchResult>): List<SearchResult> {
+fun preferExactMatches(card: String, listings: List<SearchResult>, exactOnly: Boolean = true): List<SearchResult> {
+    if (!exactOnly) return listings
     if (listings.size <= 1) return listings
     val want = matchKey(card)
     if (want.isEmpty()) return listings

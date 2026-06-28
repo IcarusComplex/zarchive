@@ -1450,6 +1450,7 @@ private fun SearchResultsTab(vm: SearchViewModel) {
                     val idx = resultCards.indexOf(card)
                     if (idx >= 0) scope.launch { listState.scrollToItem(idx) }
                 },
+                includePartialMatches = vm.includePartialMatches,
             )
         }
         if (resultCards.isNotEmpty()) {
@@ -1471,6 +1472,7 @@ private fun SearchResultsTab(vm: SearchViewModel) {
                             if (vm.pinnedListings[card] == url) vm.pinnedListings.remove(card)
                             else vm.pinnedListings[card] = url
                         },
+                        includePartialMatches = vm.includePartialMatches,
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -1586,6 +1588,13 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
                         sublabel = "Plains, Island, Swamp, Mountain, Forest, Wastes",
                         onChange = { vm.ignoreBasicLands = it },
                     )
+                    OptionToggle(
+                        checked = vm.includePartialMatches,
+                        label = "Include partial name matches",
+                        sublabel = "Show listings whose name contains your search term, not just exact card name matches. " +
+                            "Useful when searching a word that appears in many card names (e.g. \"Kraken\").",
+                        onChange = { vm.includePartialMatches = it },
+                    )
 
                     // ── Luckshack ─────────────────────────────────────────────
                     OptionsSectionHeader("Luckshack")
@@ -1692,11 +1701,12 @@ private fun CardSection(
     hoverOnThumbnailOnly: Boolean = false,
     pinnedUrl: String? = null,
     onTogglePin: ((String) -> Unit)? = null,
+    includePartialMatches: Boolean = false,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
 
-    val allListings = preferExactMatches(card, results.filter { it.title != null })
+    val allListings = preferExactMatches(card, results.filter { it.title != null }, exactOnly = !includePartialMatches)
     val listings = if (cardFilterQ.isEmpty()) allListings else allListings.filter { r ->
         r.title!!.lowercase().contains(cardFilterQ) || r.store.lowercase().contains(cardFilterQ)
     }
@@ -2143,13 +2153,14 @@ private fun CardSummaryPanel(
     images: Map<String, String>,
     isSearching: Boolean,
     onCardClick: (String) -> Unit,
+    includePartialMatches: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(true) }
     var summaryFilter by remember { mutableStateOf("") }
     val filterQ = summaryFilter.trim().lowercase()
     val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
     val foundCount = cards.count { card ->
-        preferExactMatches(card, results.filter { it.card == card && it.title != null })
+        preferExactMatches(card, results.filter { it.card == card && it.title != null }, exactOnly = !includePartialMatches)
             .any { it.available != false }
     }
     val pendingCount = if (isSearching) cards.count { card -> results.none { it.card == card } } else 0
@@ -2227,7 +2238,7 @@ private fun CardSummaryPanel(
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 pair.forEach { card ->
                                     val cardResults = results.filter { it.card == card }
-                                    val imagePath = preferExactMatches(card, cardResults.filter { it.title != null })
+                                    val imagePath = preferExactMatches(card, cardResults.filter { it.title != null }, exactOnly = !includePartialMatches)
                                         .mapNotNull { r -> r.title?.let { images[it] } }
                                         .firstOrNull() ?: images[card]
                                     CardSummaryEntry(
@@ -2237,6 +2248,7 @@ private fun CardSummaryPanel(
                                         isSearching = isSearching,
                                         modifier = Modifier.weight(1f),
                                         onClick = { onCardClick(card) },
+                                        includePartialMatches = includePartialMatches,
                                     )
                                 }
                                 if (pair.size == 1) Spacer(Modifier.weight(1f))
@@ -2257,6 +2269,7 @@ private fun CardSummaryEntry(
     isSearching: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
+    includePartialMatches: Boolean = false,
 ) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
@@ -2278,7 +2291,7 @@ private fun CardSummaryEntry(
         }
     }
 
-    val listings = preferExactMatches(card, results.filter { it.title != null })
+    val listings = preferExactMatches(card, results.filter { it.title != null }, exactOnly = !includePartialMatches)
     val hasInStock = listings.any { it.available != false }
     val hasOutOfStock = !hasInStock && listings.any { it.available == false }
     // Don't finalise Out of Stock / Not Found until searching is done — a card that's OOS at
@@ -2373,8 +2386,8 @@ private fun OrderListsPane(vm: SearchViewModel) {
     val unchecked = vm.uncheckedOrderLines
 
     // Recomputed automatically whenever results stream in (reads the observable list).
-    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings) } }
-    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings) } }
+    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()

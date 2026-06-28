@@ -36,6 +36,11 @@ class SearchViewModel {
         get() = autoOpenLuckshackState
         set(value) { autoOpenLuckshackState = value; AppDatabase.setSettingBoolean("autoOpenLuckshack", value) }
 
+    private var includePartialMatchesState by mutableStateOf(AppDatabase.getSettingBoolean("includePartialMatches", false))
+    var includePartialMatches: Boolean
+        get() = includePartialMatchesState
+        set(value) { includePartialMatchesState = value; AppDatabase.setSettingBoolean("includePartialMatches", value) }
+
     val results = mutableStateListOf<SearchResult>()
 
     // Listing title → local image file path. Keyed by the listing's own title so each
