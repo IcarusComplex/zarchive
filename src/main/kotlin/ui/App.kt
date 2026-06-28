@@ -566,6 +566,7 @@ private fun EditListDialog(
                     VerticalScrollbar(
                         adapter  = rememberScrollbarAdapter(cardsScroll),
                         modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight().padding(vertical = 2.dp),
+                        style    = LocalScrollbarStyle.current.copy(unhoverColor = Primary.copy(alpha = 0.25f), hoverColor = Primary.copy(alpha = 0.55f)),
                     )
                 }
             }
@@ -1486,6 +1487,7 @@ private fun SearchResultsTab(vm: SearchViewModel) {
             VerticalScrollbar(
                 adapter = rememberScrollbarAdapter(listState),
                 modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                style   = LocalScrollbarStyle.current.copy(unhoverColor = Primary.copy(alpha = 0.25f), hoverColor = Primary.copy(alpha = 0.55f)),
             )
             } // Box
         }
@@ -1764,15 +1766,26 @@ private fun CardSection(
                 )
             }
             Spacer(Modifier.weight(1f))
-            IconButton(
-                onClick = onToggleExcludeFromOrder,
-                modifier = Modifier.size(24.dp),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(onClick = onToggleExcludeFromOrder)
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
             ) {
+                Text(
+                    if (excludedFromOrder) "Excluded from order" else "Exclude from order",
+                    fontSize = 11.sp,
+                    lineHeight = 11.sp,
+                    color = if (excludedFromOrder) ErrorColor else OnSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.alignBy { it.measuredHeight / 2 },
+                )
                 Icon(
                     if (excludedFromOrder) Icons.Default.RemoveShoppingCart else Icons.Default.ShoppingCart,
-                    contentDescription = if (excludedFromOrder) "Include in order" else "Exclude from order",
-                    tint = if (excludedFromOrder) ErrorColor else OnSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(15.dp),
+                    contentDescription = null,
+                    tint = if (excludedFromOrder) ErrorColor else OnSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(13.dp).alignBy { it.measuredHeight / 2 },
                 )
             }
             Spacer(Modifier.width(4.dp))
@@ -2491,31 +2504,32 @@ private fun OrderListsPane(vm: SearchViewModel) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .height(28.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(SurfaceContainerLow)
                     .border(1.dp, if (priceMax != null) Primary.copy(alpha = 0.5f) else OutlineVariant, RoundedCornerShape(4.dp))
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = 10.dp, vertical = 5.dp),
             ) {
-                Icon(Icons.Default.FilterList, null, tint = if (priceMax != null) Primary else OnSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(13.dp))
-                Spacer(Modifier.width(5.dp))
-                Text("Max R", fontSize = 12.sp, color = OnSurfaceVariant, fontFamily = Mono)
-                Box(Modifier.width(60.dp), contentAlignment = Alignment.CenterStart) {
+                Icon(Icons.Default.FilterList, null, tint = if (priceMax != null) Primary else OnSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(13.dp).alignBy { it.measuredHeight / 2 })
+                Spacer(Modifier.width(8.dp))
+                Text("Max R", fontSize = 12.sp, lineHeight = 12.sp, color = OnSurfaceVariant, fontFamily = Mono, modifier = Modifier.alignBy { it.measuredHeight / 2 })
+                Spacer(Modifier.width(6.dp))
+                Box(Modifier.width(64.dp), contentAlignment = Alignment.CenterStart) {
                     if (vm.orderPriceFilter.isEmpty()) {
-                        Text("any", color = OnSurfaceVariant.copy(alpha = 0.4f), fontFamily = Mono, fontSize = 12.sp)
+                        Text("any", color = OnSurfaceVariant.copy(alpha = 0.4f), fontFamily = Mono, fontSize = 12.sp, lineHeight = 12.sp)
                     }
                     BasicTextField(
                         value = vm.orderPriceFilter,
                         onValueChange = { vm.orderPriceFilter = it.filter { c -> c.isDigit() || c == '.' } },
                         singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(color = if (priceMax != null) Primary else OnSurface, fontFamily = Mono, fontSize = 12.sp),
+                        textStyle = androidx.compose.ui.text.TextStyle(color = if (priceMax != null) Primary else OnSurface, fontFamily = Mono, fontSize = 12.sp, lineHeight = 12.sp),
                         cursorBrush = SolidColor(Primary),
                         modifier = Modifier.fillMaxWidth(),
                     )
                 }
                 if (vm.orderPriceFilter.isNotEmpty()) {
+                    Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.Close, "Clear price filter", tint = OnSurfaceVariant,
-                        modifier = Modifier.size(13.dp).clip(RoundedCornerShape(2.dp)).clickable { vm.orderPriceFilter = "" })
+                        modifier = Modifier.size(13.dp).clip(RoundedCornerShape(2.dp)).clickable { vm.orderPriceFilter = "" }.alignBy { it.measuredHeight / 2 })
                 }
             }
         }
@@ -2537,6 +2551,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
         VerticalScrollbar(
             adapter = rememberScrollbarAdapter(orderListState),
             modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+            style   = LocalScrollbarStyle.current.copy(unhoverColor = Primary.copy(alpha = 0.25f), hoverColor = Primary.copy(alpha = 0.55f)),
         )
         } // Box
     }
