@@ -112,6 +112,7 @@ class SearchViewModel {
     val pinnedListings = mutableStateMapOf<String, String>()  // card name -> pinned listing URL
     val uncheckedOrderLines = mutableStateMapOf<String, Unit>()
     val excludedCards = mutableStateMapOf<String, Unit>()     // card name -> excluded from order plans
+    val refreshingCards = mutableStateMapOf<String, Unit>()   // cards currently being individually re-searched
     var orderPriceFilter by mutableStateOf("")                // numeric string; lines above this price are inactive
     private var orderStrategyState by mutableStateOf(OrderStrategy.CHEAPEST)
     var orderStrategy: OrderStrategy
@@ -739,6 +740,48 @@ log "Done"
             isSearching = false
             statusText = "Done — ${results.count { it.title != null }} listings found"
             showSearchSummary = true
+        }
+    }
+
+    fun refreshCard(card: String) {
+        if (refreshingCards.containsKey(card)) return
+        val storesToSearch = STORES.filterKeys { it in enabledStores }
+        results.removeAll { it.card == card }
+        refreshingCards[card] = Unit
+
+        scope.launch {
+            val imageService = CardImageService()
+            val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
+            try {
+                imageJobs += scope.launch(Dispatchers.IO) {
+                    val resolved = imageService.resolveImages(listOf(card).filter { requestedTitles.add(it) })
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                }
+                runSearch(
+                    cards = listOf(card),
+                    stores = storesToSearch,
+                    sharedBrowserSearcher = warrenSearcher,
+                    onProgress = {},
+                    onResults = { rows ->
+                        withContext(Dispatchers.Swing) { results.addAll(rows) }
+                        val newHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
+                            .filter { (title, _) -> requestedTitles.add(title) }
+                            .toMap()
+                        if (newHints.isNotEmpty()) {
+                            imageJobs += scope.launch(Dispatchers.IO) {
+                                val resolved = imageService.resolveImages(newHints)
+                                if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                            }
+                        }
+                    },
+                    onStoreComplete = {},
+                )
+                imageJobs.forEach { it.join() }
+            } finally {
+                imageService.close()
+                withContext(Dispatchers.Swing) { refreshingCards.remove(card) }  // Unit value, key removal
+            }
         }
     }
 

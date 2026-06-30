@@ -1973,9 +1973,11 @@ private fun SearchResultsTab(
     val scope = rememberCoroutineScope()
 
     // Summary tracks the full searched list from the moment search() fires.
-    // Results list only shows cards that have received at least one response.
+    // Results list shows cards that have received at least one response, or are
+    // currently being individually refreshed (so they stay in place during refresh).
     val summaryCards = vm.searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
-    val resultCards  = vm.results.map { it.card }.distinct()
+    val hasResults   = vm.results.map { it.card }.toSet()
+    val resultCards  = summaryCards.filter { it in hasResults || vm.refreshingCards.containsKey(it) }
 
     Column {
         if (summaryCards.size > 1) {
@@ -2009,6 +2011,7 @@ private fun SearchResultsTab(
                         results = vm.results.filter { it.card == card },
                         images = vm.images,
                         isSearching = vm.isSearching,
+                        isRefreshing = card in vm.refreshingCards,
                         hoverOnThumbnailOnly = vm.hoverOnThumbnailOnly,
                         pinnedUrl = vm.pinnedListings[card],
                         onTogglePin = { url ->
@@ -2021,6 +2024,7 @@ private fun SearchResultsTab(
                             if (vm.excludedCards.containsKey(card)) vm.excludedCards.remove(card)
                             else vm.excludedCards[card] = Unit
                         },
+                        onRefresh = { vm.refreshCard(card) },
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -2252,12 +2256,14 @@ private fun CardSection(
     results: List<SearchResult>,
     images: Map<String, String>,
     isSearching: Boolean = false,
+    isRefreshing: Boolean = false,
     hoverOnThumbnailOnly: Boolean = false,
     pinnedUrl: String? = null,
     onTogglePin: ((String) -> Unit)? = null,
     includePartialMatches: Boolean = false,
     excludedFromOrder: Boolean = false,
     onToggleExcludeFromOrder: () -> Unit = {},
+    onRefresh: () -> Unit = {},
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -2298,7 +2304,7 @@ private fun CardSection(
             )
             Spacer(Modifier.width(8.dp))
             CountBadge("${allListings.size}")
-            if (isSearching) {
+            if (isSearching || isRefreshing) {
                 Spacer(Modifier.width(8.dp))
                 CircularProgressIndicator(
                     modifier = Modifier.size(12.dp),
@@ -2307,6 +2313,28 @@ private fun CardSection(
                 )
             }
             Spacer(Modifier.weight(1f))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(enabled = !isRefreshing, onClick = onRefresh)
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
+            ) {
+                Text(
+                    "Refresh search",
+                    fontSize = 11.sp,
+                    lineHeight = 11.sp,
+                    color = if (isRefreshing) Primary.copy(alpha = 0.4f) else OnSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.alignBy { it.measuredHeight / 2 },
+                )
+                Icon(
+                    Icons.Default.Refresh,
+                    contentDescription = null,
+                    tint = if (isRefreshing) Primary.copy(alpha = 0.4f) else OnSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(13.dp).alignBy { it.measuredHeight / 2 },
+                )
+            }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
