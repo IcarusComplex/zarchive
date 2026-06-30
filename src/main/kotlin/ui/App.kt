@@ -290,17 +290,24 @@ private fun LeftPanel(vm: SearchViewModel) {
         HorizontalDivider(color = OutlineVariant)
 
         var showOptionsDialog by remember { mutableStateOf(false) }
-        OutlinedButton(
-            onClick = { showOptionsDialog = true },
+        Surface(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             shape = RoundedCornerShape(4.dp),
-            colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+            color = Color.Transparent,
             border = BorderStroke(1.dp, OutlineVariant),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
         ) {
-            Icon(Icons.Default.Settings, null, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.width(6.dp))
-            Text("Search Options", fontSize = 12.sp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { showOptionsDialog = true }
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Icon(Icons.Default.Settings, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Search Options", fontSize = 12.sp, color = OnSurfaceVariant)
+            }
         }
         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
         if (showOptionsDialog) {
@@ -315,7 +322,7 @@ private fun LeftPanel(vm: SearchViewModel) {
             "Cards to search",
             fontSize = 11.sp,
             color = OnSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.padding(start = 14.dp, top = 10.dp, bottom = 4.dp),
+            modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 4.dp),
         )
 
         // Search field — fills all remaining vertical space
@@ -396,9 +403,11 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
         ) {
-            // Segmented control
+            // Segmented control — weight(1f) so it fills the same horizontal span as the
+            // Search Options button above; each tab takes equal width via weight(1f).
             Row(
                 modifier = Modifier
+                    .weight(1f)
                     .height(IntrinsicSize.Min)
                     .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
                     .clip(RoundedCornerShape(4.dp)),
@@ -409,9 +418,10 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     Box(
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
+                            .weight(1f)
                             .background(if (isActive) SurfaceContainerHighest else Color.Transparent)
                             .clickable { activeTab = tab }
-                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                            .padding(horizontal = 12.dp, vertical = 3.dp),
                     ) {
                         Text(
                             if (tab == SavedPanelTab.LISTS) "Lists" else "Results",
@@ -422,7 +432,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     }
                 }
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             @OptIn(ExperimentalFoundationApi::class)
             when {
                 activeTab == SavedPanelTab.LISTS && vm.query.isNotBlank() ->
@@ -466,7 +476,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                 val overflow = lists.size - 3
                 if (lists.isEmpty()) {
                     Text("No saved lists yet", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
-                        modifier = Modifier.padding(start = 14.dp, bottom = 8.dp))
+                        modifier = Modifier.padding(start = 12.dp, bottom = 8.dp))
                 } else {
                     pinned.forEach { list ->
                         SavedListRow(list,
@@ -484,7 +494,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                                 .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
                                 .hoverable(interaction)
                                 .clickable { showAllListsDialog = true }
-                                .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                                .padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
                         ) {
                             Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier.size(12.dp))
@@ -501,7 +511,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     Text(
                         "No saved results yet\nSearch for cards then use the archive icon to save",
                         fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
-                        modifier = Modifier.padding(start = 14.dp, bottom = 8.dp),
+                        modifier = Modifier.padding(start = 12.dp, bottom = 8.dp),
                     )
                 } else {
                     pinned.forEach { entry ->
@@ -519,7 +529,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                                 .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
                                 .hoverable(interaction)
                                 .clickable { showAllResultsDialog = true }
-                                .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                                .padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
                         ) {
                             Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
                                 modifier = Modifier.size(12.dp))
@@ -793,7 +803,7 @@ private fun SavedListRow(
             .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
             .hoverable(interaction)
             .clickable(onClick = onLoad)
-            .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+            .padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
     ) {
         Icon(Icons.Default.FormatListBulleted, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
             modifier = Modifier.size(12.dp))
@@ -843,7 +853,7 @@ private fun SavedResultRow(
             .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
             .hoverable(interaction)
             .clickable(onClick = onLoad)
-            .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+            .padding(start = 12.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Archive, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
