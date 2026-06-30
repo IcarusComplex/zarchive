@@ -285,6 +285,8 @@ suspend fun runSearch(
     onProgress: suspend (String) -> Unit,
     onResults: suspend (List<SearchResult>) -> Unit,
     onStoreComplete: suspend (String) -> Unit,
+    // Called (on an IO thread) when a store is rate-limited by Cloudflare. Receives the store name.
+    onStoreCfBlocked: ((String) -> Unit)? = null,
     // Pass a long-lived BrowserSearcher from the ViewModel so the Playwright browser and its
     // CF-clearance session survive between search clicks. If null, a temporary one is created.
     sharedBrowserSearcher: BrowserSearcher? = null,
@@ -305,13 +307,6 @@ suspend fun runSearch(
     val rateLimiter = PerHostRateLimiter(hostProfiles)
     val client = buildHttpClient(rateLimiter)
 
-    // When a 429 fires, persist a throttle rule for this store so future searches
-    // pre-throttle it at the appropriate card-count threshold. The write runs on the
-    // same IO thread that caught the 429 — it's a fast upsert and errors are swallowed.
-    val cfBlockedCallback: (String, Int) -> Unit = { baseUrl, cardCount ->
-        runCatching { AppDatabase.recordCfBlock(baseUrl, cardCount) }
-    }
-
     val hasBrowserStores = stores.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
     val localBrowserSearcher = if (hasBrowserStores && sharedBrowserSearcher == null) {
         val parallelism = (cards.size / 3 + 1).coerceIn(1, 3)
@@ -326,7 +321,10 @@ suspend fun runSearch(
                     checkStore(
                         client, name, base, cards, effectiveBrowserSearcher,
                         onProgress, onResults, onStoreComplete,
-                        onCfBlocked = cfBlockedCallback,
+                        onCfBlocked = { url, cardCount ->
+                            runCatching { AppDatabase.recordCfBlock(url, cardCount) }
+                            onStoreCfBlocked?.invoke(name)
+                        },
                     )
                 }
             }.awaitAll()

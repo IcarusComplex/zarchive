@@ -37,9 +37,18 @@ class SearchViewModel {
     var pendingAddCount by mutableStateOf(0)       // how many new (unsearched) cards
     var pendingTotalCount by mutableStateOf(0)     // total cards in the current query
     private var pendingAddCards: List<String> = emptyList()
+
+    // "All already searched" dialog: shown when every card in the new query is already in results.
+    var showAllAlreadySearchedDialog by mutableStateOf(false)
+    var alreadySearchedCount by mutableStateOf(0)
+
+    // Search summary modal: shown when a search completes.
+    var showSearchSummary by mutableStateOf(false)
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
     // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
     val storeCardCounts = mutableStateMapOf<String, Int>()
+    // Stores that were rate-limited by Cloudflare during the current search.
+    val cfBlockedStores = mutableStateListOf<String>()
 
     private var autoOpenLuckshackState by mutableStateOf(AppDatabase.getSettingBoolean("autoOpenLuckshack", false))
     var autoOpenLuckshack: Boolean
@@ -295,6 +304,7 @@ class SearchViewModel {
         storeStatuses.clear()
         storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
         storeCardCounts.clear()
+        cfBlockedStores.clear()
         isSearching = true
         statusText = "Starting search…"
 
@@ -354,6 +364,11 @@ class SearchViewModel {
                             completedStores++
                         }
                     },
+                    onStoreCfBlocked = { storeName ->
+                        scope.launch(Dispatchers.Swing) {
+                            if (storeName !in cfBlockedStores) cfBlockedStores.add(storeName)
+                        }
+                    },
                 )
                 imageJobs.joinAll()
             } finally {
@@ -361,6 +376,7 @@ class SearchViewModel {
             }
             isSearching = false
             statusText = "Done — ${results.count { it.title != null }} listings found"
+            showSearchSummary = true
         }
     }
 
@@ -575,6 +591,12 @@ log "Done"
             val existingSet = searchedCards.map { it.lowercase() }.toSet()
             val newCards = cards.filter { it.lowercase() !in existingSet }
             val overlapCount = cards.size - newCards.size
+            if (overlapCount > 0 && newCards.isEmpty()) {
+                // Every card in the new query is already in the current results.
+                alreadySearchedCount = cards.size
+                showAllAlreadySearchedDialog = true
+                return
+            }
             if (overlapCount > 0 && newCards.isNotEmpty()) {
                 pendingAddCards = newCards
                 pendingAddCount = newCards.size
@@ -597,6 +619,10 @@ log "Done"
         search()
     }
 
+    fun dismissAllAlreadySearched() { showAllAlreadySearchedDialog = false }
+    fun confirmResearchAll() { showAllAlreadySearchedDialog = false; search() }
+    fun dismissSearchSummary() { showSearchSummary = false }
+
     private fun searchAdditional(newCards: List<String>) {
         if (newCards.isEmpty()) return
         val storesToSearch = STORES.filterKeys { it in enabledStores }
@@ -612,6 +638,7 @@ log "Done"
         totalStores = storesToSearch.size
         storeStatuses.clear()
         storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
+        cfBlockedStores.clear()
         // storeCardCounts intentionally NOT cleared — accumulates from the previous search.
         isSearching = true
         statusText = "Adding ${newCards.size} new cards…"
@@ -666,6 +693,11 @@ log "Done"
                             completedStores++
                         }
                     },
+                    onStoreCfBlocked = { storeName ->
+                        scope.launch(Dispatchers.Swing) {
+                            if (storeName !in cfBlockedStores) cfBlockedStores.add(storeName)
+                        }
+                    },
                 )
                 imageJobs.joinAll()
             } finally {
@@ -673,6 +705,7 @@ log "Done"
             }
             isSearching = false
             statusText = "Done — ${results.count { it.title != null }} listings found"
+            showSearchSummary = true
         }
     }
 

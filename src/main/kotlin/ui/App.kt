@@ -2,7 +2,6 @@
 
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.lazy.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -36,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -221,6 +221,16 @@ fun WindowScope.App(
                     onDismiss  = { vm.showAddToSearchDialog = false },
                 )
             }
+            if (vm.showAllAlreadySearchedDialog) {
+                AllAlreadySearchedDialog(
+                    count      = vm.alreadySearchedCount,
+                    onResearch = { vm.confirmResearchAll() },
+                    onDismiss  = { vm.dismissAllAlreadySearched() },
+                )
+            }
+            if (vm.showSearchSummary) {
+                SearchSummaryDialog(vm)
+            }
         }
     }
 }
@@ -303,7 +313,13 @@ private fun LeftPanel(vm: SearchViewModel) {
         ) {
             Icon(Icons.Default.Settings, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(6.dp))
-            Text("Search Options", fontSize = 12.sp, color = OnSurfaceVariant)
+            Text(
+                "Search Options", fontSize = 12.sp, color = OnSurfaceVariant,
+                style = TextStyle(lineHeightStyle = LineHeightStyle(
+                    alignment = LineHeightStyle.Alignment.Center,
+                    trim = LineHeightStyle.Trim.Both,
+                )),
+            )
         }
         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
         if (showOptionsDialog) {
@@ -394,17 +410,15 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     var saveResultDesc       by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxWidth()) {
-        // Header: segmented tab control on the left, context-sensitive save icon on the right
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
+        // Header: segmented tab control fills the full width (matching Search Options button);
+        // save icon is overlaid at the right edge so it doesn't narrow the control.
+        Box(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
         ) {
-            // Segmented control — weight(1f) so it fills the same horizontal span as the
-            // Search Options button above; each tab takes equal width via weight(1f).
             Row(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(IntrinsicSize.Min)
+                    .fillMaxWidth()
+                    .height(28.dp)
                     .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
                     .clip(RoundedCornerShape(4.dp)),
             ) {
@@ -415,20 +429,24 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                         contentAlignment = Alignment.Center,
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .background(if (isActive) SurfaceContainerHighest else Color.Transparent)
-                            .clickable { activeTab = tab }
-                            .padding(horizontal = 12.dp, vertical = 3.dp),
+                            .clickable { activeTab = tab },
                     ) {
                         Text(
                             if (tab == SavedPanelTab.LISTS) "Lists" else "Results",
                             fontSize = 11.sp,
                             fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (isActive) Primary else OnSurfaceVariant.copy(alpha = 0.5f),
+                            style = TextStyle(lineHeightStyle = LineHeightStyle(
+                                alignment = LineHeightStyle.Alignment.Center,
+                                trim = LineHeightStyle.Trim.Both,
+                            )),
                         )
                     }
                 }
             }
-            Spacer(Modifier.width(8.dp))
+            // Save icon — floats at the right edge, overlaid on the control
             @OptIn(ExperimentalFoundationApi::class)
             when {
                 activeTab == SavedPanelTab.LISTS && vm.query.isNotBlank() ->
@@ -441,9 +459,10 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                             }
                         },
                         delayMillis = 400,
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
                     ) {
                         Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(14.dp)
                                 .clickable { saveListNameDraft = ""; showSaveListDialog = true })
                     }
                 activeTab == SavedPanelTab.RESULTS && vm.results.isNotEmpty() ->
@@ -456,9 +475,10 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                             }
                         },
                         delayMillis = 400,
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
                     ) {
                         Icon(Icons.Default.Archive, "Save results", tint = Primary.copy(alpha = 0.8f),
-                            modifier = Modifier.size(16.dp).clickable {
+                            modifier = Modifier.size(14.dp).clickable {
                                 saveResultName = ""; saveResultDesc = ""; showSaveResultDialog = true
                             })
                     }
@@ -1343,6 +1363,146 @@ private fun AddToSearchDialog(
 }
 
 @Composable
+private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismiss: () -> Unit) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(360.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Already in results",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
+                )
+                Text(
+                    "All $count card${if (count == 1) "" else "s"} in your query are already in the current results.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text(
+                    "Keep what you have, or discard and re-search everything?",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Keep results", fontSize = 12.sp) }
+                    Spacer(Modifier.weight(1f))
+                    Button(
+                        onClick = onResearch,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Re-search all", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SearchSummaryDialog(vm: SearchViewModel) {
+    val foundCards = remember(vm.results.size) {
+        vm.results.filter { it.title != null }.map { it.card }.toSet()
+    }
+    val notFoundCards = vm.searchedCards.filter { it !in foundCards }
+    val cfStores = vm.cfBlockedStores.toList()
+    val totalCards = vm.searchedCards.size
+
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(400.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    "Search complete",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
+                )
+
+                // Stats row
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "${foundCards.size}/$totalCards",
+                            fontFamily = Mono, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                            color = if (foundCards.size == totalCards) Tertiary else Primary,
+                        )
+                        Text("cards found", fontSize = 11.sp, color = OnSurfaceVariant)
+                    }
+                    if (cfStores.isNotEmpty()) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "${cfStores.size}",
+                                fontFamily = Mono, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                color = ErrorColor,
+                            )
+                            Text("rate limited", fontSize = 11.sp, color = OnSurfaceVariant)
+                        }
+                    }
+                }
+
+                // Not-found cards
+                if (notFoundCards.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "No listings found:",
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            color = OnSurfaceVariant,
+                        )
+                        notFoundCards.forEach { card ->
+                            Text(
+                                "· $card",
+                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+                }
+
+                // CF-blocked stores
+                if (cfStores.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Rate limited — results may be incomplete:",
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            color = ErrorColor.copy(alpha = 0.9f),
+                        )
+                        cfStores.forEach { store ->
+                            Text(
+                                "· $store",
+                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            )
+                        }
+                        Text(
+                            "Cloudflare blocked these stores mid-search. Try again with fewer cards, " +
+                            "or search them individually.",
+                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
+                        )
+                    }
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(
+                        onClick = { vm.dismissSearchSummary() },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("OK", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun DownloadProgressDialog(phase: String, progress: Float, error: String?, onCancel: () -> Unit) {
     ModalScrim {
         Surface(
@@ -1540,6 +1700,7 @@ private fun StatusRow(vm: SearchViewModel) {
                                 StoreStatusChip(store, status,
                                     done = vm.storeCardCounts[store] ?: 0,
                                     total = total,
+                                    cfBlocked = store in vm.cfBlockedStores,
                                     modifier = Modifier.weight(1f))
                             }
                             if (pair.size == 1) Spacer(Modifier.weight(1f))
@@ -1557,6 +1718,7 @@ private fun StoreStatusChip(
     status: StoreStatus,
     done: Int,
     total: Int,
+    cfBlocked: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val (icon, tint, bg) = when (status) {
@@ -1580,7 +1742,15 @@ private fun StoreStatusChip(
         Spacer(Modifier.width(6.dp))
         Text(store, fontSize = 11.sp, color = nameColor,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (total > 0 && status != StoreStatus.PENDING) {
+        if (cfBlocked) {
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "rate limited",
+                fontFamily = Mono,
+                fontSize = 9.sp,
+                color = ErrorColor.copy(alpha = 0.85f),
+            )
+        } else if (total > 0 && status != StoreStatus.PENDING) {
             Spacer(Modifier.width(8.dp))
             Text(
                 "$done/$total",
