@@ -30,6 +30,12 @@ class SearchViewModel {
     // Progress counters: every card-store completion increments completedCardChecks.
     var completedCardChecks by mutableStateOf(0)
     var totalCardChecks by mutableStateOf(0)
+
+    // Add-to-search dialog: shown when the new query overlaps existing results.
+    var showAddToSearchDialog by mutableStateOf(false)
+    var pendingAddCount by mutableStateOf(0)       // how many new (unsearched) cards
+    var pendingTotalCount by mutableStateOf(0)     // total cards in the current query
+    private var pendingAddCards: List<String> = emptyList()
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
     // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
     val storeCardCounts = mutableStateMapOf<String, Int>()
@@ -503,6 +509,117 @@ log "Done"
             if (java.awt.Desktop.isDesktopSupported() && desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
                 cards.forEach { card -> runCatching { desktop.browse(java.net.URI(luckshackSearchUrl(card))) } }
             }
+        }
+    }
+
+    // Entry point from the UI. Detects overlap with existing results and either shows
+    // the add-to-search dialog or falls through to a normal full search.
+    fun requestSearch() {
+        val cards = parseCardList(query, ignoreBasicLands)
+        if (cards.isEmpty()) return
+
+        if (results.isNotEmpty() && searchedCards.isNotEmpty()) {
+            val existingSet = searchedCards.map { it.lowercase() }.toSet()
+            val newCards = cards.filter { it.lowercase() !in existingSet }
+            val overlapCount = cards.size - newCards.size
+            if (overlapCount > 0 && newCards.isNotEmpty()) {
+                pendingAddCards = newCards
+                pendingAddCount = newCards.size
+                pendingTotalCount = cards.size
+                showAddToSearchDialog = true
+                return
+            }
+        }
+
+        search()
+    }
+
+    fun confirmAddToSearch() {
+        showAddToSearchDialog = false
+        searchAdditional(pendingAddCards)
+    }
+
+    fun declineAddToSearch() {
+        showAddToSearchDialog = false
+        search()
+    }
+
+    private fun searchAdditional(newCards: List<String>) {
+        if (newCards.isEmpty()) return
+        val storesToSearch = STORES.filterKeys { it in enabledStores }
+
+        searchJob?.cancel()
+
+        // Append new cards to the already-searched set; keep existing results and images.
+        searchedCards = searchedCards + newCards
+
+        completedStores = 0
+        completedCardChecks = 0
+        totalCardChecks = newCards.size * storesToSearch.size
+        totalStores = storesToSearch.size
+        storeStatuses.clear()
+        storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
+        // storeCardCounts intentionally NOT cleared — accumulates from the previous search.
+        isSearching = true
+        statusText = "Adding ${newCards.size} new cards…"
+
+        if (autoOpenLuckshack) openLuckshackSearches(newCards)
+
+        searchJob = scope.launch {
+            val imageService = CardImageService()
+            val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+            val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
+
+            try {
+                imageJobs += scope.launch(Dispatchers.IO) {
+                    val resolved = imageService.resolveImages(newCards.filter { requestedTitles.add(it) })
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                }
+
+                runSearch(
+                    cards = newCards,
+                    stores = storesToSearch,
+                    sharedBrowserSearcher = warrenSearcher,
+                    onProgress = { storeName ->
+                        withContext(Dispatchers.Swing) {
+                            storeStatuses[storeName] = StoreStatus.CHECKING
+                            statusText = "Checking $storeName…"
+                        }
+                    },
+                    onResults = { rows ->
+                        withContext(Dispatchers.Swing) {
+                            results.addAll(rows)
+                            rows.firstOrNull()?.store?.takeIf { it.isNotBlank() }?.let { store ->
+                                storeCardCounts[store] = (storeCardCounts[store] ?: 0) + 1
+                            }
+                            completedCardChecks++
+                            statusText = "Checked $completedCardChecks / $totalCardChecks cards"
+                        }
+                        val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
+                            .filter { (title, _) -> requestedTitles.add(title) }
+                            .toMap()
+                        if (newTitleHints.isNotEmpty()) {
+                            imageJobs += scope.launch(Dispatchers.IO) {
+                                val resolved = imageService.resolveImages(newTitleHints)
+                                if (resolved.isNotEmpty()) {
+                                    withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                                }
+                            }
+                        }
+                    },
+                    onStoreComplete = { storeName ->
+                        withContext(Dispatchers.Swing) {
+                            storeStatuses[storeName] = StoreStatus.DONE
+                            completedStores++
+                        }
+                    },
+                )
+                imageJobs.joinAll()
+            } finally {
+                imageService.close()
+            }
+            isSearching = false
+            statusText = "Done — ${results.count { it.title != null }} listings found"
         }
     }
 

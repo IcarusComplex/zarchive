@@ -212,6 +212,15 @@ fun WindowScope.App(
             if (showCrashDialog && pendingCrash != null) {
                 CrashReportDialog(crashLog = pendingCrash, onDismiss = { showCrashDialog = false })
             }
+            if (vm.showAddToSearchDialog) {
+                AddToSearchDialog(
+                    newCount   = vm.pendingAddCount,
+                    totalCount = vm.pendingTotalCount,
+                    onAddNew   = { vm.confirmAddToSearch() },
+                    onSearchAll = { vm.declineAddToSearch() },
+                    onDismiss  = { vm.showAddToSearchDialog = false },
+                )
+            }
         }
     }
 }
@@ -320,7 +329,7 @@ private fun LeftPanel(vm: SearchViewModel) {
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Button(
-                onClick = { if (vm.isSearching) vm.cancel() else vm.search() },
+                onClick = { if (vm.isSearching) vm.cancel() else vm.requestSearch() },
                 modifier = Modifier.fillMaxWidth().height(36.dp),
                 shape = RoundedCornerShape(4.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -651,7 +660,7 @@ private fun PanelSearch(vm: SearchViewModel, modifier: Modifier) {
             .onFocusChanged { focused = it.isFocused }
             .onPreviewKeyEvent { e ->
                 if (e.key == Key.Enter && e.type == KeyEventType.KeyDown && e.isAltPressed
-                ) { vm.search(); true } else false
+                ) { vm.requestSearch(); true } else false
             },
         textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Mono, fontSize = 13.sp, color = OnSurface),
         cursorBrush = SolidColor(Primary),
@@ -666,7 +675,8 @@ private fun PanelSearch(vm: SearchViewModel, modifier: Modifier) {
             ) {
                 if (vm.query.isEmpty()) {
                     Text(
-                        "One card name per line\n\n" +
+                        "One card name per line\n" +
+                        "Adding cards to an existing search only looks up the new ones\n\n" +
                         "Decklist format supported:\n" +
                         "  4x Lightning Bolt\n" +
                         "  1 Shadowspear\n" +
@@ -1028,6 +1038,65 @@ private fun UpdateDialog(
                             colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
                         ) { Text("Open release page", fontSize = 12.sp) }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AddToSearchDialog(
+    newCount: Int,
+    totalCount: Int,
+    onAddNew: () -> Unit,
+    onSearchAll: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val existingCount = totalCount - newCount
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(380.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Add to existing results?",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
+                )
+                Text(
+                    "$existingCount card${if (existingCount == 1) "" else "s"} already in results. " +
+                    "Your query has $newCount new card${if (newCount == 1) "" else "s"}.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text(
+                    "Search only the new cards and keep existing results, or start fresh for all $totalCount?",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Cancel", fontSize = 12.sp) }
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(
+                        onClick = onSearchAll,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Search all $totalCount", fontSize = 12.sp) }
+                    Button(
+                        onClick = onAddNew,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Add $newCount new", fontSize = 12.sp) }
                 }
             }
         }
