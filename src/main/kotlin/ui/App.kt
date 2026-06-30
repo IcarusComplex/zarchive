@@ -370,81 +370,164 @@ private fun HeaderLogo(bannerBitmap: ImageBitmap?) {
     }
 }
 
+private enum class SavedPanelTab { LISTS, RESULTS }
+
 @Composable
 private fun SavedListsPanel(vm: SearchViewModel) {
-    val lists by vm.savedLists.collectAsState()
-    var showSaveDialog  by remember { mutableStateOf(false) }
-    var showAllDialog   by remember { mutableStateOf(false) }
-    var saveNameDraft   by remember { mutableStateOf("") }
-    var editingList     by remember { mutableStateOf<data.SavedSearchList?>(null) }
+    val lists        by vm.savedLists.collectAsState()
+    val savedResults by vm.savedResults.collectAsState()
+    var activeTab    by remember { mutableStateOf(SavedPanelTab.LISTS) }
 
-    val pinned   = lists.take(3)
-    val overflow = lists.size - 3
+    // Lists tab state
+    var showSaveListDialog by remember { mutableStateOf(false) }
+    var showAllListsDialog by remember { mutableStateOf(false) }
+    var saveListNameDraft  by remember { mutableStateOf("") }
+    var editingList        by remember { mutableStateOf<data.SavedSearchList?>(null) }
+
+    // Results tab state
+    var showSaveResultDialog by remember { mutableStateOf(false) }
+    var showAllResultsDialog by remember { mutableStateOf(false) }
+    var saveResultName       by remember { mutableStateOf("") }
+    var saveResultDesc       by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxWidth()) {
+        // Header: tab toggles on the left, context-sensitive save icon on the right
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
         ) {
-            Text("Saved lists", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.weight(1f))
-            if (vm.query.isNotBlank()) {
-                @OptIn(ExperimentalFoundationApi::class)
-                TooltipArea(
-                    tooltip = {
-                        Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
-                            border = BorderStroke(1.dp, OutlineVariant)) {
-                            Text("Save current list", fontSize = 11.sp, color = OnSurface,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-                        }
-                    },
-                    delayMillis = 400,
-                ) {
-                    Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
-                        modifier = Modifier.size(16.dp).clickable { saveNameDraft = ""; showSaveDialog = true })
-                }
+            SavedPanelTab.entries.forEachIndexed { i, tab ->
+                val isActive = activeTab == tab
+                Text(
+                    if (tab == SavedPanelTab.LISTS) "Lists" else "Results",
+                    fontSize = 11.sp,
+                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (isActive) Primary else OnSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier
+                        .clickable { activeTab = tab }
+                        .padding(end = if (i == 0) 10.dp else 0.dp),
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            @OptIn(ExperimentalFoundationApi::class)
+            when {
+                activeTab == SavedPanelTab.LISTS && vm.query.isNotBlank() ->
+                    TooltipArea(
+                        tooltip = {
+                            Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(1.dp, OutlineVariant)) {
+                                Text("Save current list", fontSize = 11.sp, color = OnSurface,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                            }
+                        },
+                        delayMillis = 400,
+                    ) {
+                        Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
+                            modifier = Modifier.size(16.dp)
+                                .clickable { saveListNameDraft = ""; showSaveListDialog = true })
+                    }
+                activeTab == SavedPanelTab.RESULTS && vm.results.isNotEmpty() ->
+                    TooltipArea(
+                        tooltip = {
+                            Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
+                                border = BorderStroke(1.dp, OutlineVariant)) {
+                                Text("Save current results", fontSize = 11.sp, color = OnSurface,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+                            }
+                        },
+                        delayMillis = 400,
+                    ) {
+                        Icon(Icons.Default.Archive, "Save results", tint = Primary.copy(alpha = 0.8f),
+                            modifier = Modifier.size(16.dp).clickable {
+                                saveResultName = ""; saveResultDesc = ""; showSaveResultDialog = true
+                            })
+                    }
             }
         }
 
-        if (lists.isEmpty()) {
-            Text("No saved lists yet", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
-                modifier = Modifier.padding(start = 14.dp, bottom = 8.dp))
-        } else {
-            pinned.forEach { list ->
-                SavedListRow(list,
-                    onLoad   = { vm.loadSearchList(list) },
-                    onDelete = { vm.deleteSearchList(list.id) },
-                    onEdit   = { editingList = list })
+        // Tab content
+        when (activeTab) {
+            SavedPanelTab.LISTS -> {
+                val pinned   = lists.take(3)
+                val overflow = lists.size - 3
+                if (lists.isEmpty()) {
+                    Text("No saved lists yet", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.padding(start = 14.dp, bottom = 8.dp))
+                } else {
+                    pinned.forEach { list ->
+                        SavedListRow(list,
+                            onLoad   = { vm.loadSearchList(list) },
+                            onDelete = { vm.deleteSearchList(list.id) },
+                            onEdit   = { editingList = list })
+                    }
+                    if (overflow > 0) {
+                        val interaction = remember { MutableInteractionSource() }
+                        val hovered by interaction.collectIsHoveredAsState()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+                                .hoverable(interaction)
+                                .clickable { showAllListsDialog = true }
+                                .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                        ) {
+                            Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("+$overflow more", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                        }
+                    }
+                }
             }
-            if (overflow > 0) {
-                val interaction = remember { MutableInteractionSource() }
-                val hovered by interaction.collectIsHoveredAsState()
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
-                        .hoverable(interaction)
-                        .clickable { showAllDialog = true }
-                        .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
-                ) {
-                    Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.size(12.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("+$overflow more", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+            SavedPanelTab.RESULTS -> {
+                val pinned   = savedResults.take(3)
+                val overflow = savedResults.size - 3
+                if (savedResults.isEmpty()) {
+                    Text(
+                        "No saved results yet\nSearch for cards then use the archive icon to save",
+                        fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.3f),
+                        modifier = Modifier.padding(start = 14.dp, bottom = 8.dp),
+                    )
+                } else {
+                    pinned.forEach { entry ->
+                        SavedResultRow(entry,
+                            onLoad   = { vm.loadSavedResult(entry.id) },
+                            onDelete = { vm.deleteSavedResult(entry.id) })
+                    }
+                    if (overflow > 0) {
+                        val interaction = remember { MutableInteractionSource() }
+                        val hovered by interaction.collectIsHoveredAsState()
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+                                .hoverable(interaction)
+                                .clickable { showAllResultsDialog = true }
+                                .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+                        ) {
+                            Icon(Icons.Default.ExpandMore, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(12.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("+$overflow more", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                        }
+                    }
                 }
             }
         }
     }
 
-    if (showSaveDialog) {
+    // ── Dialogs ────────────────────────────────────────────────────────────────
+
+    if (showSaveListDialog) {
         AlertDialog(
-            onDismissRequest = { showSaveDialog = false },
+            onDismissRequest = { showSaveListDialog = false },
             title = { Text("Save list", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
             text = {
                 OutlinedTextField(
-                    value = saveNameDraft,
-                    onValueChange = { saveNameDraft = it },
+                    value = saveListNameDraft,
+                    onValueChange = { saveListNameDraft = it },
                     label = { Text("List name", fontSize = 12.sp) },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -458,21 +541,78 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             },
             confirmButton = {
                 TextButton(
-                    onClick  = { vm.saveSearchList(saveNameDraft.trim()); showSaveDialog = false },
-                    enabled  = saveNameDraft.isNotBlank(),
+                    onClick = { vm.saveSearchList(saveListNameDraft.trim()); showSaveListDialog = false },
+                    enabled = saveListNameDraft.isNotBlank(),
                 ) { Text("Save", color = Primary) }
             },
             dismissButton = {
-                TextButton(onClick = { showSaveDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
+                TextButton(onClick = { showSaveListDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
             },
             containerColor    = SurfaceContainerLowest,
             titleContentColor = OnSurface,
         )
     }
 
-    // Edit dialog for pinned-row edits (outside the "view all" modal)
+    if (showSaveResultDialog) {
+        val listingCount = vm.results.count { it.title != null }
+        AlertDialog(
+            onDismissRequest = { showSaveResultDialog = false },
+            title = { Text("Save results", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    OutlinedTextField(
+                        value = saveResultName,
+                        onValueChange = { saveResultName = it },
+                        label = { Text("Name", fontSize = 12.sp) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor   = Primary,
+                            focusedLabelColor    = Primary,
+                            cursorColor          = Primary,
+                            unfocusedBorderColor = OutlineVariant,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = saveResultDesc,
+                        onValueChange = { saveResultDesc = it },
+                        label = { Text("Description (optional)", fontSize = 12.sp) },
+                        minLines = 2,
+                        maxLines = 4,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor   = Primary,
+                            focusedLabelColor    = Primary,
+                            cursorColor          = Primary,
+                            unfocusedBorderColor = OutlineVariant,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "${vm.searchedCards.size} cards · $listingCount listings",
+                        fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.saveCurrentResults(saveResultName.trim(), saveResultDesc.trim())
+                        showSaveResultDialog = false
+                    },
+                    enabled = saveResultName.isNotBlank(),
+                ) { Text("Save", color = Primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSaveResultDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+    }
+
+    // Edit dialog for pinned-row list edits (outside the "view all" modal)
     editingList?.let { target ->
-        if (!showAllDialog) {
+        if (!showAllListsDialog) {
             EditListDialog(
                 list      = target,
                 onSave    = { name, cards -> vm.saveEditedList(target.id, name, cards); editingList = null },
@@ -481,22 +621,20 @@ private fun SavedListsPanel(vm: SearchViewModel) {
         }
     }
 
-    if (showAllDialog) {
+    if (showAllListsDialog) {
         var modalEditTarget by remember { mutableStateOf<data.SavedSearchList?>(null) }
         AlertDialog(
-            onDismissRequest = { showAllDialog = false },
+            onDismissRequest = { showAllListsDialog = false },
             title = { Text("Saved lists", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
             text = {
                 LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp),
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
                     verticalArrangement = Arrangement.spacedBy(0.dp),
                 ) {
                     items(lists, key = { it.id }) { list ->
                         SavedListRow(
                             list     = list,
-                            onLoad   = { vm.loadSearchList(list); showAllDialog = false },
+                            onLoad   = { vm.loadSearchList(list); showAllListsDialog = false },
                             onDelete = { vm.deleteSearchList(list.id) },
                             onEdit   = { modalEditTarget = list },
                         )
@@ -506,7 +644,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { showAllDialog = false }) { Text("Close", color = OnSurfaceVariant) }
+                TextButton(onClick = { showAllListsDialog = false }) { Text("Close", color = OnSurfaceVariant) }
             },
             containerColor    = SurfaceContainerLowest,
             titleContentColor = OnSurface,
@@ -518,6 +656,34 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                 onDismiss = { modalEditTarget = null },
             )
         }
+    }
+
+    if (showAllResultsDialog) {
+        AlertDialog(
+            onDismissRequest = { showAllResultsDialog = false },
+            title = { Text("Saved results", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                    verticalArrangement = Arrangement.spacedBy(0.dp),
+                ) {
+                    items(savedResults, key = { it.id }) { entry ->
+                        SavedResultRow(
+                            entry    = entry,
+                            onLoad   = { vm.loadSavedResult(entry.id); showAllResultsDialog = false },
+                            onDelete = { vm.deleteSavedResult(entry.id) },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showAllResultsDialog = false }) { Text("Close", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
     }
 }
 
@@ -643,6 +809,59 @@ private fun SavedListRow(
             tint = if (hovered) ErrorColor else Color.Transparent,
             modifier = Modifier.size(12.dp).clickable(onClick = onDelete),
         )
+    }
+}
+
+@Composable
+private fun SavedResultRow(
+    entry: data.SavedResultEntry,
+    onLoad: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val dateStr = remember(entry.savedAt) {
+        java.text.SimpleDateFormat("d MMM ''yy, HH:mm").format(java.util.Date(entry.savedAt))
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+            .hoverable(interaction)
+            .clickable(onClick = onLoad)
+            .padding(start = 14.dp, end = 8.dp, top = 5.dp, bottom = 5.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Archive, null, tint = OnSurfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(12.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(
+                entry.name,
+                fontSize = 12.sp, color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Spacer(Modifier.width(4.dp))
+            Text("${entry.cardCount}", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                fontFamily = Mono)
+            Spacer(Modifier.width(4.dp))
+            Icon(
+                Icons.Default.Close, "Delete",
+                tint = if (hovered) ErrorColor else Color.Transparent,
+                modifier = Modifier.size(12.dp).clickable(onClick = onDelete),
+            )
+        }
+        Row(Modifier.padding(start = 18.dp)) {
+            Text(dateStr, fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.4f), fontFamily = Mono)
+            if (entry.description.isNotBlank()) {
+                Text(" · ", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.3f))
+                Text(
+                    entry.description,
+                    fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 

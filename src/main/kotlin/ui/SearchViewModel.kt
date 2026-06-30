@@ -4,6 +4,7 @@ import androidx.compose.runtime.*
 import data.AppDatabase
 import data.SearchListRepo
 import data.SearchResult
+import data.SearchResultRepo
 import data.STORES
 import data.luckshackSearchUrl
 import engine.runSearch
@@ -116,6 +117,58 @@ class SearchViewModel {
     // ── Saved search lists ─────────────────────────────────────────────────────
     val searchListRepo = SearchListRepo()
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
+
+    // ── Saved search results ───────────────────────────────────────────────────
+    val searchResultRepo = SearchResultRepo()
+    val savedResults: StateFlow<List<data.SavedResultEntry>> get() = searchResultRepo.entries
+
+    fun saveCurrentResults(name: String, description: String) {
+        val cards   = searchedCards.toList()
+        val current = results.toList()
+        if (cards.isEmpty() || current.isEmpty()) return
+        scope.launch(Dispatchers.IO) { searchResultRepo.save(name, description, cards, current) }
+    }
+
+    fun loadSavedResult(id: Int) {
+        searchJob?.cancel()
+        isSearching = false
+        scope.launch {
+            val loaded = withContext(Dispatchers.IO) { searchResultRepo.load(id) } ?: return@launch
+            val (cards, loadedResults) = loaded
+            // Populate the VM synchronously on the Swing thread before resolving images.
+            query         = cards.joinToString("\n")
+            searchedCards = cards
+            results.clear()
+            results.addAll(loadedResults)
+            images.clear()
+            storeStatuses.clear()
+            storeCardCounts.clear()
+            completedStores      = 0
+            completedCardChecks  = 0
+            totalCardChecks      = 0
+            totalStores          = 0
+            statusText = "Loaded — ${loadedResults.count { it.title != null }} listings"
+            // Images are disk-cached; resolve them async so the UI appears instantly.
+            val imageService = network.CardImageService()
+            try {
+                val titleHints = loadedResults.mapNotNull { r -> r.title?.let { it to r.setHint } }.toMap()
+                val cardKeys   = (cards + titleHints.keys.toList()).distinct()
+                    .filter { it !in titleHints }
+                val resolved1 = if (cardKeys.isNotEmpty())
+                    withContext(Dispatchers.IO) { imageService.resolveImages(cardKeys) } else emptyMap()
+                val resolved2 = if (titleHints.isNotEmpty())
+                    withContext(Dispatchers.IO) { imageService.resolveImages(titleHints) } else emptyMap()
+                val all = resolved1 + resolved2
+                if (all.isNotEmpty()) images.putAll(all)
+            } finally {
+                imageService.close()
+            }
+        }
+    }
+
+    fun deleteSavedResult(id: Int) {
+        scope.launch(Dispatchers.IO) { searchResultRepo.delete(id) }
+    }
 
     fun saveSearchList(name: String) {
         val cards = query.lines().map { it.trim() }.filter { it.isNotBlank() }

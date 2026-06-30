@@ -28,6 +28,18 @@ object SearchListCards : Table("search_list_cards") {
     override val primaryKey = PrimaryKey(listId, position)
 }
 
+// Snapshots of search results — each row is a named save-point the user can restore.
+object SavedResultSnapshots : Table("saved_result_snapshots") {
+    val id          = integer("id").autoIncrement()
+    val name        = text("name")
+    val description = text("description")  // optional user note
+    val savedAt     = long("saved_at")     // epoch ms
+    val cardCount   = integer("card_count")
+    val cardsJson   = text("cards_json")   // JSON List<String>
+    val resultsJson = text("results_json") // JSON List<SearchResult>
+    override val primaryKey = PrimaryKey(id)
+}
+
 // Persisted Cloudflare throttle rules — one row per store that has ever 429'd.
 // Tier escalates (1→2→3) on independent re-offences; decays by 1 per 7 days quiet.
 object CfThrottleRules : Table("cf_throttle_rules") {
@@ -60,7 +72,7 @@ object AppDatabase {
         )
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
-                Settings, SearchLists, SearchListCards, CfThrottleRules,
+                Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots,
             )
         }
         migrateFromPrefs()
