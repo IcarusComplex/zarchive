@@ -3215,10 +3215,10 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     wooCartLoading = true
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
-                                            if (idx > 0) delay(5000)
+                                            if (idx > 0) delay(6000)
                                             openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
                                         }
-                                        delay(5000)
+                                        delay(6000)
                                         openUrl(wooCartUrl)
                                         wooCartLoading = false
                                     }
@@ -3229,10 +3229,10 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     wooCartLoading = true
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
-                                            if (idx > 0) delay(1000)
+                                            if (idx > 0) delay(2000)
                                             openUrl("$base/cart.php?action=add&product_id=${line.listing.variantId}")
                                         }
-                                        delay(2000)
+                                        delay(3000)
                                         openUrl("$base/cart.php")
                                         wooCartLoading = false
                                     }
@@ -3244,10 +3244,10 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     wooCartLoading = true
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
-                                            if (idx > 0) delay(1000)
+                                            if (idx > 0) delay(2000)
                                             openUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=1&token=$token&action=update")
                                         }
-                                        delay(2000)
+                                        delay(3000)
                                         openUrl("$base/cart")
                                         wooCartLoading = false
                                     }
