@@ -290,24 +290,20 @@ private fun LeftPanel(vm: SearchViewModel) {
         HorizontalDivider(color = OutlineVariant)
 
         var showOptionsDialog by remember { mutableStateOf(false) }
-        Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            shape = RoundedCornerShape(4.dp),
-            color = Color.Transparent,
-            border = BorderStroke(1.dp, OutlineVariant),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+                .height(28.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                .clickable { showOptionsDialog = true },
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { showOptionsDialog = true }
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
-            ) {
-                Icon(Icons.Default.Settings, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Search Options", fontSize = 12.sp, color = OnSurfaceVariant)
-            }
+            Icon(Icons.Default.Settings, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(6.dp))
+            Text("Search Options", fontSize = 12.sp, color = OnSurfaceVariant)
         }
         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
         if (showOptionsDialog) {
