@@ -27,6 +27,9 @@ class SearchViewModel {
     var completedStores by mutableStateOf(0)
     var searchedCards by mutableStateOf<List<String>>(emptyList())
     var totalStores by mutableStateOf(STORES.size)
+    // Progress counters: every card-store completion increments completedCardChecks.
+    var completedCardChecks by mutableStateOf(0)
+    var totalCardChecks by mutableStateOf(0)
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
     // How many card-queries have returned for each store (i.e. how many out of searchedCards.size).
     val storeCardCounts = mutableStateMapOf<String, Int>()
@@ -227,6 +230,8 @@ class SearchViewModel {
         results.clear()
         images.clear()
         completedStores = 0
+        completedCardChecks = 0
+        totalCardChecks = cards.size * storesToSearch.size
         totalStores = storesToSearch.size
         storeStatuses.clear()
         storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
@@ -269,6 +274,8 @@ class SearchViewModel {
                             rows.firstOrNull()?.store?.takeIf { it.isNotBlank() }?.let { store ->
                                 storeCardCounts[store] = (storeCardCounts[store] ?: 0) + 1
                             }
+                            completedCardChecks++
+                            statusText = "Checked $completedCardChecks / $totalCardChecks cards"
                         }
                         val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
                             .filter { (title, _) -> requestedTitles.add(title) }
@@ -286,7 +293,6 @@ class SearchViewModel {
                         withContext(Dispatchers.Swing) {
                             storeStatuses[storeName] = StoreStatus.DONE
                             completedStores++
-                            statusText = "Checked $completedStores / $totalStores stores"
                         }
                     },
                 )

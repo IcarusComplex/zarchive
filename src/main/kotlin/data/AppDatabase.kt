@@ -28,6 +28,25 @@ object SearchListCards : Table("search_list_cards") {
     override val primaryKey = PrimaryKey(listId, position)
 }
 
+// Persisted Cloudflare throttle rules — one row per store that has ever 429'd.
+// Tier escalates (1→2→3) on independent re-offences; decays by 1 per 7 days quiet.
+object CfThrottleRules : Table("cf_throttle_rules") {
+    val baseUrl       = text("base_url")
+    val cardThreshold = integer("card_threshold") // throttle only if search >= this
+    val tier          = integer("tier")           // 1 / 2 / 3
+    val lastHitAt     = long("last_hit_at")       // epoch ms of most-recent 429
+    val lastHitCards  = integer("last_hit_cards") // card count at that time
+    override val primaryKey = PrimaryKey(baseUrl)
+}
+
+// ── Domain object returned by loadActiveCfRules ────────────────────────────────
+
+data class CfThrottleRule(
+    val baseUrl: String,
+    val cardThreshold: Int,
+    val effectiveTier: Int,  // stored tier minus decay periods
+)
+
 // ── Singleton ──────────────────────────────────────────────────────────────────
 
 object AppDatabase {
@@ -40,7 +59,9 @@ object AppDatabase {
             driver = "org.h2.Driver",
         )
         transaction {
-            SchemaUtils.createMissingTablesAndColumns(Settings, SearchLists, SearchListCards)
+            SchemaUtils.createMissingTablesAndColumns(
+                Settings, SearchLists, SearchListCards, CfThrottleRules,
+            )
         }
         migrateFromPrefs()
     }
@@ -61,6 +82,73 @@ object AppDatabase {
     }
 
     fun setSettingBoolean(key: String, value: Boolean) = setSetting(key, value.toString())
+
+    // ── CF throttle rules ──────────────────────────────────────────────────────
+
+    /**
+     * Load all active throttle rules, applying tier decay (−1 per 7 days quiet) and
+     * deleting fully-decayed entries. Returns a map of baseUrl → rule.
+     */
+    fun loadActiveCfRules(): Map<String, CfThrottleRule> = transaction {
+        val now         = System.currentTimeMillis()
+        val sevenDaysMs = 7L * 24 * 60 * 60 * 1_000
+
+        // The table has at most one row per store (~19 rows), so we filter in Kotlin.
+        // Rules with effectiveTier <= 0 have fully decayed and are treated as absent.
+        CfThrottleRules.selectAll().mapNotNull { row ->
+            val storedTier    = row[CfThrottleRules.tier]
+            val lastHitAt     = row[CfThrottleRules.lastHitAt]
+            val decayPeriods  = ((now - lastHitAt) / sevenDaysMs).toInt()
+            val effectiveTier = storedTier - decayPeriods
+            if (effectiveTier <= 0) null
+            else CfThrottleRule(
+                baseUrl       = row[CfThrottleRules.baseUrl],
+                cardThreshold = row[CfThrottleRules.cardThreshold],
+                effectiveTier = effectiveTier,
+            )
+        }.associateBy { it.baseUrl }
+    }
+
+    /**
+     * Record a 429 hit for [baseUrl] that occurred during a [cardCount]-card search.
+     *
+     * - First hit: tier 1, threshold = max(1, cardCount − 5).
+     * - Subsequent hit > 2 h after the last: escalate tier (max 3), take the stricter threshold.
+     * - Subsequent hit ≤ 2 h after the last: still within the original cooldown window —
+     *   update timestamp to reset the window but do not escalate.
+     */
+    fun recordCfBlock(baseUrl: String, cardCount: Int): Unit = transaction {
+        val newThreshold = maxOf(1, cardCount - 5)
+        val now          = System.currentTimeMillis()
+        val twoHoursMs   = 2L * 60 * 60 * 1_000
+
+        val existing = CfThrottleRules.selectAll()
+            .where { CfThrottleRules.baseUrl eq baseUrl }
+            .firstOrNull()
+
+        if (existing == null) {
+            CfThrottleRules.insert {
+                it[CfThrottleRules.baseUrl]       = baseUrl
+                it[CfThrottleRules.cardThreshold] = newThreshold
+                it[CfThrottleRules.tier]          = 1
+                it[CfThrottleRules.lastHitAt]     = now
+                it[CfThrottleRules.lastHitCards]  = cardCount
+            }
+        } else {
+            val storedTier   = existing[CfThrottleRules.tier]
+            val lastHitAt    = existing[CfThrottleRules.lastHitAt]
+            val isNewEvent   = (now - lastHitAt) > twoHoursMs
+            val newTier      = if (isNewEvent) minOf(3, storedTier + 1) else storedTier
+            val strictThresh = maxOf(1, minOf(existing[CfThrottleRules.cardThreshold], newThreshold))
+
+            CfThrottleRules.update({ CfThrottleRules.baseUrl eq baseUrl }) {
+                it[CfThrottleRules.cardThreshold] = strictThresh
+                it[CfThrottleRules.tier]          = newTier
+                it[CfThrottleRules.lastHitAt]     = now
+                it[CfThrottleRules.lastHitCards]  = cardCount
+            }
+        }
+    }
 
     // ── Prefs migration ────────────────────────────────────────────────────────
 

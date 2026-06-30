@@ -1177,7 +1177,7 @@ private fun StatusRow(vm: SearchViewModel) {
     Column {
         if (vm.isSearching) {
             LinearProgressIndicator(
-                progress = { if (vm.totalStores == 0) 0f else vm.completedStores.toFloat() / vm.totalStores },
+                progress = { if (vm.totalCardChecks == 0) 0f else vm.completedCardChecks.toFloat() / vm.totalCardChecks },
                 modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(2.dp)),
                 color = Primary,
                 trackColor = SurfaceContainerHighest,
