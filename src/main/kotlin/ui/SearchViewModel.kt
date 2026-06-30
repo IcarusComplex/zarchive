@@ -135,7 +135,14 @@ class SearchViewModel {
         val cards   = searchedCards.toList()
         val current = results.toList()
         if (cards.isEmpty() || current.isEmpty()) return
-        scope.launch(Dispatchers.IO) { searchResultRepo.save(name, description, cards, current) }
+        scope.launch(Dispatchers.IO) {
+            searchResultRepo.save(
+                name, description, cards, current,
+                excludedCards    = excludedCards.keys.toSet(),
+                uncheckedLines   = uncheckedOrderLines.keys.toSet(),
+                pinnedListings   = pinnedListings.toMap(),
+            )
+        }
     }
 
     fun loadSavedResult(id: Int) {
@@ -143,7 +150,8 @@ class SearchViewModel {
         isSearching = false
         scope.launch {
             val loaded = withContext(Dispatchers.IO) { searchResultRepo.load(id) } ?: return@launch
-            val (cards, loadedResults) = loaded
+            val cards        = loaded.cards
+            val loadedResults = loaded.results
             // Populate the VM synchronously on the Swing thread before resolving images.
             query         = cards.joinToString("\n")
             searchedCards = cards
@@ -156,19 +164,44 @@ class SearchViewModel {
             completedCardChecks  = 0
             totalCardChecks      = 0
             totalStores          = 0
+            // Restore order-list UI state
+            excludedCards.clear()
+            loaded.excludedCards.forEach { excludedCards[it] = Unit }
+            uncheckedOrderLines.clear()
+            loaded.uncheckedLines.forEach { uncheckedOrderLines[it] = Unit }
+            pinnedListings.clear()
+            pinnedListings.putAll(loaded.pinnedListings)
             statusText = "Loaded — ${loadedResults.count { it.title != null }} listings"
-            // Images are disk-cached; resolve them async so the UI appears instantly.
+            // Resolve images per-store in parallel (mirrors live-search behaviour) so
+            // thumbnails trickle in one store-group at a time instead of all at once.
             val imageService = network.CardImageService()
             try {
-                val titleHints = loadedResults.mapNotNull { r -> r.title?.let { it to r.setHint } }.toMap()
-                val cardKeys   = (cards + titleHints.keys.toList()).distinct()
-                    .filter { it !in titleHints }
-                val resolved1 = if (cardKeys.isNotEmpty())
-                    withContext(Dispatchers.IO) { imageService.resolveImages(cardKeys) } else emptyMap()
-                val resolved2 = if (titleHints.isNotEmpty())
-                    withContext(Dispatchers.IO) { imageService.resolveImages(titleHints) } else emptyMap()
-                val all = resolved1 + resolved2
-                if (all.isNotEmpty()) images.putAll(all)
+                val seenTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+                // Card-name arts (fallback thumbnails) — one batch, runs concurrently with stores
+                val cardNamesJob = scope.launch(Dispatchers.IO) {
+                    val keys = cards.filter { seenTitles.add(it) }
+                    if (keys.isEmpty()) return@launch
+                    val resolved = imageService.resolveImages(keys)
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                }
+
+                // Listing-title arts grouped by store — each store is its own concurrent batch
+                val storeJobs = loadedResults
+                    .filter { it.title != null }
+                    .groupBy { it.store }
+                    .map { (_, storeResults) ->
+                        scope.launch(Dispatchers.IO) {
+                            val hints = storeResults
+                                .mapNotNull { r -> r.title?.takeIf { seenTitles.add(it) }?.let { it to r.setHint } }
+                                .toMap()
+                            if (hints.isEmpty()) return@launch
+                            val resolved = imageService.resolveImages(hints)
+                            if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                        }
+                    }
+
+                (storeJobs + cardNamesJob).forEach { it.join() }
             } finally {
                 imageService.close()
             }

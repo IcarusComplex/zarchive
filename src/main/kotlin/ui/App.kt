@@ -41,10 +41,12 @@ import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.*
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
 import androidx.compose.foundation.window.WindowDraggableArea
@@ -1317,7 +1319,7 @@ private fun AddToSearchDialog(
             shape = RoundedCornerShape(8.dp),
             color = SurfaceContainerLow,
             border = BorderStroke(1.dp, OutlineVariant),
-            modifier = Modifier.width(380.dp),
+            modifier = Modifier.width(500.dp),
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
@@ -1327,11 +1329,11 @@ private fun AddToSearchDialog(
                 Text(
                     "$existingCount card${if (existingCount == 1) "" else "s"} already in results. " +
                     "Your query has $newCount new card${if (newCount == 1) "" else "s"}.",
-                    fontSize = 13.sp, color = OnSurface,
+                    fontSize = 13.sp, color = OnSurface, softWrap = false,
                 )
                 Text(
-                    "Search only the new cards and keep existing results, or start fresh for all $totalCount?",
-                    fontSize = 12.sp, color = OnSurfaceVariant,
+                    "Search the $newCount new card${if (newCount == 1) "" else "s"} only, or start fresh for all $totalCount?",
+                    fontSize = 12.sp, color = OnSurfaceVariant, softWrap = false,
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1369,7 +1371,7 @@ private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismi
             shape = RoundedCornerShape(8.dp),
             color = SurfaceContainerLow,
             border = BorderStroke(1.dp, OutlineVariant),
-            modifier = Modifier.width(360.dp),
+            modifier = Modifier.width(480.dp),
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
@@ -1378,11 +1380,11 @@ private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismi
                 )
                 Text(
                     "All $count card${if (count == 1) "" else "s"} in your query are already in the current results.",
-                    fontSize = 13.sp, color = OnSurface,
+                    fontSize = 13.sp, color = OnSurface, softWrap = false,
                 )
                 Text(
                     "Keep what you have, or discard and re-search everything?",
-                    fontSize = 12.sp, color = OnSurfaceVariant,
+                    fontSize = 12.sp, color = OnSurfaceVariant, softWrap = false,
                 )
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1409,10 +1411,22 @@ private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismi
 
 @Composable
 private fun SearchSummaryDialog(vm: SearchViewModel) {
-    val foundCards = remember(vm.results.size) {
-        vm.results.filter { it.title != null }.map { it.card }.toSet()
+    data class CardBuckets(val inStock: Set<String>, val outOfStock: Set<String>, val notFound: List<String>)
+    val buckets = remember(vm.results.size) {
+        val byCard = vm.results.groupBy { it.card }
+        val inStock = mutableSetOf<String>()
+        val outOfStock = mutableSetOf<String>()
+        for (card in vm.searchedCards) {
+            val listings = byCard[card] ?: emptyList()
+            val hasInStock = listings.any { it.title != null && it.available != false }
+            val hasTitle = listings.any { it.title != null }
+            when {
+                hasInStock -> inStock.add(card)
+                hasTitle   -> outOfStock.add(card)
+            }
+        }
+        CardBuckets(inStock, outOfStock, vm.searchedCards.filter { it !in inStock && it !in outOfStock })
     }
-    val notFoundCards = vm.searchedCards.filter { it !in foundCards }
     val cfStores = vm.cfBlockedStores.toList()
     val totalCards = vm.searchedCards.size
 
@@ -1433,11 +1447,21 @@ private fun SearchSummaryDialog(vm: SearchViewModel) {
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            "${foundCards.size}/$totalCards",
+                            "${buckets.inStock.size}/$totalCards",
                             fontFamily = Mono, fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                            color = if (foundCards.size == totalCards) Tertiary else Primary,
+                            color = if (buckets.inStock.size == totalCards) Tertiary else Primary,
                         )
-                        Text("cards found", fontSize = 11.sp, color = OnSurfaceVariant)
+                        Text("in stock", fontSize = 11.sp, color = OnSurfaceVariant)
+                    }
+                    if (buckets.outOfStock.isNotEmpty()) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                "${buckets.outOfStock.size}",
+                                fontFamily = Mono, fontSize = 18.sp, fontWeight = FontWeight.Bold,
+                                color = ErrorColor,
+                            )
+                            Text("out of stock", fontSize = 11.sp, color = OnSurfaceVariant)
+                        }
                     }
                     if (cfStores.isNotEmpty()) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -1451,15 +1475,32 @@ private fun SearchSummaryDialog(vm: SearchViewModel) {
                     }
                 }
 
+                // Out-of-stock cards (found but no available listings)
+                if (buckets.outOfStock.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "Out of stock everywhere:",
+                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                            color = ErrorColor.copy(alpha = 0.9f),
+                        )
+                        buckets.outOfStock.forEach { card ->
+                            Text(
+                                "· $card",
+                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+                }
+
                 // Not-found cards
-                if (notFoundCards.isNotEmpty()) {
+                if (buckets.notFound.isNotEmpty()) {
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
                             "No listings found:",
                             fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
                             color = OnSurfaceVariant,
                         )
-                        notFoundCards.forEach { card ->
+                        buckets.notFound.forEach { card ->
                             Text(
                                 "· $card",
                                 fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
@@ -1693,7 +1734,10 @@ private fun StatusRow(vm: SearchViewModel) {
             ) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     val entries = vm.storeStatuses.entries.toList()
-                    val total = vm.searchedCards.size
+                    // Per-store card count for this batch — totalCardChecks / totalStores gives
+                    // the cards being searched right now, not the cumulative searchedCards count
+                    // (which grows when loading saved results + adding new cards).
+                    val total = if (vm.totalStores > 0) vm.totalCardChecks / vm.totalStores else vm.searchedCards.size
                     entries.chunked(2).forEach { pair ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             pair.forEach { (store, status) ->
@@ -1779,6 +1823,11 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
         }
         return
     }
+    // Hoist scroll + summary state here so tab switches don't reset them.
+    val listState       = rememberLazyListState()
+    var summaryExpanded by remember { mutableStateOf(true) }
+    var summaryFilter   by remember { mutableStateOf("") }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -1798,7 +1847,11 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
             Text("Preview card art on thumbnail hover only", fontSize = 12.sp, color = OnSurfaceVariant)
         }
         when (tab) {
-            ResultsTab.RESULTS -> SearchResultsTab(vm)
+            ResultsTab.RESULTS -> SearchResultsTab(
+                vm, listState,
+                summaryExpanded, { summaryExpanded = it },
+                summaryFilter,   { summaryFilter   = it },
+            )
             ResultsTab.ORDERS  -> OrderListsPane(vm)
         }
     }
@@ -1909,8 +1962,14 @@ private fun LuckshackLinks(cards: List<String>) {
 }
 
 @Composable
-private fun SearchResultsTab(vm: SearchViewModel) {
-    val listState = rememberLazyListState()
+private fun SearchResultsTab(
+    vm: SearchViewModel,
+    listState: LazyListState,
+    summaryExpanded: Boolean,
+    onSummaryExpandedChange: (Boolean) -> Unit,
+    summaryFilter: String,
+    onSummaryFilterChange: (String) -> Unit,
+) {
     val scope = rememberCoroutineScope()
 
     // Summary tracks the full searched list from the moment search() fires.
@@ -1930,6 +1989,10 @@ private fun SearchResultsTab(vm: SearchViewModel) {
                     if (idx >= 0) scope.launch { listState.scrollToItem(idx) }
                 },
                 includePartialMatches = vm.includePartialMatches,
+                expanded = summaryExpanded,
+                onExpandedChange = onSummaryExpandedChange,
+                filter = summaryFilter,
+                onFilterChange = onSummaryFilterChange,
             )
         }
         if (resultCards.isNotEmpty()) {
@@ -2639,8 +2702,41 @@ private fun CardThumbnail(path: String?, dimmed: Boolean) {
                 colorFilter = if (dimmed) grayscaleFilter else null,
                 modifier = Modifier.fillMaxSize(),
             )
+        } else if (path != null) {
+            // Image path is known but not yet loaded — show a shimmer placeholder
+            ShimmerOverlay()
         }
     }
+}
+
+@Composable
+private fun ShimmerOverlay() {
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val progress by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 800, easing = LinearEasing),
+        ),
+        label = "shimmerProgress",
+    )
+    // Sweep a faint highlight band diagonally across the placeholder
+    val sweep = progress * 900f
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0f),
+                        Color.White.copy(alpha = 0.06f),
+                        Color.White.copy(alpha = 0f),
+                    ),
+                    start = Offset(sweep - 250f, 0f),
+                    end = Offset(sweep, 400f),
+                )
+            )
+    )
 }
 
 // MTG card aspect ratio ≈ 63×88mm
@@ -2670,9 +2766,12 @@ private fun CardSummaryPanel(
     isSearching: Boolean,
     onCardClick: (String) -> Unit,
     includePartialMatches: Boolean = false,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    filter: String,
+    onFilterChange: (String) -> Unit,
 ) {
-    var expanded by remember { mutableStateOf(true) }
-    var summaryFilter by remember { mutableStateOf("") }
+    val summaryFilter = filter
     val filterQ = summaryFilter.trim().lowercase()
     val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
     val foundCount = cards.count { card ->
@@ -2692,7 +2791,7 @@ private fun CardSummaryPanel(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { expanded = !expanded }
+                    .clickable { onExpandedChange(!expanded) }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
                 Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
@@ -2731,7 +2830,7 @@ private fun CardSummaryPanel(
                 Column {
                     HorizontalDivider(color = OutlineVariant.copy(alpha = 0.6f))
                     Box(Modifier.padding(start = 8.dp, end = 8.dp, top = 8.dp)) {
-                        FilterField(summaryFilter, placeholder = "Find a card in the list…") { summaryFilter = it }
+                        FilterField(summaryFilter, placeholder = "Find a card in the list…") { onFilterChange(it) }
                     }
                     if (shownCards.isEmpty()) {
                         Box(
@@ -2825,7 +2924,7 @@ private fun CardSummaryEntry(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
-                .background(if (hoveredRaw) SurfaceContainerHigh else SurfaceContainerHighest)
+                .background(SurfaceContainerHighest)
                 .hoverable(interaction)
                 .clickable { onClick() }
                 .padding(horizontal = 8.dp, vertical = 5.dp),
@@ -2849,7 +2948,7 @@ private fun CardSummaryEntry(
             Spacer(Modifier.width(4.dp))
             Icon(
                 Icons.Default.KeyboardArrowRight, null,
-                tint = if (hoveredRaw) Primary else OnSurfaceVariant.copy(alpha = 0.3f),
+                tint = OnSurfaceVariant.copy(alpha = 0.3f),
                 modifier = Modifier.size(14.dp),
             )
         }

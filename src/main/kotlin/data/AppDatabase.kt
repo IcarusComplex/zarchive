@@ -30,13 +30,16 @@ object SearchListCards : Table("search_list_cards") {
 
 // Snapshots of search results — each row is a named save-point the user can restore.
 object SavedResultSnapshots : Table("saved_result_snapshots") {
-    val id          = integer("id").autoIncrement()
-    val name        = text("name")
-    val description = text("description")  // optional user note
-    val savedAt     = long("saved_at")     // epoch ms
-    val cardCount   = integer("card_count")
-    val cardsJson   = text("cards_json")   // JSON List<String>
-    val resultsJson = text("results_json") // JSON List<SearchResult>
+    val id                 = integer("id").autoIncrement()
+    val name               = text("name")
+    val description        = text("description")           // optional user note
+    val savedAt            = long("saved_at")              // epoch ms
+    val cardCount          = integer("card_count")
+    val cardsJson          = text("cards_json")            // JSON List<String>
+    val resultsJson        = text("results_json")          // JSON List<SearchResult>
+    val excludedCardsJson  = text("excluded_cards_json").nullable()   // JSON Set<String>
+    val uncheckedLinesJson = text("unchecked_lines_json").nullable()  // JSON Set<String> (URLs)
+    val pinnedListingsJson = text("pinned_listings_json").nullable()  // JSON Map<String,String>
     override val primaryKey = PrimaryKey(id)
 }
 

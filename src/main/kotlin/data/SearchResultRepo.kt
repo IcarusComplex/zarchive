@@ -18,6 +18,14 @@ data class SavedResultEntry(
     val cardCount: Int,
 )
 
+data class LoadedResultSnapshot(
+    val cards: List<String>,
+    val results: List<SearchResult>,
+    val excludedCards: Set<String>,
+    val uncheckedLines: Set<String>,
+    val pinnedListings: Map<String, String>,
+)
+
 class SearchResultRepo {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -47,33 +55,46 @@ class SearchResultRepo {
         description: String,
         cards: List<String>,
         results: List<SearchResult>,
+        excludedCards: Set<String>,
+        uncheckedLines: Set<String>,
+        pinnedListings: Map<String, String>,
     ): Unit = withContext(Dispatchers.IO) {
         val n = name; val d = description; val now = System.currentTimeMillis()
-        val cardsEnc   = json.encodeToString(cards)
-        val resultsEnc = json.encodeToString(results)
+        val cardsEnc    = json.encodeToString(cards)
+        val resultsEnc  = json.encodeToString(results)
+        val excludedEnc = json.encodeToString(excludedCards.toList())
+        val uncheckedEnc = json.encodeToString(uncheckedLines.toList())
+        val pinnedEnc   = json.encodeToString(pinnedListings)
         transaction {
             SavedResultSnapshots.insert {
-                it[SavedResultSnapshots.name]        = n
-                it[SavedResultSnapshots.description] = d
-                it[SavedResultSnapshots.savedAt]     = now
-                it[SavedResultSnapshots.cardCount]   = cards.size
-                it[SavedResultSnapshots.cardsJson]   = cardsEnc
-                it[SavedResultSnapshots.resultsJson] = resultsEnc
+                it[SavedResultSnapshots.name]               = n
+                it[SavedResultSnapshots.description]        = d
+                it[SavedResultSnapshots.savedAt]            = now
+                it[SavedResultSnapshots.cardCount]          = cards.size
+                it[SavedResultSnapshots.cardsJson]          = cardsEnc
+                it[SavedResultSnapshots.resultsJson]        = resultsEnc
+                it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
+                it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
+                it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
             }
         }
         refresh()
     }
 
-    suspend fun load(id: Int): Pair<List<String>, List<SearchResult>>? = withContext(Dispatchers.IO) {
+    suspend fun load(id: Int): LoadedResultSnapshot? = withContext(Dispatchers.IO) {
         val lid = id
         val row = transaction {
             SavedResultSnapshots.selectAll()
                 .where { SavedResultSnapshots.id eq lid }
                 .firstOrNull()
         } ?: return@withContext null
-        val cards   = json.decodeFromString<List<String>>(row[SavedResultSnapshots.cardsJson])
-        val results = json.decodeFromString<List<SearchResult>>(row[SavedResultSnapshots.resultsJson])
-        cards to results
+        LoadedResultSnapshot(
+            cards          = json.decodeFromString(row[SavedResultSnapshots.cardsJson]),
+            results        = json.decodeFromString(row[SavedResultSnapshots.resultsJson]),
+            excludedCards  = json.decodeFromString<List<String>>(row[SavedResultSnapshots.excludedCardsJson] ?: "[]").toSet(),
+            uncheckedLines = json.decodeFromString<List<String>>(row[SavedResultSnapshots.uncheckedLinesJson] ?: "[]").toSet(),
+            pinnedListings = json.decodeFromString(row[SavedResultSnapshots.pinnedListingsJson] ?: "{}"),
+        )
     }
 
     suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {

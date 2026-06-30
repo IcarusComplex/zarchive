@@ -28,7 +28,10 @@ private fun readAndClearCrashLog(): String? {
     if (!crashLog.exists() || crashLog.length() == 0L) return null
     return runCatching {
         val content = crashLog.readText().trim()
-        crashLog.delete()
+        // Delete before returning so the dialog never repeats next launch.
+        // If delete fails (file locked etc.) clear the content instead so it
+        // stays empty and is skipped on the next check.
+        if (!crashLog.delete()) crashLog.writeText("")
         content.ifEmpty { null }
     }.getOrNull()
 }
