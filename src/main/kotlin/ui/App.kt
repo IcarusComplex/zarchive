@@ -391,22 +391,36 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     var saveResultDesc       by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxWidth()) {
-        // Header: tab toggles on the left, context-sensitive save icon on the right
+        // Header: segmented tab control on the left, context-sensitive save icon on the right
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(start = 14.dp, end = 8.dp, top = 8.dp, bottom = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
         ) {
-            SavedPanelTab.entries.forEachIndexed { i, tab ->
-                val isActive = activeTab == tab
-                Text(
-                    if (tab == SavedPanelTab.LISTS) "Lists" else "Results",
-                    fontSize = 11.sp,
-                    fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isActive) Primary else OnSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier
-                        .clickable { activeTab = tab }
-                        .padding(end = if (i == 0) 10.dp else 0.dp),
-                )
+            // Segmented control
+            Row(
+                modifier = Modifier
+                    .height(IntrinsicSize.Min)
+                    .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(4.dp)),
+            ) {
+                SavedPanelTab.entries.forEachIndexed { i, tab ->
+                    val isActive = activeTab == tab
+                    if (i > 0) VerticalDivider(color = OutlineVariant, modifier = Modifier.fillMaxHeight())
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .background(if (isActive) SurfaceContainerHighest else Color.Transparent)
+                            .clickable { activeTab = tab }
+                            .padding(horizontal = 12.dp, vertical = 5.dp),
+                    ) {
+                        Text(
+                            if (tab == SavedPanelTab.LISTS) "Lists" else "Results",
+                            fontSize = 11.sp,
+                            fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (isActive) Primary else OnSurfaceVariant.copy(alpha = 0.5f),
+                        )
+                    }
+                }
             }
             Spacer(Modifier.weight(1f))
             @OptIn(ExperimentalFoundationApi::class)
