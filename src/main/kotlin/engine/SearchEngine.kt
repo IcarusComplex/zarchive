@@ -34,8 +34,8 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
     companion object {
         val NONE  = ThrottleProfile(2, 0L)
         val TIER1 = ThrottleProfile(2, 700L)
-        val TIER2 = ThrottleProfile(1, 1_500L)
-        val TIER3 = ThrottleProfile(1, 2_500L)
+        val TIER2 = ThrottleProfile(1, 1_000L)
+        val TIER3 = ThrottleProfile(1, 2_000L)
         fun forTier(tier: Int): ThrottleProfile = when (tier) {
             1    -> TIER1
             2    -> TIER2

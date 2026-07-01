@@ -1107,7 +1107,6 @@ private fun SettingsCheckItem(
     val hovered by interaction.collectIsHoveredAsState()
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
@@ -1116,22 +1115,19 @@ private fun SettingsCheckItem(
             .clickable { onCheckedChange(!checked) }
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = null,
-            colors = CheckboxDefaults.colors(
-                checkedColor = Primary,
-                checkmarkColor = OnPrimary,
-                uncheckedColor = OnSurfaceVariant.copy(alpha = 0.5f),
-            ),
-            modifier = Modifier.size(18.dp),
-        )
-        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(label, fontSize = 13.sp, color = OnSurface)
             if (sublabel != null) {
                 Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
             }
         }
+        Spacer(Modifier.width(10.dp))
+        Icon(
+            if (checked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+            contentDescription = null,
+            tint = if (checked) Primary else OnSurfaceVariant.copy(alpha = 0.5f),
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -1435,7 +1431,7 @@ private fun SearchSummaryDialog(vm: SearchViewModel) {
             shape = RoundedCornerShape(8.dp),
             color = SurfaceContainerLow,
             border = BorderStroke(1.dp, OutlineVariant),
-            modifier = Modifier.width(400.dp),
+            modifier = Modifier.width(400.dp).heightIn(max = 560.dp),
         ) {
             Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
@@ -1443,7 +1439,7 @@ private fun SearchSummaryDialog(vm: SearchViewModel) {
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
                 )
 
-                // Stats row
+                // Stats row — always visible, not scrolled
                 Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -1475,60 +1471,63 @@ private fun SearchSummaryDialog(vm: SearchViewModel) {
                     }
                 }
 
-                // Out-of-stock cards (found but no available listings)
-                if (buckets.outOfStock.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "Out of stock everywhere:",
-                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                            color = ErrorColor.copy(alpha = 0.9f),
-                        )
-                        buckets.outOfStock.forEach { card ->
-                            Text(
-                                "· $card",
-                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
-                            )
+                // Scrollable detail sections
+                val scrollState = rememberScrollState()
+                Box(Modifier.weight(1f, fill = false)) {
+                    Column(
+                        Modifier.verticalScroll(scrollState).padding(end = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        if (buckets.outOfStock.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "Out of stock everywhere:",
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    color = ErrorColor.copy(alpha = 0.9f),
+                                )
+                                buckets.outOfStock.forEach { card ->
+                                    Text("· $card", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                                }
+                            }
+                        }
+                        if (buckets.notFound.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "No listings found:",
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    color = OnSurfaceVariant,
+                                )
+                                buckets.notFound.forEach { card ->
+                                    Text("· $card", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                                }
+                            }
+                        }
+                        if (cfStores.isNotEmpty()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "Rate limited — results may be incomplete:",
+                                    fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    color = ErrorColor.copy(alpha = 0.9f),
+                                )
+                                cfStores.forEach { store ->
+                                    Text("· $store", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+                                }
+                                Text(
+                                    "Cloudflare blocked these stores mid-search. Try again with fewer cards, " +
+                                    "or search them individually.",
+                                    fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
+                                )
+                            }
                         }
                     }
-                }
-
-                // Not-found cards
-                if (buckets.notFound.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "No listings found:",
-                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                            color = OnSurfaceVariant,
-                        )
-                        buckets.notFound.forEach { card ->
-                            Text(
-                                "· $card",
-                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
-                            )
-                        }
-                    }
-                }
-
-                // CF-blocked stores
-                if (cfStores.isNotEmpty()) {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(
-                            "Rate limited — results may be incomplete:",
-                            fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
-                            color = ErrorColor.copy(alpha = 0.9f),
-                        )
-                        cfStores.forEach { store ->
-                            Text(
-                                "· $store",
-                                fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
-                            )
-                        }
-                        Text(
-                            "Cloudflare blocked these stores mid-search. Try again with fewer cards, " +
-                            "or search them individually.",
-                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f),
-                        )
-                    }
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(scrollState),
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        style = LocalScrollbarStyle.current.copy(
+                            unhoverColor = Primary.copy(alpha = 0.25f),
+                            hoverColor   = Primary.copy(alpha = 0.55f),
+                        ),
+                    )
                 }
 
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
@@ -1734,10 +1733,7 @@ private fun StatusRow(vm: SearchViewModel) {
             ) {
                 Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     val entries = vm.storeStatuses.entries.toList()
-                    // Per-store card count for this batch — totalCardChecks / totalStores gives
-                    // the cards being searched right now, not the cumulative searchedCards count
-                    // (which grows when loading saved results + adding new cards).
-                    val total = if (vm.totalStores > 0) vm.totalCardChecks / vm.totalStores else vm.searchedCards.size
+                    val total = vm.searchedCards.size
                     entries.chunked(2).forEach { pair ->
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             pair.forEach { (store, status) ->
@@ -1831,21 +1827,21 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
     Column(Modifier.fillMaxSize()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 6.dp),
+            modifier = Modifier
+                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                    vm.hoverOnThumbnailOnly = !vm.hoverOnThumbnailOnly
+                },
         ) {
-            Checkbox(
-                checked = vm.hoverOnThumbnailOnly,
-                onCheckedChange = { vm.hoverOnThumbnailOnly = it },
-                modifier = Modifier.size(16.dp),
-                colors = CheckboxDefaults.colors(
-                    checkedColor = Primary,
-                    uncheckedColor = OutlineVariant,
-                    checkmarkColor = Color(0xFF3C2F00),
-                ),
-            )
-            Spacer(Modifier.width(8.dp))
             Text("Preview card art on thumbnail hover only", fontSize = 12.sp, color = OnSurfaceVariant)
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (vm.hoverOnThumbnailOnly) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                tint = if (vm.hoverOnThumbnailOnly) Primary else OutlineVariant,
+                modifier = Modifier.size(16.dp),
+            )
         }
+        Spacer(Modifier.height(6.dp))
         when (tab) {
             ResultsTab.RESULTS -> SearchResultsTab(
                 vm, listState,
@@ -1995,6 +1991,8 @@ private fun SearchResultsTab(
                 onExpandedChange = onSummaryExpandedChange,
                 filter = summaryFilter,
                 onFilterChange = onSummaryFilterChange,
+                showCardOnHover = vm.showCardOnHover,
+                onShowCardOnHoverChange = { vm.showCardOnHover = it },
             )
         }
         if (resultCards.isNotEmpty()) {
@@ -2095,30 +2093,25 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
-                                .clickable {
+                                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
                                     if (allSelected) vm.enabledStores = emptySet()
                                     else vm.enabledStores = allStores.toSet()
                                 }
                                 .padding(horizontal = 12.dp, vertical = 8.dp),
                         ) {
-                            Checkbox(
-                                checked = allSelected,
-                                onCheckedChange = {
-                                    if (allSelected) vm.enabledStores = emptySet()
-                                    else vm.enabledStores = allStores.toSet()
-                                },
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor   = Primary,
-                                    checkmarkColor = Color(0xFF3C2F00),
-                                    uncheckedColor = OutlineVariant,
-                                ),
-                            )
-                            Spacer(Modifier.width(6.dp))
                             Text(
                                 if (allSelected) "Deselect all stores" else "Select all stores",
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = OnSurface,
+                                modifier = Modifier.weight(1f),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Icon(
+                                if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                                contentDescription = null,
+                                tint = if (allSelected) Primary else OutlineVariant,
+                                modifier = Modifier.size(18.dp),
                             )
                         }
                     }
@@ -2192,26 +2185,22 @@ private fun OptionToggle(
         verticalAlignment = if (sublabel != null) Alignment.Top else Alignment.CenterVertically,
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .clickable { onChange(!checked) }
-            .padding(top = 3.dp, bottom = 3.dp, end = 8.dp),
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onChange(!checked) }
+            .padding(top = 3.dp, bottom = 3.dp, start = 4.dp, end = 8.dp),
     ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = onChange,
-            colors = CheckboxDefaults.colors(
-                checkedColor = Primary,
-                uncheckedColor = Outline,
-                checkmarkColor = OnPrimary,
-            ),
-            modifier = Modifier.size(28.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(label, fontSize = 12.sp, color = OnSurface)
             if (sublabel != null) {
                 Text(sublabel, fontSize = 10.sp, color = OnSurfaceVariant, lineHeight = 14.sp)
             }
         }
+        Spacer(Modifier.width(8.dp))
+        Icon(
+            if (checked) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+            contentDescription = null,
+            tint = if (checked) Primary else Outline,
+            modifier = Modifier.size(18.dp),
+        )
     }
 }
 
@@ -2798,6 +2787,8 @@ private fun CardSummaryPanel(
     onExpandedChange: (Boolean) -> Unit,
     filter: String,
     onFilterChange: (String) -> Unit,
+    showCardOnHover: Boolean = false,
+    onShowCardOnHoverChange: (Boolean) -> Unit = {},
 ) {
     val summaryFilter = filter
     val filterQ = summaryFilter.trim().lowercase()
@@ -2815,38 +2806,60 @@ private fun CardSummaryPanel(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
-            // Collapsible header
-            Box(
+            // Collapsible header — single Row so all text and icons share one centerline
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onExpandedChange(!expanded) }
                     .padding(horizontal = 12.dp, vertical = 8.dp),
             ) {
-                Row(Modifier.align(Alignment.CenterStart), verticalAlignment = Alignment.CenterVertically) {
-                    Text("Card Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
-                    Spacer(Modifier.width(10.dp))
+                Text("Card Summary", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    "$foundCount / ${cards.size} found",
+                    fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Tertiary,
+                )
+                if (pendingCount > 0) {
+                    Spacer(Modifier.width(8.dp))
                     Text(
-                        "$foundCount / ${cards.size} found",
-                        fontSize = 11.sp, fontWeight = FontWeight.Medium, color = Tertiary,
+                        "$pendingCount pending",
+                        fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
                     )
-                    if (pendingCount > 0) {
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            "$pendingCount pending",
-                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
-                        )
-                    }
                 }
+                Spacer(Modifier.weight(1f))
                 Text(
                     if (expanded) "click to collapse" else "click to expand",
                     fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.align(Alignment.Center),
                 )
+                Spacer(Modifier.weight(1f))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                            onShowCardOnHoverChange(!showCardOnHover)
+                        }
+                        .padding(horizontal = 4.dp),
+                ) {
+                    Text(
+                        "Show card on hover",
+                        fontSize = 10.sp,
+                        color = OnSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Icon(
+                        if (showCardOnHover) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                        contentDescription = null,
+                        tint = if (showCardOnHover) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse" else "Expand",
                     tint = OnSurfaceVariant,
-                    modifier = Modifier.align(Alignment.CenterEnd).size(18.dp),
+                    modifier = Modifier.size(18.dp),
                 )
             }
 
@@ -2892,6 +2905,7 @@ private fun CardSummaryPanel(
                                         modifier = Modifier.weight(1f),
                                         onClick = { onCardClick(card) },
                                         includePartialMatches = includePartialMatches,
+                                        showCardOnHover = showCardOnHover,
                                     )
                                 }
                                 if (pair.size == 1) Spacer(Modifier.weight(1f))
@@ -2913,13 +2927,14 @@ private fun CardSummaryEntry(
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     includePartialMatches: Boolean = false,
+    showCardOnHover: Boolean = false,
 ) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hoveredRaw by interaction.collectIsHoveredAsState()
     val popupInteraction = remember { MutableInteractionSource() }
     val popupHovered by popupInteraction.collectIsHoveredAsState()
-    val showPopup = hoveredRaw || popupHovered
+    val showPopup = showCardOnHover && (hoveredRaw || popupHovered)
 
     // Eagerly load the image into the in-memory cache so the popup is instant on first hover.
     LaunchedEffect(imagePath) {
@@ -2954,7 +2969,7 @@ private fun CardSummaryEntry(
                 .clip(RoundedCornerShape(4.dp))
                 .background(SurfaceContainerHighest)
                 .hoverable(interaction)
-                .clickable { onClick() }
+                .clickable(indication = null, interactionSource = interaction) { onClick() }
                 .padding(horizontal = 8.dp, vertical = 5.dp),
         ) {
             Text(
@@ -3392,16 +3407,19 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Checkbox — click consumed here, does not propagate to the row's clickable
-            Checkbox(
-                checked = checked,
-                onCheckedChange = onToggle,
-                modifier = Modifier.size(20.dp),
-                colors = CheckboxDefaults.colors(
-                    checkedColor = Primary,
-                    uncheckedColor = OutlineVariant,
-                    checkmarkColor = Color(0xFF3C2F00),
-                ),
-            )
+            @OptIn(ExperimentalMaterial3Api::class)
+            CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                Checkbox(
+                    checked = checked,
+                    onCheckedChange = onToggle,
+                    modifier = Modifier.size(20.dp),
+                    colors = CheckboxDefaults.colors(
+                        checkedColor = Primary,
+                        uncheckedColor = OutlineVariant,
+                        checkmarkColor = Color(0xFF3C2F00),
+                    ),
+                )
+            }
             Spacer(Modifier.width(8.dp))
             // Content dims when unchecked
             Box(Modifier.width(COL_THUMB).alpha(contentAlpha).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) { CardThumbnail(imagePath, dimmed = false) }

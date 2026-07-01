@@ -124,6 +124,11 @@ class SearchViewModel {
         get() = hoverOnThumbnailOnlyState
         set(value) { hoverOnThumbnailOnlyState = value; AppDatabase.setSettingBoolean("hoverOnThumbnailOnly", value) }
 
+    private var showCardOnHoverState by mutableStateOf(AppDatabase.getSettingBoolean("showCardOnHover", false))
+    var showCardOnHover: Boolean
+        get() = showCardOnHoverState
+        set(value) { showCardOnHoverState = value; AppDatabase.setSettingBoolean("showCardOnHover", value) }
+
     // ── Saved search lists ─────────────────────────────────────────────────────
     val searchListRepo = SearchListRepo()
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
@@ -410,7 +415,7 @@ class SearchViewModel {
             }
             isSearching = false
             statusText = "Done — ${results.count { it.title != null }} listings found"
-            showSearchSummary = true
+            showSearchSummary = searchedCards.size > 5
         }
     }
 
@@ -739,7 +744,7 @@ log "Done"
             }
             isSearching = false
             statusText = "Done — ${results.count { it.title != null }} listings found"
-            showSearchSummary = true
+            showSearchSummary = searchedCards.size > 5
         }
     }
 

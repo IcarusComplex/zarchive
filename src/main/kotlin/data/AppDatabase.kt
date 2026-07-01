@@ -44,7 +44,7 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
 }
 
 // Persisted Cloudflare throttle rules — one row per store that has ever 429'd.
-// Tier escalates (1→2→3) on independent re-offences; decays by 1 per 7 days quiet.
+// Tier escalates (1→2→3) on independent re-offences. Rules are permanent — CF limits don't relax.
 object CfThrottleRules : Table("cf_throttle_rules") {
     val baseUrl       = text("base_url")
     val cardThreshold = integer("card_threshold") // throttle only if search >= this
@@ -59,7 +59,7 @@ object CfThrottleRules : Table("cf_throttle_rules") {
 data class CfThrottleRule(
     val baseUrl: String,
     val cardThreshold: Int,
-    val effectiveTier: Int,  // stored tier minus decay periods
+    val effectiveTier: Int,
 )
 
 // ── Singleton ──────────────────────────────────────────────────────────────────
@@ -100,26 +100,12 @@ object AppDatabase {
 
     // ── CF throttle rules ──────────────────────────────────────────────────────
 
-    /**
-     * Load all active throttle rules, applying tier decay (−1 per 7 days quiet) and
-     * deleting fully-decayed entries. Returns a map of baseUrl → rule.
-     */
     fun loadActiveCfRules(): Map<String, CfThrottleRule> = transaction {
-        val now         = System.currentTimeMillis()
-        val sevenDaysMs = 7L * 24 * 60 * 60 * 1_000
-
-        // The table has at most one row per store (~19 rows), so we filter in Kotlin.
-        // Rules with effectiveTier <= 0 have fully decayed and are treated as absent.
-        CfThrottleRules.selectAll().mapNotNull { row ->
-            val storedTier    = row[CfThrottleRules.tier]
-            val lastHitAt     = row[CfThrottleRules.lastHitAt]
-            val decayPeriods  = ((now - lastHitAt) / sevenDaysMs).toInt()
-            val effectiveTier = storedTier - decayPeriods
-            if (effectiveTier <= 0) null
-            else CfThrottleRule(
+        CfThrottleRules.selectAll().map { row ->
+            CfThrottleRule(
                 baseUrl       = row[CfThrottleRules.baseUrl],
                 cardThreshold = row[CfThrottleRules.cardThreshold],
-                effectiveTier = effectiveTier,
+                effectiveTier = row[CfThrottleRules.tier],
             )
         }.associateBy { it.baseUrl }
     }
