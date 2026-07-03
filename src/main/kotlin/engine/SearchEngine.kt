@@ -22,24 +22,50 @@ import javax.net.ssl.X509TrustManager
 /**
  * Per-domain concurrency and pacing parameters.
  *
- * Profiles are assigned per store at search start based on persisted CF throttle rules
- * ([CfThrottleRule] from the DB). Stores with no rule, or whose rule's card threshold
- * is above the current search size, run at NONE (unrestricted).
+ * The base tier for every search is determined by total card-store pairs (cards * stores):
+ *   < 300  -> tier 1 (light; small searches stay fast)
+ *   >= 300 -> tier 2 minimum (medium; large searches throttled to avoid CF rate limits)
  *
- *   Tier 1 — first 429 recorded: light throttle, keeps the store useful.
- *   Tier 2 — second independent 429: medium throttle.
- *   Tier 3 — third+ independent 429: heavy throttle.
+ * Per-store escalation stored in the DB can raise the effective tier above the base. Each
+ * store tracks two independent tiers — small-bucket and large-bucket — so a 429 on a large
+ * search doesn't penalise future small searches, and vice versa.
+ *
+ * Platform matters: Shopify makes 1 suggest.json + N handle.js requests per card and is
+ * aggressively CF-protected. WooCommerce/BigCommerce make 1 request per card and rarely 429.
+ * BROWSER (Playwright) stores bypass the Ktor rate limiter entirely.
  */
 data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
     companion object {
         val NONE  = ThrottleProfile(2, 0L)
-        val TIER1 = ThrottleProfile(2, 700L)
-        val TIER2 = ThrottleProfile(1, 1_000L)
-        val TIER3 = ThrottleProfile(1, 2_000L)
+        // Shopify profiles — applied when search ≥ 300 cards.
+        val TIER1 = ThrottleProfile(2, 200L)   // light: ~5 req/s per store
+        val TIER2 = ThrottleProfile(1, 500L)   // medium: ~2 req/s, serialised
+        val TIER3 = ThrottleProfile(1, 800L)   // heavy: ~1.25 req/s, serialised
+
         fun forTier(tier: Int): ThrottleProfile = when (tier) {
             1    -> TIER1
             2    -> TIER2
             else -> TIER3
+        }
+
+        // Non-Shopify platforms make far fewer HTTP requests per card and are rarely
+        // rate-limited — use lighter profiles to keep large searches reasonably fast.
+        fun forTierAndPlatform(tier: Int, platform: Platform): ThrottleProfile = when (platform) {
+            Platform.SHOPIFY -> forTier(tier)
+            Platform.WOOCOMMERCE, Platform.WC_STORE_API -> when (tier) {
+                1    -> ThrottleProfile(3, 0L)
+                2    -> ThrottleProfile(2, 150L)
+                else -> ThrottleProfile(1, 300L)
+            }
+            Platform.BIGCOMMERCE -> when (tier) {
+                1    -> ThrottleProfile(3, 0L)
+                else -> ThrottleProfile(2, 100L)
+            }
+            Platform.PRESTASHOP -> when (tier) {
+                1    -> ThrottleProfile(2, 100L)
+                else -> ThrottleProfile(1, 300L)
+            }
+            else -> forTier(tier)
         }
     }
 }
@@ -293,15 +319,24 @@ suspend fun runSearch(
 ) {
     cfBlockedStores.clear()
 
-    // Load persisted CF throttle rules. For each store whose rule's card threshold is
-    // met by the current search size, apply the tier's throttle profile to that domain.
-    // Stores with no rule, or below threshold, run unrestricted.
+    // Determine the base tier from total card-store pairs: < 300 = tier 1, >= 300 = tier 2.
+    // This base applies to every store; per-store DB history can only raise it, never lower it.
+    // BROWSER (Playwright) stores are excluded — they manage their own concurrency.
+    val totalSearches = cards.size * stores.size
+    val isLargeSearch = totalSearches >= 300
+    val baseTier = if (isLargeSearch) 2 else 1
+
     val cfRules = AppDatabase.loadActiveCfRules()
     val hostProfiles: Map<String, ThrottleProfile> = stores.values.mapNotNull { baseUrl ->
-        val host = extractHost(baseUrl) ?: return@mapNotNull null
-        val rule = cfRules[baseUrl] ?: return@mapNotNull null
-        if (cards.size >= rule.cardThreshold) host to ThrottleProfile.forTier(rule.effectiveTier)
-        else null
+        val host     = extractHost(baseUrl) ?: return@mapNotNull null
+        val platform = KNOWN_PLATFORMS[baseUrl] ?: Platform.SHOPIFY
+        if (platform == Platform.BROWSER || platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE)
+            return@mapNotNull null
+        val rule = cfRules[baseUrl]
+        val tier = if (rule == null) baseTier
+                   else if (isLargeSearch) maxOf(baseTier, rule.tierLarge)
+                   else maxOf(baseTier, rule.tierSmall)
+        host to ThrottleProfile.forTierAndPlatform(tier, platform)
     }.toMap()
 
     val rateLimiter = PerHostRateLimiter(hostProfiles)
@@ -322,7 +357,7 @@ suspend fun runSearch(
                         client, name, base, cards, effectiveBrowserSearcher,
                         onProgress, onResults, onStoreComplete,
                         onCfBlocked = { url, cardCount ->
-                            runCatching { AppDatabase.recordCfBlock(url, cardCount) }
+                            runCatching { AppDatabase.recordCfBlock(url, cardCount, isLargeSearch) }
                             onStoreCfBlocked?.invoke(name)
                         },
                     )

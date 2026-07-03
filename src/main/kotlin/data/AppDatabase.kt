@@ -44,11 +44,14 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
 }
 
 // Persisted Cloudflare throttle rules — one row per store that has ever 429'd.
-// Tier escalates (1→2→3) on independent re-offences. Rules are permanent — CF limits don't relax.
+// Two independent tiers: tierSmall (for cards*stores < 300) and tierLarge (>= 300).
+// Each escalates only when a 429 fires in its respective bucket, so a store that
+// 429s on a large search doesn't slow down future small searches.
 object CfThrottleRules : Table("cf_throttle_rules") {
     val baseUrl       = text("base_url")
-    val cardThreshold = integer("card_threshold") // throttle only if search >= this
-    val tier          = integer("tier")           // 1 / 2 / 3
+    val cardThreshold = integer("card_threshold") // kept for schema compat; logic uses cards*stores
+    val tier          = integer("tier")           // tierSmall: for cards*stores < 300
+    val tierLarge     = integer("tier_large").default(2) // for cards*stores >= 300
     val lastHitAt     = long("last_hit_at")       // epoch ms of most-recent 429
     val lastHitCards  = integer("last_hit_cards") // card count at that time
     override val primaryKey = PrimaryKey(baseUrl)
@@ -58,8 +61,8 @@ object CfThrottleRules : Table("cf_throttle_rules") {
 
 data class CfThrottleRule(
     val baseUrl: String,
-    val cardThreshold: Int,
-    val effectiveTier: Int,
+    val tierSmall: Int,  // applied when cards*stores < 300
+    val tierLarge: Int,  // applied when cards*stores >= 300
 )
 
 // ── Singleton ──────────────────────────────────────────────────────────────────
@@ -79,6 +82,7 @@ object AppDatabase {
             )
         }
         migrateFromPrefs()
+        migrateCfThresholdV2()
     }
 
     // ── Settings ───────────────────────────────────────────────────────────────
@@ -103,25 +107,26 @@ object AppDatabase {
     fun loadActiveCfRules(): Map<String, CfThrottleRule> = transaction {
         CfThrottleRules.selectAll().map { row ->
             CfThrottleRule(
-                baseUrl       = row[CfThrottleRules.baseUrl],
-                cardThreshold = row[CfThrottleRules.cardThreshold],
-                effectiveTier = row[CfThrottleRules.tier],
+                baseUrl   = row[CfThrottleRules.baseUrl],
+                tierSmall = row[CfThrottleRules.tier],
+                tierLarge = row[CfThrottleRules.tierLarge],
             )
         }.associateBy { it.baseUrl }
     }
 
     /**
-     * Record a 429 hit for [baseUrl] that occurred during a [cardCount]-card search.
+     * Record a 429 hit for [baseUrl].
      *
-     * - First hit: tier 1, threshold = max(1, cardCount − 5).
-     * - Subsequent hit > 2 h after the last: escalate tier (max 3), take the stricter threshold.
-     * - Subsequent hit ≤ 2 h after the last: still within the original cooldown window —
-     *   update timestamp to reset the window but do not escalate.
+     * [isLargeSearch] is true when cards*stores >= 300 — i.e. the search was in the
+     * large bucket. Only the matching bucket's tier escalates: a 429 on a large search
+     * advances tierLarge; a 429 on a small search advances tierSmall. Each bucket
+     * escalates at most once per 2-hour window (max tier 3).
+     *
+     * First hit in either bucket escalates from the bucket's base (small=1, large=2).
      */
-    fun recordCfBlock(baseUrl: String, cardCount: Int): Unit = transaction {
-        val newThreshold = maxOf(1, cardCount - 5)
-        val now          = System.currentTimeMillis()
-        val twoHoursMs   = 2L * 60 * 60 * 1_000
+    fun recordCfBlock(baseUrl: String, cardCount: Int, isLargeSearch: Boolean): Unit = transaction {
+        val now        = System.currentTimeMillis()
+        val twoHoursMs = 2L * 60 * 60 * 1_000
 
         val existing = CfThrottleRules.selectAll()
             .where { CfThrottleRules.baseUrl eq baseUrl }
@@ -130,24 +135,48 @@ object AppDatabase {
         if (existing == null) {
             CfThrottleRules.insert {
                 it[CfThrottleRules.baseUrl]       = baseUrl
-                it[CfThrottleRules.cardThreshold] = newThreshold
-                it[CfThrottleRules.tier]          = 1
+                it[CfThrottleRules.cardThreshold] = 300
+                // Escalate from the base for whichever bucket got the 429.
+                it[CfThrottleRules.tier]          = if (isLargeSearch) 1 else 2 // tierSmall
+                it[CfThrottleRules.tierLarge]     = if (isLargeSearch) 3 else 2 // tierLarge
                 it[CfThrottleRules.lastHitAt]     = now
                 it[CfThrottleRules.lastHitCards]  = cardCount
             }
         } else {
-            val storedTier   = existing[CfThrottleRules.tier]
-            val lastHitAt    = existing[CfThrottleRules.lastHitAt]
-            val isNewEvent   = (now - lastHitAt) > twoHoursMs
-            val newTier      = if (isNewEvent) minOf(3, storedTier + 1) else storedTier
-            val strictThresh = maxOf(1, minOf(existing[CfThrottleRules.cardThreshold], newThreshold))
+            val lastHitAt  = existing[CfThrottleRules.lastHitAt]
+            val isNewEvent = (now - lastHitAt) > twoHoursMs
+            val storedSmall = existing[CfThrottleRules.tier]
+            val storedLarge = existing[CfThrottleRules.tierLarge]
+            val newSmall = if (!isLargeSearch && isNewEvent) minOf(3, storedSmall + 1) else storedSmall
+            val newLarge = if (isLargeSearch  && isNewEvent) minOf(3, storedLarge + 1) else storedLarge
 
             CfThrottleRules.update({ CfThrottleRules.baseUrl eq baseUrl }) {
-                it[CfThrottleRules.cardThreshold] = strictThresh
-                it[CfThrottleRules.tier]          = newTier
-                it[CfThrottleRules.lastHitAt]     = now
-                it[CfThrottleRules.lastHitCards]  = cardCount
+                it[CfThrottleRules.tier]      = newSmall
+                it[CfThrottleRules.tierLarge] = newLarge
+                it[CfThrottleRules.lastHitAt]    = now
+                it[CfThrottleRules.lastHitCards] = cardCount
             }
+        }
+    }
+
+    // ── CF threshold migration (v2) ────────────────────────────────────────────
+
+    // Ran once to fix the old threshold=cardCount-5 escalation cycle. Now also ensures
+    // tierSmall=1 and tierLarge is present (added by createMissingTablesAndColumns with
+    // default=2). After this migration: all stores start at tierSmall=1, tierLarge=2.
+    private fun migrateCfThresholdV2() {
+        val done = transaction {
+            Settings.selectAll().where { Settings.key eq "_cf_v2_threshold" }.count() > 0
+        }
+        if (done) return
+        transaction {
+            CfThrottleRules.update({ CfThrottleRules.cardThreshold less 300 }) {
+                it[CfThrottleRules.cardThreshold] = 300
+            }
+            CfThrottleRules.update({ CfThrottleRules.tier greater 1 }) {
+                it[CfThrottleRules.tier] = 1
+            }
+            Settings.upsert { it[Settings.key] = "_cf_v2_threshold"; it[Settings.value] = "true" }
         }
     }
 
