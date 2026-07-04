@@ -23,6 +23,15 @@ private fun installCrashLogger() {
     }
 }
 
+// java.awt.Desktop.getDesktop() does lazy native COM/OLE init on Windows the first time
+// it's touched in the process, which makes the user's first "external link" click stall
+// for a few seconds. Pay that cost here in the background during startup instead.
+private fun warmUpDesktop() {
+    Thread {
+        runCatching { if (java.awt.Desktop.isDesktopSupported()) java.awt.Desktop.getDesktop() }
+    }.also { it.isDaemon = true }.start()
+}
+
 // Reads and deletes the crash log from the previous session, if any.
 private fun readAndClearCrashLog(): String? {
     if (!crashLog.exists() || crashLog.length() == 0L) return null
@@ -38,6 +47,7 @@ private fun readAndClearCrashLog(): String? {
 
 fun main() {
     installCrashLogger()
+    warmUpDesktop()
     AppDatabase.init()
     val pendingCrash = readAndClearCrashLog()
     application {
