@@ -136,7 +136,11 @@ fun preferExactMatches(card: String, listings: List<SearchResult>, exactOnly: Bo
 
 fun isRelevant(card: String, title: String): Boolean {
     if (NON_SINGLE_RE.containsMatchIn(title)) return false
-    val t = title.lowercase()
+    // Match against the set-name-stripped title, not the raw one — otherwise a query word that
+    // only appears inside a bracketed/appended set name (e.g. "Gate" in "Imoen, Mystic Trickster
+    // [Commander Legends: Battle for Baldur's Gate]") falsely satisfies a whole-word check for an
+    // unrelated card like "Mystic Gate".
+    val t = normalizeCardName(title).lowercase()
     val words = card.lowercase().split(Regex("[^a-z']+")).filter { it.length > 2 }
     if (words.isEmpty()) return false
     // Whole-word match (not substring) so "Hop to It" → "hop" doesn't match "Hope Thief".

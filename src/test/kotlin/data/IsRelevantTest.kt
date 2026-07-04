@@ -51,4 +51,18 @@ class IsRelevantTest {
 
     @Test fun `case insensitive match`() =
         assertTrue(isRelevant("lightning bolt", "LIGHTNING BOLT"))
+
+    // ── Query words must match the card name, not a bracketed/appended set name ─────
+    // Regression: "Mystic Gate" (a land) falsely matched "Imoen, Mystic Trickster
+    // [Commander Legends: Battle for Baldur's Gate]" because "gate" is a whole word inside
+    // the *set name* suffix, not the card name. isRelevant must strip that suffix first.
+    @Test fun `query word only present in bracketed set name is rejected`() =
+        assertFalse(isRelevant(
+            "Mystic Gate",
+            "Imoen, Mystic Trickster [Commander Legends: Battle for Baldur's Gate]",
+        ))
+    @Test fun `query word only present in dash set-name suffix is rejected`() =
+        assertFalse(isRelevant("Sunken Ruins", "Some Other Card - Sunken Ruins Anthology"))
+    @Test fun `real card with matching bracketed set still matches`() =
+        assertTrue(isRelevant("Mystic Gate", "Mystic Gate [Kaldheim]"))
 }
