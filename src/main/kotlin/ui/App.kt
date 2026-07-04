@@ -404,12 +404,14 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     var showAllListsDialog by remember { mutableStateOf(false) }
     var saveListNameDraft  by remember { mutableStateOf("") }
     var editingList        by remember { mutableStateOf<data.SavedSearchList?>(null) }
+    var overwriteListTarget by remember { mutableStateOf<data.SavedSearchList?>(null) }
 
     // Results tab state
     var showSaveResultDialog by remember { mutableStateOf(false) }
     var showAllResultsDialog by remember { mutableStateOf(false) }
     var saveResultName       by remember { mutableStateOf("") }
     var saveResultDesc       by remember { mutableStateOf("") }
+    var overwriteResultTarget by remember { mutableStateOf<data.SavedResultEntry?>(null) }
 
     Column(Modifier.fillMaxWidth()) {
         // Header: segmented tab control fills the full width (matching Search Options button);
@@ -465,7 +467,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     ) {
                         Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
                             modifier = Modifier.size(14.dp)
-                                .clickable { saveListNameDraft = ""; showSaveListDialog = true })
+                                .clickable { saveListNameDraft = vm.lastLoadedListName ?: ""; showSaveListDialog = true })
                     }
                 activeTab == SavedPanelTab.RESULTS && vm.results.isNotEmpty() ->
                     TooltipArea(
@@ -481,7 +483,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     ) {
                         Icon(Icons.Default.Archive, "Save results", tint = Primary.copy(alpha = 0.8f),
                             modifier = Modifier.size(14.dp).clickable {
-                                saveResultName = ""; saveResultDesc = ""; showSaveResultDialog = true
+                                saveResultName = vm.lastLoadedResultName ?: ""; saveResultDesc = ""; showSaveResultDialog = true
                             })
                     }
             }
@@ -534,7 +536,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                 } else {
                     pinned.forEach { entry ->
                         SavedResultRow(entry,
-                            onLoad   = { vm.loadSavedResult(entry.id) },
+                            onLoad   = { vm.loadSavedResult(entry) },
                             onDelete = { vm.deleteSavedResult(entry.id) })
                     }
                     if (overflow > 0) {
@@ -583,12 +585,46 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             },
             confirmButton = {
                 TextButton(
-                    onClick = { vm.saveSearchList(saveListNameDraft.trim()); showSaveListDialog = false },
+                    onClick = {
+                        val trimmed  = saveListNameDraft.trim()
+                        val existing = lists.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                        if (existing != null) {
+                            overwriteListTarget = existing
+                        } else {
+                            vm.saveSearchList(trimmed)
+                            showSaveListDialog = false
+                        }
+                    },
                     enabled = saveListNameDraft.isNotBlank(),
                 ) { Text("Save", color = Primary) }
             },
             dismissButton = {
                 TextButton(onClick = { showSaveListDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+    }
+
+    overwriteListTarget?.let { existing ->
+        AlertDialog(
+            onDismissRequest = { overwriteListTarget = null },
+            title = { Text("Overwrite list?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                Text(
+                    "A list named \"${existing.name}\" already exists. Overwrite it with the current cards?",
+                    fontSize = 13.sp, color = OnSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.overwriteSearchList(existing.id, saveListNameDraft.trim())
+                    overwriteListTarget = null
+                    showSaveListDialog = false
+                }) { Text("Overwrite", color = Primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { overwriteListTarget = null }) { Text("Cancel", color = OnSurfaceVariant) }
             },
             containerColor    = SurfaceContainerLowest,
             titleContentColor = OnSurface,
@@ -638,14 +674,45 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        vm.saveCurrentResults(saveResultName.trim(), saveResultDesc.trim())
-                        showSaveResultDialog = false
+                        val trimmed  = saveResultName.trim()
+                        val existing = savedResults.firstOrNull { it.name.equals(trimmed, ignoreCase = true) }
+                        if (existing != null) {
+                            overwriteResultTarget = existing
+                        } else {
+                            vm.saveCurrentResults(trimmed, saveResultDesc.trim())
+                            showSaveResultDialog = false
+                        }
                     },
                     enabled = saveResultName.isNotBlank(),
                 ) { Text("Save", color = Primary) }
             },
             dismissButton = {
                 TextButton(onClick = { showSaveResultDialog = false }) { Text("Cancel", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+    }
+
+    overwriteResultTarget?.let { existing ->
+        AlertDialog(
+            onDismissRequest = { overwriteResultTarget = null },
+            title = { Text("Overwrite result?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                Text(
+                    "A saved result named \"${existing.name}\" already exists. Overwrite it with the current results?",
+                    fontSize = 13.sp, color = OnSurfaceVariant,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.overwriteSavedResult(existing.id, saveResultName.trim(), saveResultDesc.trim())
+                    overwriteResultTarget = null
+                    showSaveResultDialog = false
+                }) { Text("Overwrite", color = Primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { overwriteResultTarget = null }) { Text("Cancel", color = OnSurfaceVariant) }
             },
             containerColor    = SurfaceContainerLowest,
             titleContentColor = OnSurface,
@@ -665,22 +732,39 @@ private fun SavedListsPanel(vm: SearchViewModel) {
 
     if (showAllListsDialog) {
         var modalEditTarget by remember { mutableStateOf<data.SavedSearchList?>(null) }
+        var listsFilter by remember { mutableStateOf("") }
+        val filteredLists = remember(lists, listsFilter) {
+            val q = listsFilter.trim()
+            if (q.isBlank()) lists
+            else lists.filter { list ->
+                list.name.contains(q, ignoreCase = true) ||
+                    list.cards.any { it.contains(q, ignoreCase = true) }
+            }
+        }
         AlertDialog(
             onDismissRequest = { showAllListsDialog = false },
             title = { Text("Saved lists", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
             text = {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                ) {
-                    items(lists, key = { it.id }) { list ->
-                        SavedListRow(
-                            list     = list,
-                            onLoad   = { vm.loadSearchList(list); showAllListsDialog = false },
-                            onDelete = { vm.deleteSearchList(list.id) },
-                            onEdit   = { modalEditTarget = list },
-                        )
-                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                Column {
+                    FilterField(listsFilter, placeholder = "Search saved lists or cards…") { listsFilter = it }
+                    Spacer(Modifier.height(8.dp))
+                    if (filteredLists.isEmpty()) {
+                        Text("No matching lists", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
+                        items(filteredLists, key = { it.id }) { list ->
+                            SavedListRow(
+                                list     = list,
+                                onLoad   = { vm.loadSearchList(list); showAllListsDialog = false },
+                                onDelete = { vm.deleteSearchList(list.id) },
+                                onEdit   = { modalEditTarget = list },
+                            )
+                            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                        }
                     }
                 }
             },
@@ -701,21 +785,39 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     }
 
     if (showAllResultsDialog) {
+        var resultsFilter by remember { mutableStateOf("") }
+        val filteredResults = remember(savedResults, resultsFilter) {
+            val q = resultsFilter.trim()
+            if (q.isBlank()) savedResults
+            else savedResults.filter { entry ->
+                entry.name.contains(q, ignoreCase = true) ||
+                    entry.description.contains(q, ignoreCase = true) ||
+                    entry.cards.any { it.contains(q, ignoreCase = true) }
+            }
+        }
         AlertDialog(
             onDismissRequest = { showAllResultsDialog = false },
             title = { Text("Saved results", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
             text = {
-                LazyColumn(
-                    modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                ) {
-                    items(savedResults, key = { it.id }) { entry ->
-                        SavedResultRow(
-                            entry    = entry,
-                            onLoad   = { vm.loadSavedResult(entry.id); showAllResultsDialog = false },
-                            onDelete = { vm.deleteSavedResult(entry.id) },
-                        )
-                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                Column {
+                    FilterField(resultsFilter, placeholder = "Search saved results or cards…") { resultsFilter = it }
+                    Spacer(Modifier.height(8.dp))
+                    if (filteredResults.isEmpty()) {
+                        Text("No matching results", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.padding(vertical = 8.dp))
+                    }
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 400.dp),
+                        verticalArrangement = Arrangement.spacedBy(0.dp),
+                    ) {
+                        items(filteredResults, key = { it.id }) { entry ->
+                            SavedResultRow(
+                                entry    = entry,
+                                onLoad   = { vm.loadSavedResult(entry); showAllResultsDialog = false },
+                                onDelete = { vm.deleteSavedResult(entry.id) },
+                            )
+                            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
+                        }
                     }
                 }
             },

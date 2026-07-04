@@ -16,6 +16,7 @@ data class SavedResultEntry(
     val description: String,
     val savedAt: Long,
     val cardCount: Int,
+    val cards: List<String>,
 )
 
 data class LoadedResultSnapshot(
@@ -45,6 +46,7 @@ class SearchResultRepo {
                         description = row[SavedResultSnapshots.description],
                         savedAt     = row[SavedResultSnapshots.savedAt],
                         cardCount   = row[SavedResultSnapshots.cardCount],
+                        cards       = json.decodeFromString(row[SavedResultSnapshots.cardsJson]),
                     )
                 }
         }
@@ -67,6 +69,40 @@ class SearchResultRepo {
         val pinnedEnc   = json.encodeToString(pinnedListings)
         transaction {
             SavedResultSnapshots.insert {
+                it[SavedResultSnapshots.name]               = n
+                it[SavedResultSnapshots.description]        = d
+                it[SavedResultSnapshots.savedAt]            = now
+                it[SavedResultSnapshots.cardCount]          = cards.size
+                it[SavedResultSnapshots.cardsJson]          = cardsEnc
+                it[SavedResultSnapshots.resultsJson]        = resultsEnc
+                it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
+                it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
+                it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+            }
+        }
+        refresh()
+    }
+
+    // Overwrites an existing snapshot in place (same id), used when the user saves under a
+    // name that already matches another saved result and confirms replacing it.
+    suspend fun overwrite(
+        id: Int,
+        name: String,
+        description: String,
+        cards: List<String>,
+        results: List<SearchResult>,
+        excludedCards: Set<String>,
+        uncheckedLines: Set<String>,
+        pinnedListings: Map<String, String>,
+    ): Unit = withContext(Dispatchers.IO) {
+        val lid = id; val n = name; val d = description; val now = System.currentTimeMillis()
+        val cardsEnc    = json.encodeToString(cards)
+        val resultsEnc  = json.encodeToString(results)
+        val excludedEnc = json.encodeToString(excludedCards.toList())
+        val uncheckedEnc = json.encodeToString(uncheckedLines.toList())
+        val pinnedEnc   = json.encodeToString(pinnedListings)
+        transaction {
+            SavedResultSnapshots.update({ Op.build { SavedResultSnapshots.id eq lid } }) {
                 it[SavedResultSnapshots.name]               = n
                 it[SavedResultSnapshots.description]        = d
                 it[SavedResultSnapshots.savedAt]            = now

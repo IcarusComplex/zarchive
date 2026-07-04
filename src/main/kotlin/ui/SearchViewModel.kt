@@ -133,14 +133,25 @@ class SearchViewModel {
     val searchListRepo = SearchListRepo()
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
 
+    // Name of the last list loaded (or saved) this session — used to pre-fill the "Save list"
+    // name field so re-saving the same working list doesn't require retyping its name.
+    var lastLoadedListName by mutableStateOf<String?>(null)
+        private set
+
     // ── Saved search results ───────────────────────────────────────────────────
     val searchResultRepo = SearchResultRepo()
     val savedResults: StateFlow<List<data.SavedResultEntry>> get() = searchResultRepo.entries
+
+    // Name of the last saved result loaded (or saved) this session — same purpose as
+    // lastLoadedListName above, but for the Results tab.
+    var lastLoadedResultName by mutableStateOf<String?>(null)
+        private set
 
     fun saveCurrentResults(name: String, description: String) {
         val cards   = searchedCards.toList()
         val current = results.toList()
         if (cards.isEmpty() || current.isEmpty()) return
+        lastLoadedResultName = name
         scope.launch(Dispatchers.IO) {
             searchResultRepo.save(
                 name, description, cards, current,
@@ -151,7 +162,26 @@ class SearchViewModel {
         }
     }
 
-    fun loadSavedResult(id: Int) {
+    // Overwrites an existing saved result (same id) instead of creating a new entry —
+    // used when the user confirms replacing a result that shares a name with another save.
+    fun overwriteSavedResult(id: Int, name: String, description: String) {
+        val cards   = searchedCards.toList()
+        val current = results.toList()
+        if (cards.isEmpty() || current.isEmpty()) return
+        lastLoadedResultName = name
+        scope.launch(Dispatchers.IO) {
+            searchResultRepo.overwrite(
+                id, name, description, cards, current,
+                excludedCards    = excludedCards.keys.toSet(),
+                uncheckedLines   = uncheckedOrderLines.keys.toSet(),
+                pinnedListings   = pinnedListings.toMap(),
+            )
+        }
+    }
+
+    fun loadSavedResult(entry: data.SavedResultEntry) {
+        val id = entry.id
+        lastLoadedResultName = entry.name
         searchJob?.cancel()
         isSearching = false
         scope.launch {
@@ -221,11 +251,22 @@ class SearchViewModel {
     fun saveSearchList(name: String) {
         val cards = query.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (cards.isEmpty()) return
+        lastLoadedListName = name
         scope.launch(Dispatchers.IO) { searchListRepo.create(name, cards) }
+    }
+
+    // Overwrites an existing list (same id) instead of creating a duplicate — used when the
+    // user confirms replacing a list that shares a name with another saved list.
+    fun overwriteSearchList(id: Int, name: String) {
+        val cards = query.lines().map { it.trim() }.filter { it.isNotBlank() }
+        if (cards.isEmpty()) return
+        lastLoadedListName = name
+        scope.launch(Dispatchers.IO) { searchListRepo.update(id, name, cards) }
     }
 
     fun loadSearchList(list: data.SavedSearchList) {
         query = list.cards.joinToString("\n")
+        lastLoadedListName = list.name
         scope.launch(Dispatchers.IO) { searchListRepo.touch(list.id) }
     }
 
