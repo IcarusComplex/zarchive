@@ -125,7 +125,7 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
         //   D20 Battleground: <table><tr><td>Set:</td><td>SET NAME</td></tr></table>
         //   Wzrd TCG:         <b>Set:</b> Set Name (CODE)<br>
         val bodyHtml = obj["body"]?.jsonPrimitive?.contentOrNull
-        val setHint = bodyHtml?.let { html ->
+        val bodyHint = bodyHtml?.let { html ->
             val soup = Jsoup.parse(html)
             soup.select("tr")
                 .firstOrNull { tr -> tr.select("td").firstOrNull()?.text()?.trim() == "Set:" }
@@ -135,6 +135,16 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
                 ?.nextSibling()?.toString()?.trim()
                 ?.takeIf { it.isNotBlank() }
         }
+        // Untapped Potential TCG (and possibly other Shopify TCG themes) tags each product with
+        // a "Set:<value>" entry — either a bare set name ("Set:Lorwyn Eclipsed") or a
+        // "CODE-collectorNumber" SKU ("Set:TDM-358"). Either form is handled downstream by
+        // CardImageService (findCode() for names, PAREN_SET_CODE_RE for CODE-number SKUs).
+        val tagsHint = obj["tags"]?.jsonArray
+            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
+            ?.firstOrNull { it.startsWith("Set:", ignoreCase = true) }
+            ?.substringAfter(":")?.trim()
+            ?.takeIf { it.isNotBlank() }
+        val setHint = bodyHint ?: tagsHint
         Candidate(
             title = title,
             relUrl = obj["url"]?.jsonPrimitive?.contentOrNull ?: "",

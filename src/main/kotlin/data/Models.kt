@@ -39,6 +39,7 @@ val STORES: Map<String, String> = linkedMapOf(
     "GreedyGold"             to "https://greedygold.co.za",
     "Magic and Monsters"     to "https://magicandmonsters.co.za",
     "The Cantina"            to "https://thecantina.co.za",
+    "Untapped Potential TCG" to "https://untappedpotentialtcg.co.za",
 )
 
 // Luckshack is Cloudflare-protected and we don't scrape its stock — it's surfaced only as a
@@ -71,6 +72,8 @@ val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
     "https://magicandmonsters.co.za"         to Platform.SHOPIFY,
     "https://thecantina.co.za"               to Platform.SHOPIFY,
     "http://www.underworldconnections.co.za" to Platform.SHOPIFY,
+    // Shopify stores (verified 2026-07)
+    "https://untappedpotentialtcg.co.za"     to Platform.SHOPIFY,
     // WooCommerce stores (verified 2026-06)
     "https://www.andressidehustle.co.za"     to Platform.WOOCOMMERCE,
     "https://shop.dracoti.co.za"             to Platform.WOOCOMMERCE,
