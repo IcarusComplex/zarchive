@@ -139,7 +139,6 @@ fun WindowScope.App(
     )
 
     var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
-    val hasSearch = vm.searchedCards.isNotEmpty() || vm.results.isNotEmpty()
     var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
 
     LaunchedEffect(Unit) { vm.checkForUpdates() }
@@ -166,12 +165,13 @@ fun WindowScope.App(
                     VerticalDivider(color = OutlineVariant)
                     // Right content area
                     Column(Modifier.weight(1f)) {
-                        if (hasSearch) {
-                            Box(Modifier.fillMaxWidth().background(HeaderBg)) {
-                                FolderTabs(tab, { tab = it }, Modifier.padding(start = 16.dp))
-                            }
-                            HorizontalDivider(color = OutlineVariant)
+                        // Tab strip is always visible (not gated on hasSearch) — Search Monitors is a
+                        // persistent background feature the user should be able to reach and configure
+                        // before ever running a search.
+                        Box(Modifier.fillMaxWidth().background(HeaderBg)) {
+                            FolderTabs(tab, { tab = it }, Modifier.padding(start = 16.dp))
                         }
+                        HorizontalDivider(color = OutlineVariant)
                         Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
                             if (vm.isSearching || vm.statusText.isNotEmpty()) {
                                 Spacer(Modifier.height(6.dp))
@@ -228,6 +228,14 @@ fun WindowScope.App(
                     count      = vm.alreadySearchedCount,
                     onResearch = { vm.confirmResearchAll() },
                     onDismiss  = { vm.dismissAllAlreadySearched() },
+                )
+            }
+            if (vm.monitorAlerts.isNotEmpty()) {
+                MonitorFoundDialog(
+                    hits = vm.monitorAlerts,
+                    images = vm.images,
+                    onCloseAll = { vm.dismissAllMonitorAlerts() },
+                    onGoToStore = { hit -> runCatching { Desktop.getDesktop().browse(URI(hit.url)) } },
                 )
             }
             if (vm.showSearchSummary) {
@@ -1911,10 +1919,16 @@ private fun StoreStatusChip(
 private enum class ResultsTab(val label: String, val icon: ImageVector) {
     RESULTS("Search Results", Icons.Default.Storefront),
     ORDERS("Order Lists", Icons.Default.ShoppingCart),
+    MONITORS("Search Monitors", Icons.Default.Notifications),
 }
 
 @Composable
 private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
+    // Monitors is a persistent config screen, independent of whether a search has run.
+    if (tab == ResultsTab.MONITORS) {
+        SearchMonitorsPane(vm)
+        return
+    }
     if (vm.searchedCards.isEmpty() && vm.results.isEmpty()) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Enter a card name and press Search", color = OnSurfaceVariant, fontSize = 14.sp)
@@ -1951,6 +1965,7 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
                 summaryFilter,   { summaryFilter   = it },
             )
             ResultsTab.ORDERS  -> OrderListsPane(vm)
+            ResultsTab.MONITORS -> Unit // handled by the early return above
         }
     }
 }
@@ -1992,6 +2007,299 @@ private fun FolderTabs(selected: ResultsTab, onSelect: (ResultsTab) -> Unit, mod
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun SearchMonitorsPane(vm: SearchViewModel) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
+        Spacer(Modifier.height(2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text("Background search monitor", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+                Text(
+                    when {
+                        !vm.monitorEnabled -> "Off"
+                        vm.monitorLastCheckedAt == 0L -> "On — checking soon…"
+                        else -> "On — last checked " +
+                            java.text.SimpleDateFormat("HH:mm").format(java.util.Date(vm.monitorLastCheckedAt)) +
+                            (vm.monitorStatusText.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: "")
+                    },
+                    fontSize = 12.sp,
+                    color = OnSurfaceVariant,
+                )
+            }
+            Switch(
+                checked = vm.monitorEnabled,
+                onCheckedChange = { vm.monitorEnabled = it },
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Primary,
+                    checkedTrackColor = Primary.copy(alpha = 0.4f),
+                ),
+            )
+        }
+        HorizontalDivider(color = OutlineVariant)
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Card(s) to monitor", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+            var focused by remember { mutableStateOf(false) }
+            BasicTextField(
+                value = vm.monitorQuery,
+                onValueChange = { vm.monitorQuery = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(110.dp)
+                    .onFocusChanged { focused = it.isFocused },
+                textStyle = androidx.compose.ui.text.TextStyle(fontFamily = Mono, fontSize = 13.sp, color = OnSurface),
+                cursorBrush = SolidColor(Primary),
+                decorationBox = { innerTextField ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(SurfaceContainerLow, RoundedCornerShape(4.dp))
+                            .border(1.dp, if (focused) Primary else OutlineVariant, RoundedCornerShape(4.dp))
+                            .padding(12.dp),
+                        contentAlignment = Alignment.TopStart,
+                    ) {
+                        if (vm.monitorQuery.isEmpty()) {
+                            Text(
+                                "One card name per line — same format as the main search",
+                                color = OnSurfaceVariant.copy(alpha = 0.3f),
+                                fontFamily = Mono,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        innerTextField()
+                    }
+                },
+            )
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Check every", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    modifier = Modifier
+                        .width(64.dp)
+                        .height(32.dp)
+                        .background(SurfaceContainerLow, RoundedCornerShape(4.dp))
+                        .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 10.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    var intervalText by remember(vm.monitorIntervalHours) { mutableStateOf(vm.monitorIntervalHours.toString()) }
+                    BasicTextField(
+                        value = intervalText,
+                        onValueChange = { raw ->
+                            val digits = raw.filter { it.isDigit() }
+                            intervalText = digits
+                            digits.toIntOrNull()?.let { if (it >= 1) vm.monitorIntervalHours = it }
+                        },
+                        singleLine = true,
+                        textStyle = androidx.compose.ui.text.TextStyle(color = OnSurface, fontFamily = Mono, fontSize = 13.sp),
+                        cursorBrush = SolidColor(Primary),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Text("hour(s) — minimum 1", fontSize = 12.sp, color = OnSurfaceVariant)
+            }
+        }
+
+        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OptionsSectionHeader("Stores to monitor")
+            val allStores = data.STORES.keys.sorted()
+            val allSelected = allStores.all { it in vm.monitorStores }
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = SurfaceContainerHigh,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                            vm.monitorStores = if (allSelected) emptySet() else allStores.toSet()
+                        }
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        if (allSelected) "Deselect all stores" else "Select all stores",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Icon(
+                        if (allSelected) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                        contentDescription = null,
+                        tint = if (allSelected) Primary else OutlineVariant,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+            }
+            allStores.chunked(2).forEach { pair ->
+                Row(Modifier.fillMaxWidth()) {
+                    pair.forEach { store ->
+                        OptionToggle(
+                            checked = store in vm.monitorStores,
+                            label = store,
+                            onChange = { vm.setMonitorStoreEnabled(store, it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (pair.size == 1) Spacer(Modifier.weight(1f))
+                }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// Monitor thumbnail is shown at 2x+ the normal 46x64 table-row size (also matches MTG card
+// aspect ratio ~63:88 more closely) since it's the focal point of the found-card list.
+private val MONITOR_THUMB_W = 100.dp
+private val MONITOR_THUMB_H = 140.dp
+
+@Composable
+private fun MonitorFoundDialog(
+    hits: List<SearchResult>,
+    images: Map<String, String>,
+    onCloseAll: () -> Unit,
+    onGoToStore: (SearchResult) -> Unit,
+) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(560.dp).heightIn(max = 640.dp),
+        ) {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(HeaderBg)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Icon(Icons.Default.Notifications, null, tint = Tertiary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "${hits.size} card${if (hits.size == 1) "" else "s"} found",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                HorizontalDivider(color = OutlineVariant)
+                LazyColumn(modifier = Modifier.weight(1f, fill = false).padding(horizontal = 20.dp)) {
+                    itemsIndexed(
+                        hits,
+                        key = { _, hit -> "${hit.store}|${hit.title}|${hit.priceZar}" },
+                    ) { index, hit ->
+                        if (index > 0) HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+                        val imagePath = hit.title?.let { images[it] } ?: images[hit.card]
+                        MonitorFoundRow(hit, imagePath, onGoToStore = { onGoToStore(hit) })
+                    }
+                }
+                HorizontalDivider(color = OutlineVariant)
+                Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.End) {
+                    OutlinedButton(
+                        onClick = onCloseAll,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Close", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MonitorFoundRow(hit: SearchResult, imagePath: String?, onGoToStore: () -> Unit) {
+    val density = LocalDensity.current
+    val thumbInteraction = remember { MutableInteractionSource() }
+    val thumbHovered by thumbInteraction.collectIsHoveredAsState()
+    val popupInteraction = remember { MutableInteractionSource() }
+    val popupHovered by popupInteraction.collectIsHoveredAsState()
+    val showPopup = thumbHovered || popupHovered
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+    ) {
+        Box(Modifier.hoverable(thumbInteraction)) {
+            CardThumbnail(
+                imagePath, dimmed = false,
+                width = MONITOR_THUMB_W, height = MONITOR_THUMB_H,
+                showShimmerWhenMissing = true,
+            )
+            // Enlarged card art on hover — to the right of the thumbnail by default, falls to the
+            // left if it won't fit. popupInteraction keeps it alive when the cursor crosses from
+            // the thumbnail into the popup itself.
+            if (showPopup && imagePath != null) {
+                val bmp = imageCache[imagePath]
+                if (bmp != null) {
+                    val provider = remember(density) {
+                        object : PopupPositionProvider {
+                            override fun calculatePosition(
+                                anchorBounds: IntRect,
+                                windowSize: IntSize,
+                                layoutDirection: LayoutDirection,
+                                popupContentSize: IntSize,
+                            ): IntOffset {
+                                val gap = with(density) { 4.dp.roundToPx() }
+                                val x = anchorBounds.right + gap
+                                val clampedX =
+                                    if (x + popupContentSize.width <= windowSize.width) x
+                                    else (anchorBounds.left - gap - popupContentSize.width).coerceAtLeast(0)
+                                val y = (anchorBounds.top)
+                                    .coerceAtMost(windowSize.height - popupContentSize.height)
+                                    .coerceAtLeast(0)
+                                return IntOffset(clampedX, y)
+                            }
+                        }
+                    }
+                    Popup(popupPositionProvider = provider) {
+                        Box(Modifier.hoverable(popupInteraction)) { CardImagePopup(bmp) }
+                    }
+                }
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                hit.title ?: hit.card,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                color = OnSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(hit.store, fontSize = 12.sp, color = OnSecondaryContainer)
+            hit.priceZar?.let {
+                Text(
+                    formatZar(it),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold,
+                    fontFamily = Mono,
+                    color = Primary,
+                )
+            }
+        }
+        Button(
+            onClick = onGoToStore,
+            shape = RoundedCornerShape(4.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+        ) { Text("Go to store", fontSize = 12.sp) }
     }
 }
 
@@ -2790,7 +3098,13 @@ private val imageCache = java.util.concurrent.ConcurrentHashMap<String, ImageBit
 private val grayscaleFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
 
 @Composable
-private fun CardThumbnail(path: String?, dimmed: Boolean) {
+private fun CardThumbnail(
+    path: String?,
+    dimmed: Boolean,
+    width: Dp = 46.dp,
+    height: Dp = 64.dp,
+    showShimmerWhenMissing: Boolean = false,
+) {
     var bitmap by remember(path) { mutableStateOf(path?.let { imageCache[it] }) }
     LaunchedEffect(path) {
         if (path != null && bitmap == null) {
@@ -2809,7 +3123,7 @@ private fun CardThumbnail(path: String?, dimmed: Boolean) {
     val bmp = bitmap
     val shape = RoundedCornerShape(4.dp)
     Box(
-        Modifier.size(46.dp, 64.dp).clip(shape)
+        Modifier.size(width, height).clip(shape)
             .background(SurfaceContainerHighest)
             .border(1.dp, OutlineVariant, shape),
     ) {
@@ -2821,8 +3135,9 @@ private fun CardThumbnail(path: String?, dimmed: Boolean) {
                 colorFilter = if (dimmed) grayscaleFilter else null,
                 modifier = Modifier.fillMaxSize(),
             )
-        } else if (path != null) {
-            // Image path is known but not yet loaded — show a shimmer placeholder
+        } else if (path != null || showShimmerWhenMissing) {
+            // Either the path is known but not yet loaded from disk, or (when opted in) the path
+            // itself hasn't resolved yet — either way, art may still be on its way.
             ShimmerOverlay()
         }
     }

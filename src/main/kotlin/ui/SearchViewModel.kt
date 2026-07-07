@@ -11,6 +11,8 @@ import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.swing.Swing
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import network.BrowserSearcher
 import network.CardImageService
 import network.UpdateInfo
@@ -128,6 +130,184 @@ class SearchViewModel {
     var showCardOnHover: Boolean
         get() = showCardOnHoverState
         set(value) { showCardOnHoverState = value; AppDatabase.setSettingBoolean("showCardOnHover", value) }
+
+    // ── Search monitor (background interval checker) ────────────────────────────
+    // One shared config: a card query + a store selection + an interval, checked on a
+    // repeating timer while the app is open. New/changed listings queue a popup alert;
+    // still-in-stock listings already alerted on are deduped via monitorSeenKeys.
+    private val monitorJson = Json { ignoreUnknownKeys = true }
+
+    private var monitorQueryState by mutableStateOf(AppDatabase.getSetting("monitorCardQuery", ""))
+    private var monitorQueryDebounceJob: Job? = null
+    var monitorQuery: String
+        get() = monitorQueryState
+        set(value) {
+            monitorQueryState = value
+            AppDatabase.setSetting("monitorCardQuery", value)
+            // Debounce: wait for typing to settle for 10s, then recheck immediately with the new
+            // query and reset the interval countdown, so edits don't queue up a check per keystroke.
+            monitorQueryDebounceJob?.cancel()
+            if (monitorEnabled) {
+                monitorQueryDebounceJob = scope.launch {
+                    delay(10_000)
+                    stopMonitorLoop()
+                    startMonitorLoop()
+                }
+            }
+        }
+
+    private var monitorIntervalHoursState by mutableStateOf(
+        (AppDatabase.getSetting("monitorIntervalHours", "1").toIntOrNull() ?: 1).coerceAtLeast(1)
+    )
+    var monitorIntervalHours: Int
+        get() = monitorIntervalHoursState
+        set(value) {
+            val v = value.coerceAtLeast(1)
+            monitorIntervalHoursState = v
+            AppDatabase.setSetting("monitorIntervalHours", v.toString())
+        }
+
+    private var monitorEnabledState by mutableStateOf(AppDatabase.getSettingBoolean("monitorEnabled", false))
+    var monitorEnabled: Boolean
+        get() = monitorEnabledState
+        set(value) {
+            monitorEnabledState = value
+            AppDatabase.setSettingBoolean("monitorEnabled", value)
+            if (value) {
+                startMonitorLoop()
+            } else {
+                monitorQueryDebounceJob?.cancel()
+                stopMonitorLoop()
+            }
+        }
+
+    private var monitorStoresState: Set<String> by mutableStateOf(loadMonitorStores())
+    var monitorStores: Set<String>
+        get() = monitorStoresState
+        set(value) {
+            monitorStoresState = value
+            val disabled = STORES.keys.filter { it !in value }
+            AppDatabase.setSetting("monitorDisabledStores", disabled.joinToString(","))
+        }
+
+    fun setMonitorStoreEnabled(store: String, enabled: Boolean) {
+        monitorStores = if (enabled) monitorStores + store else monitorStores - store
+    }
+
+    private fun loadMonitorStores(): Set<String> {
+        val disabled = AppDatabase.getSetting("monitorDisabledStores", "")
+            .split(",").filter { it.isNotBlank() }.toSet()
+        return STORES.keys.filter { it !in disabled }.toSet()
+    }
+
+    var monitorLastCheckedAt by mutableStateOf(AppDatabase.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L)
+        private set
+    var monitorStatusText by mutableStateOf("")
+        private set
+
+    // Dedup keys ("store|title|price") for listings already alerted on — persisted so a
+    // still-in-stock listing doesn't re-alert every interval; only new/changed ones do.
+    private val monitorSeenKeys: MutableSet<String> = runCatching {
+        monitorJson.decodeFromString<List<String>>(AppDatabase.getSetting("monitorSeenListingsJson", "[]"))
+    }.getOrDefault(emptyList()).toMutableSet()
+
+    private fun saveMonitorSeenKeys() {
+        AppDatabase.setSetting("monitorSeenListingsJson", monitorJson.encodeToString(monitorSeenKeys.toList()))
+    }
+
+    // Found-card alerts waiting to be shown — all surfaced together in one scrollable modal.
+    // Art is looked up reactively from the shared `images` map (keyed by listing title, falling
+    // back to the plain card name), not baked into the alert, so a thumbnail that resolves after
+    // the alert is already queued still pops in once its image job completes.
+    val monitorAlerts = mutableStateListOf<SearchResult>()
+    fun dismissAllMonitorAlerts() { monitorAlerts.clear() }
+
+    private var monitorLoopJob: Job? = null
+
+    // Runs on the scope's default dispatcher (Swing) — same convention as search()/refreshCard().
+    // Compose state (monitorIntervalHours, monitorQuery, monitorStores, monitorAlerts, ...) is only
+    // ever read/written from this thread; only the actual network/disk work below hops to IO.
+    private fun startMonitorLoop() {
+        if (monitorLoopJob?.isActive == true) return
+        monitorLoopJob = scope.launch {
+            while (isActive) {
+                runCatching { runMonitorCheck() }
+                delay(monitorIntervalHours.coerceAtLeast(1) * 3_600_000L)
+            }
+        }
+    }
+
+    private fun stopMonitorLoop() {
+        monitorLoopJob?.cancel()
+        monitorLoopJob = null
+    }
+
+    private suspend fun runMonitorCheck() {
+        val cards = parseCardList(monitorQuery, ignoreBasicLands)
+        val storesToSearch = STORES.filterKeys { it in monitorStores }
+        if (cards.isEmpty() || storesToSearch.isEmpty()) return
+
+        monitorStatusText = "Checking…"
+        val imageService = CardImageService()
+        val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
+        var foundCount = 0
+        try {
+            // Card-name fallback art (mirrors search()) — resolved up front so a listing whose own
+            // messy title fails to resolve still has the plain card's art to fall back to.
+            imageJobs += scope.launch(Dispatchers.IO) {
+                val resolved = imageService.resolveImages(cards.filter { requestedTitles.add(it) })
+                if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+            }
+
+            runSearch(
+                cards = cards,
+                stores = storesToSearch,
+                sharedBrowserSearcher = warrenSearcher,
+                onProgress = {},
+                onResults = { rows ->
+                    // runSearch fans results out from concurrent per-store IO coroutines, so hop
+                    // back to Swing before touching monitorSeenKeys/monitorAlerts (neither is
+                    // thread-safe, and monitorAlerts is Compose-observed state).
+                    withContext(Dispatchers.Swing) {
+                        rows.filter { it.title != null && it.available != false && it.store.isNotBlank() }
+                            .forEach { r ->
+                                val key = "${r.store}|${r.title}|${r.priceZar}"
+                                if (monitorSeenKeys.add(key)) {
+                                    monitorAlerts.add(r)
+                                    foundCount++
+                                }
+                            }
+                    }
+                    // Resolve art for newly-seen listing titles as results stream in, same as search().
+                    val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
+                        .filter { (title, _) -> requestedTitles.add(title) }
+                        .toMap()
+                    if (newTitleHints.isNotEmpty()) {
+                        imageJobs += scope.launch(Dispatchers.IO) {
+                            val resolved = imageService.resolveImages(newTitleHints)
+                            if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                        }
+                    }
+                },
+                onStoreComplete = {},
+            )
+            if (foundCount > 0) saveMonitorSeenKeys()
+            imageJobs.joinAll()
+        } finally {
+            imageService.close()
+        }
+        val now = System.currentTimeMillis()
+        AppDatabase.setSetting("monitorLastCheckedAt", now.toString())
+        monitorLastCheckedAt = now
+        monitorStatusText =
+            if (foundCount == 0) "No new listings found"
+            else "$foundCount new listing${if (foundCount == 1) "" else "s"} found"
+    }
+
+    init {
+        if (monitorEnabledState) startMonitorLoop()
+    }
 
     // ── Saved search lists ─────────────────────────────────────────────────────
     val searchListRepo = SearchListRepo()
