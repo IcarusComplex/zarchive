@@ -81,7 +81,6 @@ object AppDatabase {
                 Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots,
             )
         }
-        migrateFromPrefs()
         migrateCfThresholdV2()
     }
 
@@ -177,36 +176,6 @@ object AppDatabase {
                 it[CfThrottleRules.tier] = 1
             }
             Settings.upsert { it[Settings.key] = "_cf_v2_threshold"; it[Settings.value] = "true" }
-        }
-    }
-
-    // ── Prefs migration ────────────────────────────────────────────────────────
-
-    // On first run, copy java.util.prefs values into settings, then wipe the registry node.
-    private fun migrateFromPrefs() {
-        val alreadyMigrated = transaction {
-            Settings.selectAll().where { Settings.key eq "_migrated_from_prefs" }.count() > 0
-        }
-        if (alreadyMigrated) return
-
-        runCatching {
-            val prefs = java.util.prefs.Preferences.userRoot().node("zarchive")
-            transaction {
-                fun put(k: String, v: String) =
-                    Settings.upsert { it[Settings.key] = k; it[Settings.value] = v }
-                put("ignoreBasicLands",  prefs.getBoolean("ignoreBasicLands", true).toString())
-                put("autoOpenLuckshack", prefs.getBoolean("autoOpenLuckshack", false).toString())
-                put("earlyAccess",       prefs.getBoolean("earlyAccess", false).toString())
-                put("disabledStores",    prefs.get("disabledStores", ""))
-                if (prefs.getBoolean("includeWarren", false)) put("includeWarren", "true")
-                put("_migrated_from_prefs", "true")
-            }
-            prefs.removeNode()
-        }
-        // Fresh install — mark migration done.
-        transaction {
-            if (Settings.selectAll().where { Settings.key eq "_migrated_from_prefs" }.count() == 0L)
-                Settings.upsert { it[Settings.key] = "_migrated_from_prefs"; it[Settings.value] = "true" }
         }
     }
 }
