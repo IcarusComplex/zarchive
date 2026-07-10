@@ -94,7 +94,16 @@ class BrowserSearcher(private val parallelism: Int = 1) : AutoCloseable {
     // ── Browser / context setup (called once per lane on its own thread) ───────
 
     private fun launchBrowser(pw: Playwright): Browser {
-        val args = listOf("--disable-blink-features=AutomationControlled")
+        // The real Chrome/Edge channel's "new" headless mode still briefly creates a real OS
+        // window before backgrounding itself, flashing a blank panel on screen at launch (two
+        // of them, one per lane). Chrome removed the old headless mode (--headless=old) in
+        // v132, so it can no longer be suppressed outright — instead push the window fully
+        // off any real monitor so the flash is never on-screen.
+        val args = listOf(
+            "--disable-blink-features=AutomationControlled",
+            "--window-position=-32000,-32000",
+            "--window-size=1,1",
+        )
         val opts = BrowserType.LaunchOptions().setHeadless(true).setArgs(args)
         for (channel in listOf("chrome", "msedge")) {
             runCatching { return pw.chromium().launch(opts.setChannel(channel)) }
