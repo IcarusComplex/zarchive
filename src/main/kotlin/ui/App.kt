@@ -36,6 +36,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.LineHeightStyle
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.BasicAlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -216,18 +217,22 @@ fun WindowScope.App(
             }
             if (vm.showAddToSearchDialog) {
                 AddToSearchDialog(
-                    newCount   = vm.pendingAddCount,
-                    totalCount = vm.pendingTotalCount,
-                    onAddNew   = { vm.confirmAddToSearch() },
-                    onSearchAll = { vm.declineAddToSearch() },
-                    onDismiss  = { vm.showAddToSearchDialog = false },
+                    newCount         = vm.pendingAddCount,
+                    totalCount       = vm.pendingTotalCount,
+                    unavailableCount = vm.pendingUnavailableCount,
+                    onAddNew         = { vm.confirmAddToSearch() },
+                    onAddNewAndRefresh = { vm.confirmAddNewAndRefreshUnavailable() },
+                    onSearchAll      = { vm.declineAddToSearch() },
+                    onDismiss        = { vm.showAddToSearchDialog = false },
                 )
             }
             if (vm.showAllAlreadySearchedDialog) {
                 AllAlreadySearchedDialog(
-                    count      = vm.alreadySearchedCount,
-                    onResearch = { vm.confirmResearchAll() },
-                    onDismiss  = { vm.dismissAllAlreadySearched() },
+                    count               = vm.alreadySearchedCount,
+                    unavailableCount    = vm.alreadySearchedUnavailableCount,
+                    onRefreshUnavailable = { vm.confirmRefreshUnavailable() },
+                    onResearch          = { vm.confirmResearchAll() },
+                    onDismiss           = { vm.dismissAllAlreadySearched() },
                 )
             }
             if (vm.monitorAlerts.isNotEmpty()) {
@@ -1415,7 +1420,9 @@ private fun UpdateDialog(
 private fun AddToSearchDialog(
     newCount: Int,
     totalCount: Int,
+    unavailableCount: Int,
     onAddNew: () -> Unit,
+    onAddNewAndRefresh: () -> Unit,
     onSearchAll: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1425,53 +1432,62 @@ private fun AddToSearchDialog(
             shape = RoundedCornerShape(8.dp),
             color = SurfaceContainerLow,
             border = BorderStroke(1.dp, OutlineVariant),
-            modifier = Modifier.width(500.dp),
+            modifier = Modifier.width(480.dp),
         ) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "Add to existing results?",
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
                 )
                 Text(
                     "$existingCount card${if (existingCount == 1) "" else "s"} already in results. " +
-                    "Your query has $newCount new card${if (newCount == 1) "" else "s"}.",
-                    fontSize = 13.sp, color = OnSurface, softWrap = false,
+                    "Your query has $newCount new card${if (newCount == 1) "" else "s"}" +
+                    if (unavailableCount > 0)
+                        ", and $unavailableCount of the existing ${if (unavailableCount == 1) "is" else "are"} still unavailable."
+                    else ".",
+                    fontSize = 13.sp, color = OnSurface,
                 )
-                Text(
-                    "Search the $newCount new card${if (newCount == 1) "" else "s"} only, or start fresh for all $totalCount?",
-                    fontSize = 12.sp, color = OnSurfaceVariant, softWrap = false,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(
-                        onClick = onDismiss,
-                        shape = RoundedCornerShape(4.dp),
-                        border = BorderStroke(1.dp, OutlineVariant),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
-                    ) { Text("Cancel", fontSize = 12.sp) }
-                    Spacer(Modifier.weight(1f))
-                    OutlinedButton(
-                        onClick = onSearchAll,
-                        shape = RoundedCornerShape(4.dp),
-                        border = BorderStroke(1.dp, OutlineVariant),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
-                    ) { Text("Search all $totalCount", fontSize = 12.sp) }
+                Spacer(Modifier.height(2.dp))
+                if (unavailableCount > 0) {
                     Button(
-                        onClick = onAddNew,
+                        onClick = onAddNewAndRefresh,
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                    ) { Text("Add $newCount new", fontSize = 12.sp) }
+                    ) { Text("Add $newCount new + refresh $unavailableCount unavailable", fontSize = 12.sp) }
                 }
+                Button(
+                    onClick = onAddNew,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    colors = if (unavailableCount > 0)
+                        ButtonDefaults.buttonColors(containerColor = SurfaceContainerHighest, contentColor = OnSurface)
+                    else ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                ) { Text("Add $newCount new only", fontSize = 12.sp) }
+                OutlinedButton(
+                    onClick = onSearchAll,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                ) { Text("Search all $totalCount", fontSize = 12.sp) }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Cancel", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
             }
         }
     }
 }
 
 @Composable
-private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismiss: () -> Unit) {
+private fun AllAlreadySearchedDialog(
+    count: Int,
+    unavailableCount: Int,
+    onRefreshUnavailable: () -> Unit,
+    onResearch: () -> Unit,
+    onDismiss: () -> Unit,
+) {
     ModalScrim {
         Surface(
             shape = RoundedCornerShape(8.dp),
@@ -1479,37 +1495,38 @@ private fun AllAlreadySearchedDialog(count: Int, onResearch: () -> Unit, onDismi
             border = BorderStroke(1.dp, OutlineVariant),
             modifier = Modifier.width(480.dp),
         ) {
-            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     "Already in results",
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
                 )
                 Text(
-                    "All $count card${if (count == 1) "" else "s"} in your query are already in the current results.",
-                    fontSize = 13.sp, color = OnSurface, softWrap = false,
+                    "All $count card${if (count == 1) "" else "s"} in your query are already in the current results" +
+                    if (unavailableCount > 0)
+                        ", and $unavailableCount of ${if (count == 1) "it" else "them"} ${if (unavailableCount == 1) "is" else "are"} still unavailable."
+                    else ".",
+                    fontSize = 13.sp, color = OnSurface,
                 )
-                Text(
-                    "Keep what you have, or discard and re-search everything?",
-                    fontSize = 12.sp, color = OnSurfaceVariant, softWrap = false,
-                )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedButton(
-                        onClick = onDismiss,
-                        shape = RoundedCornerShape(4.dp),
-                        border = BorderStroke(1.dp, OutlineVariant),
-                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
-                    ) { Text("Keep results", fontSize = 12.sp) }
-                    Spacer(Modifier.weight(1f))
+                Spacer(Modifier.height(2.dp))
+                if (unavailableCount > 0) {
                     Button(
-                        onClick = onResearch,
+                        onClick = onRefreshUnavailable,
+                        modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                    ) { Text("Re-search all", fontSize = 12.sp) }
+                    ) { Text("Refresh $unavailableCount unavailable", fontSize = 12.sp) }
                 }
+                OutlinedButton(
+                    onClick = onResearch,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                ) { Text("Re-search all $count", fontSize = 12.sp) }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Keep results", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
             }
         }
     }
@@ -3462,6 +3479,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
     val excludedCards = vm.excludedCards
     val priceMax = vm.orderPriceFilter.toDoubleOrNull()
     val orderListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
 
     // Recomputed automatically whenever results stream in (reads the observable list).
     val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
@@ -3534,7 +3552,10 @@ private fun OrderListsPane(vm: SearchViewModel) {
             PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
             if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 Spacer(Modifier.width(20.dp))
-                PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
+                PlanStat(
+                    "${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor,
+                    onClick = { scope.launch { orderListState.animateScrollToItem(plan.storeOrders.size) } },
+                )
             }
             Spacer(Modifier.weight(1f))
             // Price filter
@@ -3595,9 +3616,15 @@ private fun OrderListsPane(vm: SearchViewModel) {
 }
 
 @Composable
-private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface) {
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(value, fontFamily = Mono, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = valueColor)
+private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface, onClick: (() -> Unit)? = null) {
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        modifier = if (onClick != null) {
+            Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 2.dp)
+        } else Modifier,
+    ) {
+        Text(value, fontFamily = Mono, fontSize = 16.sp, fontWeight = FontWeight.Bold,
+            color = valueColor, textDecoration = if (onClick != null) TextDecoration.Underline else null)
         Spacer(Modifier.width(5.dp))
         Text(label, fontSize = 11.sp, color = OnSurfaceVariant, modifier = Modifier.padding(bottom = 2.dp))
     }

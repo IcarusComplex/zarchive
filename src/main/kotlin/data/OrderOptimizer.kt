@@ -36,6 +36,19 @@ private val byPrice = compareBy<SearchResult>({ it.priceZar == null }, { it.pric
 private fun List<SearchResult>.inStockOnly() =
     filter { it.title != null && it.available != false && it.store.isNotBlank() }
 
+/**
+ * Cards from [cards] with no in-stock listing anywhere in [results] — same "unavailable"
+ * definition used by [cheapestPlan]/[fewestStoresPlan]'s `uncoveredCards`. Lets callers (e.g.
+ * "refresh only unavailable cards") ask the question without building a full [OrderPlan].
+ */
+fun unavailableCards(cards: List<String>, results: List<SearchResult>, includePartialMatches: Boolean = false): List<String> {
+    val byCard = results.inStockOnly().groupBy { it.card }
+    return cards.distinct().filter { card ->
+        val listings = byCard[card] ?: return@filter true
+        preferExactMatches(card, listings, exactOnly = !includePartialMatches).isEmpty()
+    }
+}
+
 private fun buildStoreOrders(lines: List<OrderLine>): List<StoreOrder> =
     lines.groupBy { it.listing.store }
         .map { (store, ls) ->

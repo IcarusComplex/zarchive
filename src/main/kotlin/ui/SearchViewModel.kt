@@ -38,11 +38,15 @@ class SearchViewModel {
     var showAddToSearchDialog by mutableStateOf(false)
     var pendingAddCount by mutableStateOf(0)       // how many new (unsearched) cards
     var pendingTotalCount by mutableStateOf(0)     // total cards in the current query
+    var pendingUnavailableCount by mutableStateOf(0) // how many of the overlapping cards are currently unavailable
     private var pendingAddCards: List<String> = emptyList()
+    private var pendingUnavailableCards: List<String> = emptyList()
 
     // "All already searched" dialog: shown when every card in the new query is already in results.
     var showAllAlreadySearchedDialog by mutableStateOf(false)
     var alreadySearchedCount by mutableStateOf(0)
+    var alreadySearchedUnavailableCount by mutableStateOf(0)
+    private var alreadySearchedUnavailableCards: List<String> = emptyList()
 
     // Search summary modal: shown when a search completes.
     var showSearchSummary by mutableStateOf(false)
@@ -572,6 +576,12 @@ class SearchViewModel {
         // search in their browser now; otherwise it's available as a click-through link in the UI.
         if (autoOpenLuckshack) openLuckshackSearches(cards)
 
+        launchCardSearch(cards, storesToSearch)
+    }
+
+    // Shared launcher for search()/searchAdditional()/refreshUnavailable() — all three only
+    // differ in how they prep `results`/`searchedCards` beforehand and which cards to query.
+    private fun launchCardSearch(cardsToQuery: List<String>, storesToSearch: Map<String, String>) {
         searchJob = scope.launch {
             val imageService = CardImageService()
             val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
@@ -582,12 +592,12 @@ class SearchViewModel {
                 // card name and act as a reliable fallback in the summary / order list / thumbnails
                 // whenever a messy store listing title fails to resolve its own specific printing.
                 imageJobs += scope.launch(Dispatchers.IO) {
-                    val resolved = imageService.resolveImages(cards.filter { requestedTitles.add(it) })
+                    val resolved = imageService.resolveImages(cardsToQuery.filter { requestedTitles.add(it) })
                     if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
                 }
 
                 runSearch(
-                    cards = cards,
+                    cards = cardsToQuery,
                     stores = storesToSearch,
                     sharedBrowserSearcher = warrenSearcher,
                     onProgress = { storeName ->
@@ -848,19 +858,27 @@ log "Done"
         if (cards.isEmpty()) return
 
         if (results.isNotEmpty() && searchedCards.isNotEmpty()) {
-            val existingSet = searchedCards.map { it.lowercase() }.toSet()
-            val newCards = cards.filter { it.lowercase() !in existingSet }
+            // Map back to the canonical (originally-searched) casing so lookups against
+            // results/searchedCards — both keyed by that original string — actually hit.
+            val existingByLower = searchedCards.associateBy { it.lowercase() }
+            val newCards = cards.filter { it.lowercase() !in existingByLower }
             val overlapCount = cards.size - newCards.size
             if (overlapCount > 0 && newCards.isEmpty()) {
                 // Every card in the new query is already in the current results.
+                val overlapCards = cards.mapNotNull { existingByLower[it.lowercase()] }
                 alreadySearchedCount = cards.size
+                alreadySearchedUnavailableCards = data.unavailableCards(overlapCards, results, includePartialMatches)
+                alreadySearchedUnavailableCount = alreadySearchedUnavailableCards.size
                 showAllAlreadySearchedDialog = true
                 return
             }
             if (overlapCount > 0 && newCards.isNotEmpty()) {
+                val overlapCards = cards.mapNotNull { existingByLower[it.lowercase()] }
                 pendingAddCards = newCards
                 pendingAddCount = newCards.size
                 pendingTotalCount = cards.size
+                pendingUnavailableCards = data.unavailableCards(overlapCards, results, includePartialMatches)
+                pendingUnavailableCount = pendingUnavailableCards.size
                 showAddToSearchDialog = true
                 return
             }
@@ -874,6 +892,11 @@ log "Done"
         searchAdditional(pendingAddCards)
     }
 
+    fun confirmAddNewAndRefreshUnavailable() {
+        showAddToSearchDialog = false
+        refreshUnavailable(pendingUnavailableCards, pendingAddCards)
+    }
+
     fun declineAddToSearch() {
         showAddToSearchDialog = false
         search()
@@ -881,6 +904,7 @@ log "Done"
 
     fun dismissAllAlreadySearched() { showAllAlreadySearchedDialog = false }
     fun confirmResearchAll() { showAllAlreadySearchedDialog = false; search() }
+    fun confirmRefreshUnavailable() { showAllAlreadySearchedDialog = false; refreshUnavailable(alreadySearchedUnavailableCards) }
     fun dismissSearchSummary() { showSearchSummary = false }
 
     private fun searchAdditional(newCards: List<String>) {
@@ -905,68 +929,47 @@ log "Done"
 
         if (autoOpenLuckshack) openLuckshackSearches(newCards)
 
-        searchJob = scope.launch {
-            val imageService = CardImageService()
-            val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-            val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
+        launchCardSearch(newCards, storesToSearch)
+    }
 
-            try {
-                imageJobs += scope.launch(Dispatchers.IO) {
-                    val resolved = imageService.resolveImages(newCards.filter { requestedTitles.add(it) })
-                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
-                }
+    /**
+     * Re-runs cards that are already in [searchedCards] but currently have no in-stock listing
+     * anywhere (see [data.unavailableCards]) — e.g. after clicking Search again on a query that's
+     * already fully covered. Optionally also folds in [cardsToAdd] (brand-new cards from the same
+     * query) in one pass. Old rows for [cardsToRefresh] are discarded before re-querying so stale
+     * "not stocked" placeholders don't linger alongside fresh results.
+     */
+    fun refreshUnavailable(cardsToRefresh: List<String>, cardsToAdd: List<String> = emptyList()) {
+        val allCards = (cardsToRefresh + cardsToAdd).distinct()
+        if (allCards.isEmpty()) return
+        val storesToSearch = STORES.filterKeys { it in enabledStores }
 
-                runSearch(
-                    cards = newCards,
-                    stores = storesToSearch,
-                    sharedBrowserSearcher = warrenSearcher,
-                    onProgress = { storeName ->
-                        withContext(Dispatchers.Swing) {
-                            storeStatuses[storeName] = StoreStatus.CHECKING
-                            statusText = "Checking $storeName…"
-                        }
-                    },
-                    onResults = { rows ->
-                        withContext(Dispatchers.Swing) {
-                            results.addAll(rows)
-                            rows.firstOrNull()?.store?.takeIf { it.isNotBlank() }?.let { store ->
-                                storeCardCounts[store] = (storeCardCounts[store] ?: 0) + 1
-                            }
-                            completedCardChecks++
-                            statusText = "Checked $completedCardChecks / $totalCardChecks cards"
-                        }
-                        val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
-                            .filter { (title, _) -> requestedTitles.add(title) }
-                            .toMap()
-                        if (newTitleHints.isNotEmpty()) {
-                            imageJobs += scope.launch(Dispatchers.IO) {
-                                val resolved = imageService.resolveImages(newTitleHints)
-                                if (resolved.isNotEmpty()) {
-                                    withContext(Dispatchers.Swing) { images.putAll(resolved) }
-                                }
-                            }
-                        }
-                    },
-                    onStoreComplete = { storeName ->
-                        withContext(Dispatchers.Swing) {
-                            storeStatuses[storeName] = StoreStatus.DONE
-                            completedStores++
-                        }
-                    },
-                    onStoreCfBlocked = { storeName ->
-                        scope.launch(Dispatchers.Swing) {
-                            if (storeName !in cfBlockedStores) cfBlockedStores.add(storeName)
-                        }
-                    },
-                )
-                imageJobs.joinAll()
-            } finally {
-                imageService.close()
-            }
-            isSearching = false
-            statusText = "Done — ${results.count { it.title != null }} listings found"
-            showSearchSummary = searchedCards.size > 5
-        }
+        searchJob?.cancel()
+
+        // storeCardCounts already counted one onResults call per (card, store) pair for these
+        // cards from their earlier search — back that out so "done/total" in the store grid
+        // doesn't over-count once they're re-checked below.
+        val staleCounts = results.filter { it.card in cardsToRefresh && it.store.isNotBlank() }
+            .distinctBy { it.card to it.store }
+            .groupingBy { it.store }
+            .eachCount()
+        staleCounts.forEach { (store, n) -> storeCardCounts[store] = ((storeCardCounts[store] ?: 0) - n).coerceAtLeast(0) }
+        results.removeAll { it.card in cardsToRefresh }
+        if (cardsToAdd.isNotEmpty()) searchedCards = searchedCards + cardsToAdd
+
+        completedStores = 0
+        completedCardChecks = 0
+        totalCardChecks = allCards.size * storesToSearch.size
+        totalStores = storesToSearch.size
+        storeStatuses.clear()
+        storeStatuses.putAll(storesToSearch.keys.associateWith { StoreStatus.PENDING })
+        cfBlockedStores.clear()
+        isSearching = true
+        statusText = "Rechecking ${allCards.size} card${if (allCards.size == 1) "" else "s"}…"
+
+        if (autoOpenLuckshack) openLuckshackSearches(allCards)
+
+        launchCardSearch(allCards, storesToSearch)
     }
 
     fun refreshCard(card: String) {
