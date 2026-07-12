@@ -82,6 +82,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     var summaryExpanded by remember { mutableStateOf(true) }
     var summaryFilter by remember { mutableStateOf("") }
     var expandedImagePath by remember { mutableStateOf<String?>(null) }
+    var detailResult by remember { mutableStateOf<data.SearchResult?>(null) }
     var showListsDialog by remember { mutableStateOf(false) }
     var showResultsDialog by remember { mutableStateOf(false) }
     var showSearchOptionsDialog by remember { mutableStateOf(false) }
@@ -210,6 +211,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                                 onSummaryFilterChange = { summaryFilter = it },
                                 onOpenUrl = platformActions::openUrl,
                                 onImageTap = { expandedImagePath = it },
+                                onCardTap = { detailResult = it },
                             )
                         }
                         ResultsTab.ORDERS -> OrderListsScreen(
@@ -229,6 +231,21 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
         if (expandedImagePath != null) {
             ModalScrim(onDismiss = { expandedImagePath = null }) {
                 EnlargedCardPreview(expandedImagePath!!, onDismiss = { expandedImagePath = null })
+            }
+        }
+        detailResult?.let { result ->
+            ModalScrim(onDismiss = { detailResult = null }) {
+                CardDetailModal(
+                    result = result,
+                    imagePath = (result.title?.let { vm.images[it] }) ?: vm.images[result.card],
+                    isPinned = vm.pinnedListings[result.card] == result.url,
+                    onTogglePin = {
+                        if (vm.pinnedListings[result.card] == result.url) vm.pinnedListings.remove(result.card)
+                        else vm.pinnedListings[result.card] = result.url
+                    },
+                    onOpenUrl = platformActions::openUrl,
+                    onDismiss = { detailResult = null },
+                )
             }
         }
         }

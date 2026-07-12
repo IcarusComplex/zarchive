@@ -189,7 +189,7 @@ private fun ListingCard(
     isPinned: Boolean,
     onTogglePin: (() -> Unit)?,
     onOpenUrl: (String) -> Unit,
-    onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     // In-stock/out-of-stock is already conveyed by which ListingGroup ("In Stock" vs "Out of
     // Stock" header) a row sits in, so no per-row status chip is repeated here. The footer is
@@ -201,10 +201,10 @@ private fun ListingCard(
             .background(if (isPinned && !dimmed) Primary.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+            modifier = Modifier.fillMaxWidth().clickable { onCardTap(result) }.padding(horizontal = 12.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            CardThumbnail(imagePath, dimmed, onTap = imagePath?.let { { onImageTap(it) } })
+            CardThumbnail(imagePath, dimmed)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -291,7 +291,7 @@ private fun ListingGroup(
     pinnedUrl: String?,
     onTogglePin: ((String) -> Unit)?,
     onOpenUrl: (String) -> Unit,
-    onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -312,7 +312,7 @@ private fun ListingGroup(
                     isPinned = pinnedUrl == r.url,
                     onTogglePin = onTogglePin?.let { fn -> { fn(r.url) } },
                     onOpenUrl = onOpenUrl,
-                    onImageTap = onImageTap,
+                    onCardTap = onCardTap,
                 )
             }
         }
@@ -333,7 +333,7 @@ fun CardSection(
     onToggleExcludeFromOrder: () -> Unit,
     onRefresh: () -> Unit,
     onOpenUrl: (String) -> Unit,
-    onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -413,7 +413,7 @@ fun CardSection(
                             emptyList(), images, dimmed = false,
                             emptyMessage = if (isSearching) "Searching…" else "No listings found at any store",
                             card = card, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin,
-                            onOpenUrl = onOpenUrl, onImageTap = onImageTap,
+                            onOpenUrl = onOpenUrl, onCardTap = onCardTap,
                         )
                     } else if (listings.isEmpty()) {
                         Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
@@ -424,7 +424,7 @@ fun CardSection(
                             ListingGroup(
                                 inStock, images, dimmed = false, emptyMessage = null,
                                 card = card, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin,
-                                onOpenUrl = onOpenUrl, onImageTap = onImageTap,
+                                onOpenUrl = onOpenUrl, onCardTap = onCardTap,
                             )
                         }
                         if (outOfStock.isNotEmpty()) {
@@ -458,7 +458,7 @@ fun CardSection(
                                 ListingGroup(
                                     outOfStock, images, dimmed = true, emptyMessage = null,
                                     card = card, pinnedUrl = pinnedUrl, onTogglePin = onTogglePin,
-                                    onOpenUrl = onOpenUrl, onImageTap = onImageTap,
+                                    onOpenUrl = onOpenUrl, onCardTap = onCardTap,
                                 )
                             }
                         }
@@ -491,6 +491,7 @@ fun ResultsScreen(
     onSummaryFilterChange: (String) -> Unit,
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     val summaryCards = vm.searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
     val hasResults = vm.results.map { it.card }.toSet()
@@ -539,7 +540,7 @@ fun ResultsScreen(
                     onToggleExcludeFromOrder = { if (vm.excludedCards.containsKey(card)) vm.excludedCards.remove(card) else vm.excludedCards[card] = Unit },
                     onRefresh = { vm.refreshCard(card) },
                     onOpenUrl = onOpenUrl,
-                    onImageTap = onImageTap,
+                    onCardTap = onCardTap,
                 )
             }
             Spacer(Modifier.height(12.dp))

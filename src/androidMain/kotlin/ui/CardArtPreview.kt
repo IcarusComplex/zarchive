@@ -37,12 +37,36 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.Text
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import data.SearchResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import ui.theme.Mono
+import ui.theme.OnSecondaryContainer
+import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
+import ui.theme.Primary
 import ui.theme.SurfaceContainerHighest
+import ui.theme.SurfaceContainerLow
 
 // Ported from ui/App.kt's CardThumbnail/ShimmerOverlay/CardImagePopup (desktop) — the hover-driven
 // popup is replaced here with an explicit tap: tapping a thumbnail invokes [onTap] (wired by the
@@ -165,5 +189,116 @@ fun EnlargedCardPreview(path: String, onDismiss: () -> Unit) {
                 .clickable { onDismiss() }
                 .padding(4.dp),
         )
+    }
+}
+
+private fun formatZar(v: Double): String {
+    val totalCents = Math.round(v * 100)
+    val whole = totalCents / 100
+    val cents = (totalCents % 100).toString().padStart(2, '0')
+    val grouped = whole.toString().reversed().chunked(3).joinToString(" ").reversed()
+    return "R$grouped,$cents"
+}
+
+// Tapping anywhere on a result row (ResultsScreen.kt's ListingCard), not just its thumbnail, opens
+// this instead of the bare EnlargedCardPreview -- same enlarged art, plus the full title/set/store/
+// price and the same "Use this version"/"Open in store" actions the row's own footer has, for when
+// the row's own truncated text isn't enough. Hosted inside a ModalScrim by the caller (AndroidApp),
+// same as EnlargedCardPreview.
+@Composable
+fun CardDetailModal(
+    result: SearchResult,
+    imagePath: String?,
+    isPinned: Boolean,
+    onTogglePin: (() -> Unit)?,
+    onOpenUrl: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val bmp = rememberCardBitmap(imagePath)
+    val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+    val cardWidth = screenWidth * CARD_PREVIEW_WIDTH_FRACTION * 0.7f
+    val cardHeight = cardWidth * CARD_ASPECT_H_OVER_W
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth(0.9f)
+            .clip(RoundedCornerShape(8.dp))
+            .background(SurfaceContainerLow)
+            .border(1.dp, OutlineVariant, RoundedCornerShape(8.dp))
+            .padding(20.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Box(Modifier.size(cardWidth, cardHeight).shadow(16.dp, RoundedCornerShape(8.dp)).clip(RoundedCornerShape(8.dp))) {
+            if (bmp != null) {
+                Image(bmp, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Box(Modifier.fillMaxSize().background(SurfaceContainerHighest)) { ShimmerOverlay() }
+            }
+        }
+        Text(
+            result.title ?: result.card,
+            fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
+            textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis,
+        )
+        val subtitle = result.note.takeIf { it.isNotBlank() && it !in setOf("In stock", "Out of stock", "not stocked") }
+        if (subtitle != null) {
+            Text(subtitle, fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), textAlign = TextAlign.Center)
+        }
+        if (!result.setHint.isNullOrBlank()) {
+            Text(result.setHint, fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), textAlign = TextAlign.Center)
+        }
+        Text(result.store, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = OnSecondaryContainer)
+        Text(
+            text = result.priceZar?.let { formatZar(it) } ?: "N/A",
+            fontFamily = Mono,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (result.priceZar != null) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
+        )
+        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+        Row(Modifier.fillMaxWidth().height(48.dp)) {
+            if (onTogglePin != null) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onTogglePin() }
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (isPinned) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                        null,
+                        tint = if (isPinned) Primary else OnSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Use this version",
+                        fontSize = 12.sp,
+                        fontWeight = if (isPinned) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isPinned) Primary else OnSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                VerticalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable { onOpenUrl(result.url); onDismiss() }
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.OpenInNew, null, tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Open in store", fontSize = 12.sp, color = OnSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
     }
 }
