@@ -251,8 +251,6 @@ val generateGoogleAuthConfig by tasks.registering {
     doLast {
         val desktopClientId = secretOrPlaceholder("google.desktop.clientId", "REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com")
         val desktopClientSecret = secretOrPlaceholder("google.desktop.clientSecret", "REPLACE_WITH_DESKTOP_CLIENT_SECRET")
-        val androidClientIdRelease = secretOrPlaceholder("google.android.release.clientId", "REPLACE_WITH_RELEASE_ANDROID_CLIENT_ID.apps.googleusercontent.com")
-        val androidClientIdDebug = secretOrPlaceholder("google.android.debug.clientId", "REPLACE_WITH_DEBUG_ANDROID_CLIENT_ID.apps.googleusercontent.com")
         val webClientId = secretOrPlaceholder("google.web.clientId", "REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com")
         val webClientSecret = secretOrPlaceholder("google.web.clientSecret", "REPLACE_WITH_WEB_CLIENT_SECRET")
         val out = generatedKotlinDir.get().file("network/GoogleAuthConfig.kt").asFile
@@ -262,11 +260,14 @@ val generateGoogleAuthConfig by tasks.registering {
 
             // Generated at build time from secrets.properties (git-ignored) -- see build.gradle.kts's
             // generateGoogleAuthConfig task. Do not edit directly; edit secrets.properties instead.
+            //
+            // Only the Desktop and Web clients are referenced anywhere (GoogleOAuthFlow.desktop.kt /
+            // .android.kt) -- Android's own "Android" OAuth client type (registered in Cloud Console,
+            // keyed by package name + signing SHA-1) is validated automatically by Google Play
+            // Services against the calling app, with no client ID needed in code at all.
             object GoogleAuthConfig {
                 const val DESKTOP_CLIENT_ID = "$desktopClientId"
                 const val DESKTOP_CLIENT_SECRET = "$desktopClientSecret"
-                const val ANDROID_CLIENT_ID_RELEASE = "$androidClientIdRelease"
-                const val ANDROID_CLIENT_ID_DEBUG = "$androidClientIdDebug"
 
                 // "Web application" client used only as the serverClientId for Android's
                 // Authorization API requestOfflineAccess() -- never used for a redirect, no

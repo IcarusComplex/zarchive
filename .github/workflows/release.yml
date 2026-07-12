@@ -22,6 +22,17 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Write secrets.properties
+        shell: bash
+        env:
+          GOOGLE_DESKTOP_CLIENT_ID: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        run: |
+          cat > secrets.properties <<EOF
+          google.desktop.clientId=$GOOGLE_DESKTOP_CLIENT_ID
+          google.desktop.clientSecret=$GOOGLE_DESKTOP_CLIENT_SECRET
+          EOF
+
       - name: Build distributable
         run: .\gradlew.bat createDistributable
 
@@ -54,6 +65,16 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Write secrets.properties
+        env:
+          GOOGLE_DESKTOP_CLIENT_ID: ${{ secrets.GOOGLE_DESKTOP_CLIENT_ID }}
+          GOOGLE_DESKTOP_CLIENT_SECRET: ${{ secrets.GOOGLE_DESKTOP_CLIENT_SECRET }}
+        run: |
+          cat > secrets.properties <<EOF
+          google.desktop.clientId=$GOOGLE_DESKTOP_CLIENT_ID
+          google.desktop.clientSecret=$GOOGLE_DESKTOP_CLIENT_SECRET
+          EOF
 
       - name: Build distributable
         run: ./gradlew createDistributable
@@ -92,6 +113,16 @@ jobs:
 
       - name: Make gradlew executable
         run: chmod +x gradlew
+
+      - name: Write secrets.properties
+        env:
+          GOOGLE_WEB_CLIENT_ID: ${{ secrets.GOOGLE_WEB_CLIENT_ID }}
+          GOOGLE_WEB_CLIENT_SECRET: ${{ secrets.GOOGLE_WEB_CLIENT_SECRET }}
+        run: |
+          cat > secrets.properties <<EOF
+          google.web.clientId=$GOOGLE_WEB_CLIENT_ID
+          google.web.clientSecret=$GOOGLE_WEB_CLIENT_SECRET
+          EOF
 
       - name: Build signed release APK
         env:
