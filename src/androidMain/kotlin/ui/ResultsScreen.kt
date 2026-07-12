@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -74,7 +75,6 @@ import ui.theme.SurfaceContainer
 import ui.theme.SurfaceContainerHighest
 import ui.theme.SurfaceContainerLow
 import ui.theme.SurfaceContainerLowest
-import ui.theme.Tertiary
 
 // Ported from ui/App.kt's SearchResultsTab -> CardSection -> ListingTable/ListingRow chain
 // (desktop). Desktop's wide 7-column table (thumb/name/store/status/price/pin/link, sized for a
@@ -182,27 +182,6 @@ fun CountBadge(text: String, muted: Boolean = false) {
 }
 
 @Composable
-fun StatusChip(available: Boolean?) {
-    val (text, color, filled) = when (available) {
-        true -> Triple("In Stock", Tertiary, true)
-        false -> Triple("Sold Out", OnSurfaceVariant, false)
-        null -> Triple("Unknown", OnSurfaceVariant, false)
-    }
-    Text(
-        text.uppercase(),
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.5.sp,
-        color = color,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .then(if (filled) Modifier.background(color.copy(alpha = 0.1f)) else Modifier)
-            .border(1.dp, if (filled) color.copy(alpha = 0.25f) else OutlineVariant, RoundedCornerShape(4.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
-}
-
-@Composable
 private fun ListingCard(
     result: SearchResult,
     imagePath: String?,
@@ -212,38 +191,37 @@ private fun ListingCard(
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
 ) {
-    Row(
+    // In-stock/out-of-stock is already conveyed by which ListingGroup ("In Stock" vs "Out of
+    // Stock" header) a row sits in, so no per-row status chip is repeated here. The footer is
+    // split into two full-half tap targets (mobile: bigger targets beat small icons) rather than
+    // the whole row opening the listing and a pair of small trailing icons.
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(if (isPinned && !dimmed) Primary.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent)
-            .clickable { onOpenUrl(result.url) }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .background(if (isPinned && !dimmed) Primary.copy(alpha = 0.07f) else androidx.compose.ui.graphics.Color.Transparent),
     ) {
-        CardThumbnail(imagePath, dimmed, onTap = imagePath?.let { { onImageTap(it) } })
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                result.title ?: "", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                color = if (dimmed) OnSurfaceVariant else OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
-            val subtitle = result.note.takeIf { it.isNotBlank() && it !in setOf("In stock", "Out of stock", "not stocked") }
-            if (subtitle != null) {
-                Text(subtitle, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.height(3.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CardThumbnail(imagePath, dimmed, onTap = imagePath?.let { { onImageTap(it) } })
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    result.title ?: "", fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                    color = if (dimmed) OnSurfaceVariant else OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                )
+                val subtitle = result.note.takeIf { it.isNotBlank() && it !in setOf("In stock", "Out of stock", "not stocked") }
+                if (subtitle != null) {
+                    Text(subtitle, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                Spacer(Modifier.height(4.dp))
                 Text(
                     result.store, fontSize = 12.sp, fontWeight = FontWeight.Medium,
                     color = if (dimmed) OnSurfaceVariant else OnSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false),
                 )
-                Spacer(Modifier.width(8.dp))
-                StatusChip(result.available)
             }
-        }
-        Spacer(Modifier.width(8.dp))
-        Column(horizontalAlignment = Alignment.End) {
+            Spacer(Modifier.width(8.dp))
             Text(
                 text = result.priceZar?.let { formatZar(it) } ?: "N/A",
                 fontFamily = Mono,
@@ -255,25 +233,49 @@ private fun ListingCard(
                     else -> Primary
                 },
             )
-            if (onTogglePin != null || !dimmed) {
-                Spacer(Modifier.height(4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (onTogglePin != null) {
-                        Icon(
-                            if (isPinned) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                            "Lock to this version for order lists",
-                            tint = if (isPinned) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.size(16.dp).clickable { onTogglePin() },
-                        )
-                    }
-                    if (!dimmed) {
-                        Icon(
-                            Icons.Default.OpenInNew, "Open listing in browser",
-                            tint = OnSurfaceVariant,
-                            modifier = Modifier.size(16.dp).clickable { onOpenUrl(result.url) },
-                        )
-                    }
+        }
+        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+        Row(Modifier.fillMaxWidth().height(48.dp)) {
+            if (onTogglePin != null) {
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable { onTogglePin() }
+                        .padding(horizontal = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        if (isPinned) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                        null,
+                        tint = if (isPinned) Primary else OnSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Use this version",
+                        fontSize = 12.sp,
+                        fontWeight = if (isPinned) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isPinned) Primary else OnSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
+                androidx.compose.material3.VerticalDivider(color = OutlineVariant.copy(alpha = 0.3f))
+            }
+            Row(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clickable { onOpenUrl(result.url) }
+                    .padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.OpenInNew, null, tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Open in store", fontSize = 12.sp, color = OnSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }

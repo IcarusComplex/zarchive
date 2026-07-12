@@ -82,7 +82,7 @@ reachable from `desktopMain`:
 | 10 | [phase-10-order-lists.md](phase-10-order-lists.md) | **Done** — strategy toggle + reactive checkbox totals verified live on Pixel_9 with real data |
 | 11 | [phase-11-warren-webview.md](phase-11-warren-webview.md) | **Done** — real Warren listing (R925,00, in stock) verified live on Pixel_9 against production |
 | 12 | [phase-12-distribution-update.md](phase-12-distribution-update.md) | **Done** — new signing keystore, signed release APK verified via `apksigner verify` + live install on Pixel_9; live release-tag dry run deferred pending user go-ahead |
-| 13 | [phase-13-hardening-qa.md](phase-13-hardening-qa.md) | Not started |
+| 13 | [phase-13-hardening-qa.md](phase-13-hardening-qa.md) | **Done** — found and fixed a real rotation data-loss bug (configChanges), fixed status/nav bar theming, predictive back enabled; no physical device available |
 | 14 | [phase-14-deferred.md](phase-14-deferred.md) | Deferred (not sequenced) |
 
 Update the Status column as each phase is picked up / completed.
