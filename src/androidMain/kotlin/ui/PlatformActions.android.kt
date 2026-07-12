@@ -6,7 +6,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidapp.ZArchiveApplication
+import androidx.core.content.FileProvider
 import data.PlatformPaths
+import network.downloadRelease
 import java.io.File
 
 actual class PlatformActions actual constructor() {
@@ -29,13 +31,27 @@ actual class PlatformActions actual constructor() {
     actual val crashLogFile: File
         get() = PlatformPaths.debugDumpDir.resolve("crash.log")
 
-    // No in-app update-install mechanism on Android until Phase 12 (FileProvider + package
-    // installer intent) — the UI falls back to "open the release page" while this is false.
-    actual fun canInstallUpdate(): Boolean = false
+    // Android's package installer handles the replace-over-existing-install flow itself once
+    // handed a same-signature APK -- a real simplification versus desktop's swap scripts. The
+    // system also handles the "allow installs from this source" permission prompt when needed.
+    actual fun canInstallUpdate(): Boolean = true
 
     actual suspend fun triggerUpdateInstall(
         downloadUrl: String,
         onProgress: (Float) -> Unit,
         onPhase: (String) -> Unit,
-    ): Result<Unit> = Result.failure(UnsupportedOperationException("Android in-app update lands in Phase 12"))
+    ): Result<Unit> = runCatching {
+        onPhase("Downloading update…")
+        val context = ZArchiveApplication.appContext
+        val dest = File(context.cacheDir, "update.apk")
+        downloadRelease(downloadUrl, dest, onProgress)
+
+        onPhase("Opening installer…")
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", dest)
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(intent)
+    }
 }

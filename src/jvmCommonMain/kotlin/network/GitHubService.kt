@@ -49,22 +49,31 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
         val htmlUrl = release["html_url"]?.jsonPrimitive?.content    ?: return@runCatching null
         if (!isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) return@runCatching null
 
-        // Pick the platform-appropriate zip from the release assets.
+        // Pick the platform-appropriate asset from the release assets. java.vm.name reports
+        // "Dalvik"/"ART" on Android (there is no equivalent os.name signal -- Android's os.name is
+        // just "Linux"), so it's the reliable way to tell Android apart from desktop JVMs here in
+        // shared (jvmCommonMain) code without a new expect/actual.
         val os = System.getProperty("os.name", "").orEmpty().lowercase()
+        val vmName = System.getProperty("java.vm.name", "").orEmpty().lowercase()
+        val isAndroid = vmName.contains("dalvik") || vmName.contains("art")
         val platformKey = when {
+            isAndroid          -> "android"
             os.contains("mac") -> "macos"
             os.contains("win") -> "windows"
             else               -> null
         }
-        val zips = release["assets"]?.jsonArray
+        val assets = release["assets"]?.jsonArray
             ?.mapNotNull { it.jsonObject }
-            ?.filter { it["name"]?.jsonPrimitive?.content?.endsWith(".zip") == true }
+            ?.filter { asset ->
+                val name = asset["name"]?.jsonPrimitive?.content ?: return@filter false
+                name.endsWith(".zip") || name.endsWith(".apk")
+            }
             ?: emptyList()
         val downloadUrl = (if (platformKey != null)
-            zips.firstOrNull { it["name"]?.jsonPrimitive?.content?.contains(platformKey) == true }
-                ?: zips.firstOrNull()
+            assets.firstOrNull { it["name"]?.jsonPrimitive?.content?.contains(platformKey) == true }
+                ?: assets.firstOrNull()
         else
-            zips.firstOrNull()
+            assets.firstOrNull()
         )?.get("browser_download_url")?.jsonPrimitive?.content
 
         UpdateInfo(tag, htmlUrl, downloadUrl)

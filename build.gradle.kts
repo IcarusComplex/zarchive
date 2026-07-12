@@ -1,5 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Base64
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -101,6 +102,31 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // Release signing is driven entirely by environment variables (set from GitHub Actions
+    // secrets in CI -- see .github/workflows/release.yml) so the keystore and its password never
+    // touch the repo. A local `assembleRelease` without these env vars set falls back to no
+    // explicit signing config (an unsigned/debug-signed build) -- fine for local testing, but
+    // every real release must go through CI where the secrets are present.
+    val ksBase64 = System.getenv("ANDROID_KEYSTORE_BASE64")
+    if (!ksBase64.isNullOrBlank()) {
+        val decodedKeystore = layout.buildDirectory.file("zarchive-release.jks").get().asFile
+        decodedKeystore.parentFile.mkdirs()
+        decodedKeystore.writeBytes(Base64.getDecoder().decode(ksBase64))
+        signingConfigs {
+            create("release") {
+                storeFile = decodedKeystore
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
     }
 }
 

@@ -77,9 +77,45 @@ jobs:
           name: macos-dist
           path: ZArchive-macos-arm64-*.zip
 
+  # ── Android (universal APK, signed) ──────────────────────────────────────────
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build signed release APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Rename APK
+        run: |
+          VER="${{ github.ref_name }}"
+          VER="${VER#v}"
+          cp build/outputs/apk/release/*.apk "ZArchive-android-$VER.apk"
+          echo "Packaged ZArchive-android-$VER.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-dist
+          path: ZArchive-android-*.apk
+
   # ── Publish GitHub Release ─────────────────────────────────────────────────
   release:
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write   # required to create releases and upload assets
@@ -94,6 +130,7 @@ jobs:
           files: |
             ZArchive-windows-x64-*.zip
             ZArchive-macos-arm64-*.zip
+            ZArchive-android-*.apk
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ !contains(github.ref_name, '-') }}
           generate_release_notes: true

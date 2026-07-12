@@ -230,7 +230,9 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
         } else if (vm.updateInfo != null) {
             UpdateDialog(
                 info = vm.updateInfo!!,
+                canAutoInstall = vm.updateInfo!!.downloadUrl != null && vm.canInstallUpdate,
                 onOpenUrl = platformActions::openUrl,
+                onInstall = { vm.startDownload(vm.updateInfo!!) {} },
                 onDismiss = { vm.updateInfo = null },
             )
         }

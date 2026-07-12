@@ -110,15 +110,22 @@ private fun DialogSurface(content: @Composable () -> Unit) {
 }
 
 @Composable
-fun UpdateDialog(info: UpdateInfo, onOpenUrl: (String) -> Unit, onDismiss: () -> Unit) {
+fun UpdateDialog(info: UpdateInfo, canAutoInstall: Boolean, onOpenUrl: (String) -> Unit, onInstall: () -> Unit, onDismiss: () -> Unit) {
     ModalScrim(onDismiss = onDismiss) {
         DialogSurface {
             Text("Update available", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
             Text("ZArchive ${info.tag} is available. You're on v${BuildInfo.VERSION}.", fontSize = 13.sp, color = OnSurface)
-            Text(
-                "Download the new version from GitHub Releases, extract, and replace your current ZArchive install.",
-                fontSize = 12.sp, color = OnSurfaceVariant,
-            )
+            if (canAutoInstall) {
+                Text(
+                    "ZArchive will download the update, then open Android's installer. Approve the install to finish.",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+            } else {
+                Text(
+                    "Download the new version from GitHub Releases, extract, and replace your current ZArchive install.",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Spacer(Modifier.weight(1f))
                 OutlinedButton(
@@ -127,11 +134,19 @@ fun UpdateDialog(info: UpdateInfo, onOpenUrl: (String) -> Unit, onDismiss: () ->
                     border = BorderStroke(1.dp, OutlineVariant),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
                 ) { Text("Later", fontSize = 12.sp) }
-                Button(
-                    onClick = { onOpenUrl(info.releaseUrl); onDismiss() },
-                    shape = RoundedCornerShape(4.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                ) { Text("Open release page", fontSize = 12.sp) }
+                if (canAutoInstall) {
+                    Button(
+                        onClick = onInstall,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Download & Install", fontSize = 12.sp) }
+                } else {
+                    Button(
+                        onClick = { onOpenUrl(info.releaseUrl); onDismiss() },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Open release page", fontSize = 12.sp) }
+                }
             }
         }
     }
