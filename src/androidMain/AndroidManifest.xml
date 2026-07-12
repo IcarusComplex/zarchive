@@ -3,6 +3,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Needed to launch Android's package installer on the downloaded update APK (Phase 12). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Runtime-requested (API 33+) the first time the user enables Search Monitors, required
+         for MonitorWorker's local notifications to actually show. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="androidapp.ZArchiveApplication"
@@ -21,6 +24,7 @@
         <activity
             android:name="androidapp.MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
             android:theme="@style/Theme.ZArchive.Splash">
             <intent-filter>

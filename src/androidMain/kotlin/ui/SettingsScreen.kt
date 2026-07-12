@@ -245,13 +245,14 @@ fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
     }
 }
 
+// Not private -- also reused by SearchMonitorsScreen.kt's store-selection grid.
 @Composable
-private fun OptionsSectionHeader(title: String) {
+fun OptionsSectionHeader(title: String) {
     Text(title.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = OnSurfaceVariant.copy(alpha = 0.5f), letterSpacing = 1.sp)
 }
 
 @Composable
-private fun OptionToggle(checked: Boolean, label: String, onChange: (Boolean) -> Unit, sublabel: String? = null) {
+fun OptionToggle(checked: Boolean, label: String, onChange: (Boolean) -> Unit, sublabel: String? = null) {
     Row(
         verticalAlignment = if (sublabel != null) Alignment.Top else Alignment.CenterVertically,
         modifier = Modifier

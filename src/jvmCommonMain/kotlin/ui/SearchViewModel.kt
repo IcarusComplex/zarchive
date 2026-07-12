@@ -157,8 +157,10 @@ class SearchViewModel(
             SettingsStore.setSetting("monitorCardQuery", value)
             // Debounce: wait for typing to settle for 10s, then recheck immediately with the new
             // query and reset the interval countdown, so edits don't queue up a check per keystroke.
+            // Only applies where the monitor runs as an in-process loop (desktop) -- Android's
+            // WorkManager-driven monitor reads monitorQuery fresh on every scheduled run instead.
             monitorQueryDebounceJob?.cancel()
-            if (monitorEnabled) {
+            if (monitorEnabled && monitor.runsMonitorLoopInProcess) {
                 monitorQueryDebounceJob = scope.launch {
                     delay(10_000)
                     stopMonitorLoop()
@@ -184,11 +186,16 @@ class SearchViewModel(
         set(value) {
             monitorEnabledState = value
             SettingsStore.setSettingBoolean("monitorEnabled", value)
-            if (value) {
-                startMonitorLoop()
-            } else {
-                monitorQueryDebounceJob?.cancel()
-                stopMonitorLoop()
+            // The in-process loop only runs on desktop -- Android relies solely on a WorkManager
+            // periodic job (scheduled/cancelled reactively from AndroidApp) so backgrounding or
+            // killing the app doesn't stop monitor checks.
+            if (monitor.runsMonitorLoopInProcess) {
+                if (value) {
+                    startMonitorLoop()
+                } else {
+                    monitorQueryDebounceJob?.cancel()
+                    stopMonitorLoop()
+                }
             }
         }
 
@@ -213,8 +220,19 @@ class SearchViewModel(
 
     var monitorLastCheckedAt by mutableStateOf(SettingsStore.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L)
         private set
-    var monitorStatusText by mutableStateOf("")
+    var monitorStatusText by mutableStateOf(SettingsStore.getSetting("monitorLastCheckStatus", ""))
         private set
+
+    // On Android the monitor actually runs out-of-process in MonitorWorker (see
+    // monitor/MonitorPlatform.android.kt), which persists its own "last checked"/status directly to
+    // SettingsStore -- this ViewModel instance has no live view into that. Not worth a continuous
+    // sync channel for a status line; re-reading once on app start (called from AndroidApp's
+    // startup LaunchedEffect block) is enough to reflect the latest background check whenever the
+    // user opens the app.
+    fun refreshMonitorStatusFromSettings() {
+        monitorLastCheckedAt = SettingsStore.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L
+        monitorStatusText = SettingsStore.getSetting("monitorLastCheckStatus", "")
+    }
 
     // Dedup keys ("store|title|price") for listings already alerted on — persisted so a
     // still-in-stock listing doesn't re-alert every interval; only new/changed ones do.
@@ -253,6 +271,9 @@ class SearchViewModel(
         monitorLoopJob = null
     }
 
+    // Thin wrapper around the shared, headless monitor/MonitorCheck.kt logic (also used by
+    // Android's WorkManager-driven MonitorWorker) -- this method owns everything Compose-observed
+    // (monitorStatusText, images, monitorAlerts) that the shared function has no business touching.
     private suspend fun runMonitorCheck() {
         val cards = parseCardList(monitorQuery, ignoreBasicLands)
         val storesToSearch = STORES.filterKeys { it in monitorStores }
@@ -271,25 +292,14 @@ class SearchViewModel(
                 if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
             }
 
-            runSearch(
-                cards = cards,
-                stores = storesToSearch,
-                sharedBrowserSearcher = warrenSearcher,
-                onProgress = {},
-                onResults = { rows ->
-                    // runSearch fans results out from concurrent per-store IO coroutines, so hop
-                    // back to Main before touching monitorSeenKeys/monitorAlerts (neither is
-                    // thread-safe, and monitorAlerts is Compose-observed state).
-                    withContext(Dispatchers.Main) {
-                        rows.filter { it.title != null && it.available != false && it.store.isNotBlank() }
-                            .forEach { r ->
-                                val key = "${r.store}|${r.title}|${r.priceZar}"
-                                if (monitorSeenKeys.add(key)) {
-                                    monitorAlerts.add(r)
-                                    foundCount++
-                                }
-                            }
-                    }
+            foundCount = monitor.runMonitorCheck(
+                query = monitorQuery,
+                enabledStores = monitorStores,
+                ignoreBasicLands = ignoreBasicLands,
+                browserSearcher = warrenSearcher,
+                seenKeys = monitorSeenKeys,
+                onHit = { r -> withContext(Dispatchers.Main) { monitorAlerts.add(r) } },
+                onRows = { rows ->
                     // Resolve art for newly-seen listing titles as results stream in, same as search().
                     val newTitleHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
                         .filter { (title, _) -> requestedTitles.add(title) }
@@ -301,7 +311,6 @@ class SearchViewModel(
                         }
                     }
                 },
-                onStoreComplete = {},
             )
             if (foundCount > 0) saveMonitorSeenKeys()
             imageJobs.joinAll()
@@ -314,10 +323,14 @@ class SearchViewModel(
         monitorStatusText =
             if (foundCount == 0) "No new listings found"
             else "$foundCount new listing${if (foundCount == 1) "" else "s"} found"
+        // Persisted alongside monitorLastCheckedAt so refreshMonitorStatusFromSettings() (Android's
+        // app-start resync, since MonitorWorker runs out-of-process) has a real status to show, not
+        // just a timestamp.
+        SettingsStore.setSetting("monitorLastCheckStatus", monitorStatusText)
     }
 
     init {
-        if (monitorEnabledState) startMonitorLoop()
+        if (monitorEnabledState && monitor.runsMonitorLoopInProcess) startMonitorLoop()
 
         // Android can kill this whole process while the app is merely backgrounded (Samsung's
         // battery manager is particularly aggressive about it) -- unlike a config change

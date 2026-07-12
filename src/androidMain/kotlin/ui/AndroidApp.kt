@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,6 +65,9 @@ import co.za.zarchive.R
 import data.BuildInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import monitor.MonitorHitBus
+import monitor.MonitorScheduler
+import monitor.PendingMonitorNav
 import ui.theme.Cinzel
 import ui.theme.ErrorColor
 import ui.theme.HeaderBg
@@ -81,13 +85,10 @@ import ui.theme.ZArchiveTheme
 // RESULTS branch below.
 private const val RESULTS_CARD_ITEMS_START_INDEX = 5
 
-// hidden: Search Monitors has no real implementation yet (Phase 14, deferred) -- the tab and its
-// placeholder screen stay in place, just excluded from the bottom NavigationBar, so re-enabling it
-// once Phase 14 lands is a one-line flip back to `hidden = false`.
 private enum class ResultsTab(val label: String, val icon: ImageVector, val hidden: Boolean = false) {
     RESULTS("Search Results", Icons.Default.Storefront),
     ORDERS("Order Lists", Icons.Default.ShoppingCart),
-    MONITORS("Search Monitors", Icons.Default.Notifications, hidden = true),
+    MONITORS("Search Monitors", Icons.Default.Notifications),
 }
 
 /**
@@ -98,7 +99,12 @@ private enum class ResultsTab(val label: String, val icon: ImageVector, val hidd
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
+fun AndroidApp(
+    vm: SearchViewModel,
+    pendingCrash: String? = null,
+    pendingMonitorNav: PendingMonitorNav? = null,
+    onMonitorNavConsumed: () -> Unit = {},
+) {
     var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
     var summaryExpanded by remember { mutableStateOf(true) }
     var summaryFilter by remember { mutableStateOf("") }
@@ -114,10 +120,15 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     val platformActions = remember { PlatformActions() }
     val resultsListState = rememberLazyListState()
     val resultsScope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     LaunchedEffect(Unit) { vm.restoreSessionIfAny() }
     LaunchedEffect(Unit) { vm.checkForUpdates() }
     LaunchedEffect(Unit) { vm.syncOnLaunch() }
+    // MonitorWorker runs out-of-process and writes straight to SettingsStore -- pick up its latest
+    // "last checked"/status on every app start (this ViewModel instance otherwise has no live view
+    // into checks a background Worker ran while the app wasn't open).
+    LaunchedEffect(Unit) { vm.refreshMonitorStatusFromSettings() }
     LaunchedEffect(vm.updateCheckState) {
         if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE ||
             vm.updateCheckState == UpdateCheckState.UPDATE_FOUND ||
@@ -131,6 +142,31 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
         if (vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR) {
             delay(5_000)
             vm.dismissSyncStatus()
+        }
+    }
+    // Android's sole monitor execution path is MonitorWorker (see monitor/MonitorPlatform.android.kt) --
+    // reactively (re)schedule/cancel its periodic WorkManager job whenever the config changes.
+    LaunchedEffect(vm.monitorEnabled, vm.monitorIntervalHours) {
+        MonitorScheduler.reschedule(context, vm.monitorEnabled, vm.monitorIntervalHours)
+    }
+    // Bridges MonitorWorker's hits back into the live UI (in addition to the system notification
+    // it always posts) so the alerts modal below still pops immediately if the app happens to be
+    // open when a scheduled check finds something.
+    LaunchedEffect(Unit) {
+        MonitorHitBus.hits.collect { hits -> vm.monitorAlerts.addAll(hits) }
+    }
+    // A tapped notification's payload -- single hit opens its detail modal directly, a multi-hit
+    // batch just relies on monitorAlerts (already populated via MonitorHitBus above, or about to be
+    // once its own collector catches the replayed value) to show the alerts modal below.
+    LaunchedEffect(pendingMonitorNav) {
+        when (val nav = pendingMonitorNav) {
+            is PendingMonitorNav.SingleHit -> {
+                detailResultAllowPin = false
+                detailResult = nav.result
+                onMonitorNavConsumed()
+            }
+            PendingMonitorNav.OpenAlerts -> onMonitorNavConsumed()
+            null -> {}
         }
     }
 
@@ -295,12 +331,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                             onCardTap = { detailResultAllowPin = false; detailResult = it },
                         )
                     }
-                    ResultsTab.MONITORS -> Text(
-                        "Search monitors — deferred (Phase 14).",
-                        color = OnSurfaceVariant.copy(alpha = 0.6f),
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(16.dp),
-                    )
+                    ResultsTab.MONITORS -> SearchMonitorsScreen(vm)
                 }
             }
         }
@@ -323,6 +354,16 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                     } else null,
                     onOpenUrl = platformActions::openUrl,
                     onDismiss = { detailResult = null },
+                )
+            }
+        }
+        if (vm.monitorAlerts.isNotEmpty()) {
+            ModalScrim(onDismiss = { vm.dismissAllMonitorAlerts() }) {
+                MonitorAlertsModal(
+                    hits = vm.monitorAlerts,
+                    images = vm.images,
+                    onOpenUrl = platformActions::openUrl,
+                    onDismiss = { vm.dismissAllMonitorAlerts() },
                 )
             }
         }

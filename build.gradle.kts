@@ -85,6 +85,7 @@ kotlin {
                 implementation(libs.androidx.webkit)
                 implementation(libs.androidx.splashscreen)
                 implementation(libs.play.services.auth)
+                implementation(libs.androidx.work.runtime.ktx)
             }
         }
     }
