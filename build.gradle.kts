@@ -1,6 +1,7 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.util.Base64
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -223,6 +224,51 @@ val generateBuildInfo by tasks.registering {
     }
 }
 
+// Generates GoogleAuthConfig.kt from secrets.properties (git-ignored, never committed -- see
+// .gitignore) so the OAuth client id/secret downloaded from Google Cloud Console never lands in
+// tracked source, matching how the Android release signing config is already env-var-driven
+// (build.gradle.kts's ANDROID_KEYSTORE_* handling above) rather than checked in. Missing file/keys
+// fall back to REPLACE_WITH_* placeholders so a fresh clone (or CI without secrets.properties)
+// still compiles -- sync is simply non-functional until the file is restored.
+val secretsProps = Properties().apply {
+    val f = rootProject.file("secrets.properties")
+    if (f.exists()) f.inputStream().use { load(it) }
+}
+fun secretOrPlaceholder(key: String, placeholder: String) = secretsProps.getProperty(key) ?: placeholder
+
+val generateGoogleAuthConfig by tasks.registering {
+    outputs.dir(generatedKotlinDir)
+    inputs.file(rootProject.file("secrets.properties")).optional(true)
+    doLast {
+        val desktopClientId = secretOrPlaceholder("google.desktop.clientId", "REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com")
+        val desktopClientSecret = secretOrPlaceholder("google.desktop.clientSecret", "REPLACE_WITH_DESKTOP_CLIENT_SECRET")
+        val androidClientIdRelease = secretOrPlaceholder("google.android.release.clientId", "REPLACE_WITH_RELEASE_ANDROID_CLIENT_ID.apps.googleusercontent.com")
+        val androidClientIdDebug = secretOrPlaceholder("google.android.debug.clientId", "REPLACE_WITH_DEBUG_ANDROID_CLIENT_ID.apps.googleusercontent.com")
+        val out = generatedKotlinDir.get().file("network/GoogleAuthConfig.kt").asFile
+        out.parentFile.mkdirs()
+        out.writeText("""
+            package network
+
+            // Generated at build time from secrets.properties (git-ignored) -- see build.gradle.kts's
+            // generateGoogleAuthConfig task. Do not edit directly; edit secrets.properties instead.
+            object GoogleAuthConfig {
+                const val DESKTOP_CLIENT_ID = "$desktopClientId"
+                const val DESKTOP_CLIENT_SECRET = "$desktopClientSecret"
+                const val ANDROID_CLIENT_ID_RELEASE = "$androidClientIdRelease"
+                const val ANDROID_CLIENT_ID_DEBUG = "$androidClientIdDebug"
+
+                // drive.file is the real access we need; userinfo.email is only so the settings UI can
+                // show "Connected as you@gmail.com" -- both are Google "non-sensitive" scopes (no
+                // verification review required).
+                const val SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email"
+                const val SYNC_FOLDER_NAME = "ZArchive"
+                const val SYNC_BLOB_FILE_NAME = "zarchive-sync.json"
+            }
+
+        """.trimIndent())
+    }
+}
+
 kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generatedKotlinDir)
 
 // Matches every Kotlin compile task across every target/variant (compileKotlinDesktop,
@@ -231,6 +277,7 @@ kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generatedKotlinDir)
 // naming and only surfaces as a Gradle task-validation error under certain build orderings.
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
     dependsOn(generateBuildInfo)
+    dependsOn(generateGoogleAuthConfig)
 }
 
 // Inject debug flag only during `gradlew run` — never present in packaged distributions
