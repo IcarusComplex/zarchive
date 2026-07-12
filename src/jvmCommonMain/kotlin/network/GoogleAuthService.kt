@@ -107,6 +107,18 @@ suspend fun revokeGoogleToken(token: String) {
     client.close()
 }
 
+/** Fetches the connected Google account's email for display in the sync-status UI. Best-effort. */
+suspend fun fetchGoogleAccountEmail(accessToken: String): String? {
+    val client = HttpClient(OkHttp)
+    return runCatching {
+        val resp = client.get("https://www.googleapis.com/oauth2/v2/userinfo") {
+            bearerAuth(accessToken)
+        }
+        if (!resp.status.isSuccess()) return@runCatching null
+        authJson.parseToJsonElement(resp.bodyAsText()).jsonObject["email"]?.jsonPrimitive?.content
+    }.also { client.close() }.getOrNull()
+}
+
 private suspend fun parseTokenResponse(resp: HttpResponse): GoogleTokens? {
     if (!resp.status.isSuccess()) return null
     val body = authJson.parseToJsonElement(resp.bodyAsText()).jsonObject

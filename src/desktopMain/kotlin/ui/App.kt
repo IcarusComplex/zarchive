@@ -150,6 +150,7 @@ fun WindowScope.App(
     var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
 
     LaunchedEffect(Unit) { vm.checkForUpdates() }
+    LaunchedEffect(Unit) { vm.syncOnLaunch() }
 
     // Auto-dismiss the update status footer after 5 seconds
     LaunchedEffect(vm.updateCheckState) {

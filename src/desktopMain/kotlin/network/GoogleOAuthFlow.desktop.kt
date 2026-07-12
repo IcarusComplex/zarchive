@@ -15,6 +15,7 @@ import java.net.URLDecoder
  */
 actual class GoogleOAuthFlow actual constructor() {
     actual val clientId: String = GoogleAuthConfig.DESKTOP_CLIENT_ID
+    actual val clientSecret: String? = GoogleAuthConfig.DESKTOP_CLIENT_SECRET
 
     actual suspend fun authenticate(scope: String): GoogleAuthResult? {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)

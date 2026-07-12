@@ -91,6 +91,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     var scrollRootY by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { vm.checkForUpdates() }
+    LaunchedEffect(Unit) { vm.syncOnLaunch() }
     LaunchedEffect(vm.updateCheckState) {
         if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE || vm.updateCheckState == UpdateCheckState.UPDATE_FOUND) {
             delay(5_000)

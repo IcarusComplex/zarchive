@@ -17,6 +17,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 actual class GoogleOAuthFlow actual constructor() {
     actual val clientId: String =
         if (BuildConfig.DEBUG) GoogleAuthConfig.ANDROID_CLIENT_ID_DEBUG else GoogleAuthConfig.ANDROID_CLIENT_ID_RELEASE
+    actual val clientSecret: String? = null
 
     actual suspend fun authenticate(scope: String): GoogleAuthResult? {
         // Matches the intent-filter's android:scheme="${applicationId}" android:host="oauth2redirect"

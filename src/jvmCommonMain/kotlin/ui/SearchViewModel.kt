@@ -16,9 +16,11 @@ import network.BrowserBackedSearcher
 import network.CardImageService
 import network.UpdateInfo
 import network.checkForUpdate
+import sync.SyncEngine
 
 enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
+enum class SyncStatus { DISCONNECTED, IDLE, SYNCING, SYNCED, ERROR }
 
 class SearchViewModel(
     private val searchListRepo: SearchListRepo,
@@ -313,6 +315,68 @@ class SearchViewModel(
         if (monitorEnabledState) startMonitorLoop()
     }
 
+    // ── Google Drive sync ────────────────────────────────────────────────────────
+    private val syncEngine = SyncEngine(searchListRepo, searchResultRepo)
+
+    var syncStatus by mutableStateOf(if (syncEngine.isConnected) SyncStatus.IDLE else SyncStatus.DISCONNECTED)
+        private set
+    var syncAccountEmail by mutableStateOf(syncEngine.accountEmail)
+        private set
+    var syncError by mutableStateOf<String?>(null)
+        private set
+    private var syncDebounceJob: Job? = null
+
+    /** Called once on app launch (next to [checkForUpdates]) -- silently does nothing if not connected. */
+    fun syncOnLaunch() {
+        if (!syncEngine.isConnected) return
+        scope.launch(Dispatchers.IO) { runSync() }
+    }
+
+    // Called at the end of every list/result mutation. Debounced so a burst of edits (e.g. typing
+    // out a new list) coalesces into one round-trip instead of one per keystroke/click.
+    private fun markDirtyAndScheduleSync() {
+        if (!syncEngine.isConnected) return
+        syncDebounceJob?.cancel()
+        syncDebounceJob = scope.launch(Dispatchers.IO) {
+            delay(3_000)
+            runSync()
+        }
+    }
+
+    private suspend fun runSync() {
+        withContext(Dispatchers.Main) { syncStatus = SyncStatus.SYNCING; syncError = null }
+        val result = syncEngine.syncNow()
+        withContext(Dispatchers.Main) {
+            result.onSuccess { syncStatus = SyncStatus.SYNCED }
+                .onFailure { e -> syncStatus = SyncStatus.ERROR; syncError = e.message }
+        }
+    }
+
+    fun connectGoogleDrive(onDone: (Result<Unit>) -> Unit) {
+        scope.launch(Dispatchers.IO) {
+            val result = syncEngine.connect()
+            withContext(Dispatchers.Main) {
+                if (result.isSuccess) {
+                    syncStatus = SyncStatus.IDLE
+                    syncAccountEmail = syncEngine.accountEmail
+                }
+                onDone(result)
+            }
+            if (result.isSuccess) runSync()
+        }
+    }
+
+    fun disconnectGoogleDrive() {
+        scope.launch(Dispatchers.IO) {
+            syncEngine.disconnect()
+            withContext(Dispatchers.Main) {
+                syncStatus = SyncStatus.DISCONNECTED
+                syncAccountEmail = null
+                syncError = null
+            }
+        }
+    }
+
     // ── Saved search lists ─────────────────────────────────────────────────────
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
 
@@ -342,6 +406,7 @@ class SearchViewModel(
                 pinnedListings   = pinnedListings.toMap(),
             )
         }
+        markDirtyAndScheduleSync()
     }
 
     // Overwrites an existing saved result (same id) instead of creating a new entry —
@@ -359,6 +424,7 @@ class SearchViewModel(
                 pinnedListings   = pinnedListings.toMap(),
             )
         }
+        markDirtyAndScheduleSync()
     }
 
     fun loadSavedResult(entry: data.SavedResultEntry) {
@@ -428,6 +494,7 @@ class SearchViewModel(
 
     fun deleteSavedResult(id: Int) {
         scope.launch(Dispatchers.IO) { searchResultRepo.delete(id) }
+        markDirtyAndScheduleSync()
     }
 
     fun saveSearchList(name: String) {
@@ -435,6 +502,7 @@ class SearchViewModel(
         if (cards.isEmpty()) return
         lastLoadedListName = name
         scope.launch(Dispatchers.IO) { searchListRepo.create(name, cards) }
+        markDirtyAndScheduleSync()
     }
 
     // Overwrites an existing list (same id) instead of creating a duplicate — used when the
@@ -444,20 +512,24 @@ class SearchViewModel(
         if (cards.isEmpty()) return
         lastLoadedListName = name
         scope.launch(Dispatchers.IO) { searchListRepo.update(id, name, cards) }
+        markDirtyAndScheduleSync()
     }
 
     fun loadSearchList(list: data.SavedSearchList) {
         query = list.cards.joinToString("\n")
         lastLoadedListName = list.name
         scope.launch(Dispatchers.IO) { searchListRepo.touch(list.id) }
+        markDirtyAndScheduleSync()
     }
 
     fun deleteSearchList(id: Int) {
         scope.launch(Dispatchers.IO) { searchListRepo.delete(id) }
+        markDirtyAndScheduleSync()
     }
 
     fun saveEditedList(id: Int, name: String, cards: List<String>) {
         scope.launch(Dispatchers.IO) { searchListRepo.update(id, name, cards) }
+        markDirtyAndScheduleSync()
     }
 
     var updateInfo by mutableStateOf<UpdateInfo?>(null)

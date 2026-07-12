@@ -13,6 +13,9 @@ expect class GoogleOAuthFlow() {
     /** The OAuth client id registered for this platform/build-type. */
     val clientId: String
 
+    /** Non-null only for the Desktop app client type -- Android clients are issued no secret. */
+    val clientSecret: String?
+
     /**
      * Opens the consent screen for [scope] and suspends until the redirect arrives (or the user
      * cancels / it times out), returning null in the latter cases.

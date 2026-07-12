@@ -21,7 +21,9 @@ object GoogleAuthConfig {
     const val ANDROID_CLIENT_ID_RELEASE = "REPLACE_WITH_RELEASE_ANDROID_CLIENT_ID.apps.googleusercontent.com"
     const val ANDROID_CLIENT_ID_DEBUG = "REPLACE_WITH_DEBUG_ANDROID_CLIENT_ID.apps.googleusercontent.com"
 
-    const val SCOPE = "https://www.googleapis.com/auth/drive.file"
+    // drive.file is the real access we need; userinfo.email is only so the settings UI can show
+    // "Connected as you@gmail.com" -- both are Google "non-sensitive" scopes (no verification review).
+    const val SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email"
     const val SYNC_FOLDER_NAME = "ZArchive"
     const val SYNC_BLOB_FILE_NAME = "zarchive-sync.json"
 }
