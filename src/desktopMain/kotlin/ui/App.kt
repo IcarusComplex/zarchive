@@ -162,6 +162,14 @@ fun WindowScope.App(
         }
     }
 
+    // Auto-dismiss the sync status footer after 5 seconds (not while actively syncing)
+    LaunchedEffect(vm.syncStatus) {
+        if (vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR) {
+            delay(5_000)
+            vm.dismissSyncStatus()
+        }
+    }
+
     MaterialTheme(colorScheme = colorScheme) {
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().background(Surface).border(1.dp, OutlineVariant)) {
@@ -202,6 +210,13 @@ fun WindowScope.App(
                     exit  = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
                 ) {
                     UpdateStatusFooter(vm.updateCheckState)
+                }
+                AnimatedVisibility(
+                    visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,
+                    enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                    exit  = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
+                ) {
+                    SyncStatusFooter(vm.syncStatus, vm.syncError)
                 }
             }
             // Modal dialogs — rendered on top of the full app
@@ -1197,6 +1212,28 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             onClick = { if (vm.updateCheckState != UpdateCheckState.CHECKING) { vm.checkForUpdates(); expanded = false } },
                         )
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        if (vm.syncStatus == SyncStatus.DISCONNECTED) {
+                            SettingsActionItem(
+                                label = "Connect Google Drive",
+                                sublabel = "Sync saved lists & results across devices",
+                                icon = Icons.Default.CloudSync,
+                                onClick = { vm.connectGoogleDrive {}; expanded = false },
+                            )
+                        } else {
+                            SettingsActionItem(
+                                label = "Sync now",
+                                sublabel = vm.syncAccountEmail?.let { "Connected as $it" } ?: "Connected to Google Drive",
+                                icon = Icons.Default.CloudSync,
+                                onClick = { vm.syncNow(); expanded = false },
+                            )
+                            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                            SettingsActionItem(
+                                label = "Disconnect Google Drive",
+                                icon = Icons.Default.CloudOff,
+                                onClick = { vm.disconnectGoogleDrive(); expanded = false },
+                            )
+                        }
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsActionItem(
                             label = "Report a bug",
                             sublabel = "Open a GitHub issue",
@@ -1343,6 +1380,46 @@ private fun UpdateStatusFooter(state: UpdateCheckState) {
                 UpdateCheckState.UP_TO_DATE -> {
                     Icon(Icons.Default.Check, contentDescription = null, tint = Tertiary, modifier = Modifier.size(13.dp))
                     Text("Already up to date", fontSize = 11.sp, color = Tertiary)
+                }
+                else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncStatusFooter(state: SyncStatus, error: String?) {
+    val borderColor = when (state) {
+        SyncStatus.SYNCED -> Tertiary
+        SyncStatus.ERROR  -> ErrorColor
+        else              -> OutlineVariant
+    }
+    Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
+        HorizontalDivider(color = borderColor.copy(alpha = 0.5f))
+        if (state == SyncStatus.SYNCING) {
+            LinearProgressIndicator(
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = Primary,
+                trackColor = SurfaceContainerHighest,
+            )
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            when (state) {
+                SyncStatus.SYNCING -> {
+                    Icon(Icons.Default.CloudSync, contentDescription = null, tint = Primary, modifier = Modifier.size(13.dp))
+                    Text("Syncing with Google Drive…", fontSize = 11.sp, color = OnSurfaceVariant)
+                }
+                SyncStatus.SYNCED -> {
+                    Icon(Icons.Default.CloudDone, contentDescription = null, tint = Tertiary, modifier = Modifier.size(13.dp))
+                    Text("Synced with Google Drive", fontSize = 11.sp, color = Tertiary)
+                }
+                SyncStatus.ERROR -> {
+                    Icon(Icons.Default.CloudOff, contentDescription = null, tint = ErrorColor, modifier = Modifier.size(13.dp))
+                    Text("Sync failed" + (error?.let { " — $it" } ?: ""), fontSize = 11.sp, color = ErrorColor)
                 }
                 else -> {}
             }

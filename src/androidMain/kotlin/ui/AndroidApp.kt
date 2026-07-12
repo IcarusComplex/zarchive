@@ -98,6 +98,12 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
             vm.dismissUpdateStatus()
         }
     }
+    LaunchedEffect(vm.syncStatus) {
+        if (vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR) {
+            delay(5_000)
+            vm.dismissSyncStatus()
+        }
+    }
 
     ZArchiveTheme {
         Box(Modifier.fillMaxSize()) {
@@ -146,6 +152,11 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                 Column {
                     AnimatedVisibility(visible = vm.updateCheckState != UpdateCheckState.IDLE) {
                         UpdateStatusFooter(vm.updateCheckState)
+                    }
+                    AnimatedVisibility(
+                        visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,
+                    ) {
+                        SyncStatusFooter(vm.syncStatus, vm.syncError)
                     }
                     NavigationBar(containerColor = HeaderBg) {
                         ResultsTab.entries.filter { !it.hidden }.forEach { t ->

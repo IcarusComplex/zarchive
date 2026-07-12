@@ -353,12 +353,16 @@ class SearchViewModel(
     }
 
     fun connectGoogleDrive(onDone: (Result<Unit>) -> Unit) {
+        syncStatus = SyncStatus.SYNCING
+        syncError = null
         scope.launch(Dispatchers.IO) {
             val result = syncEngine.connect()
             withContext(Dispatchers.Main) {
                 if (result.isSuccess) {
-                    syncStatus = SyncStatus.IDLE
                     syncAccountEmail = syncEngine.accountEmail
+                } else {
+                    syncStatus = SyncStatus.DISCONNECTED
+                    syncError = result.exceptionOrNull()?.message
                 }
                 onDone(result)
             }
@@ -374,6 +378,20 @@ class SearchViewModel(
                 syncAccountEmail = null
                 syncError = null
             }
+        }
+    }
+
+    /** Manual "Sync now" action from the settings menu -- bypasses the mutation debounce. */
+    fun syncNow() {
+        if (!syncEngine.isConnected) return
+        syncDebounceJob?.cancel()
+        scope.launch(Dispatchers.IO) { runSync() }
+    }
+
+    /** Hides the transient sync-status footer a few seconds after it settles (mirrors [dismissUpdateStatus]). */
+    fun dismissSyncStatus() {
+        if (syncStatus != SyncStatus.SYNCING) {
+            syncStatus = if (syncEngine.isConnected) SyncStatus.IDLE else SyncStatus.DISCONNECTED
         }
     }
 

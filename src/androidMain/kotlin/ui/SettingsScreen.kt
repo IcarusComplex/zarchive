@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -98,6 +100,35 @@ fun SettingsMenu(vm: SearchViewModel, onOpenUrl: (String) -> Unit) {
                     if (vm.updateCheckState != UpdateCheckState.CHECKING) { vm.checkForUpdates(); expanded = false }
                 },
             )
+            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+            if (vm.syncStatus == SyncStatus.DISCONNECTED) {
+                DropdownMenuItem(
+                    text = {
+                        SettingsItemContent(
+                            label = "Connect Google Drive",
+                            sublabel = "Sync saved lists & results across devices",
+                            icon = Icons.Default.CloudSync,
+                        )
+                    },
+                    onClick = { vm.connectGoogleDrive {}; expanded = false },
+                )
+            } else {
+                DropdownMenuItem(
+                    text = {
+                        SettingsItemContent(
+                            label = "Sync now",
+                            sublabel = vm.syncAccountEmail?.let { "Connected as $it" } ?: "Connected to Google Drive",
+                            icon = Icons.Default.CloudSync,
+                        )
+                    },
+                    onClick = { vm.syncNow(); expanded = false },
+                )
+                HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+                DropdownMenuItem(
+                    text = { SettingsItemContent(label = "Disconnect Google Drive", icon = Icons.Default.CloudOff) },
+                    onClick = { vm.disconnectGoogleDrive(); expanded = false },
+                )
+            }
             HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
             DropdownMenuItem(
                 text = { SettingsItemContent(label = "Report a bug", sublabel = "Open a GitHub issue", icon = Icons.Default.BugReport) },
