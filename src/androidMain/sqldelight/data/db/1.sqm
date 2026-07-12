@@ -1,0 +1,12 @@
+-- Migration from schema version 1 to 2: adds Google Drive sync columns (see the table comments in
+-- ZArchiveDatabase.sq). Editing CREATE TABLE alone only affects brand-new databases; an
+-- already-installed device's existing zarchive.db needs this ALTER TABLE path, applied
+-- automatically by AndroidSqliteDriver based on the bumped schema version.
+
+ALTER TABLE search_lists ADD COLUMN sync_id TEXT;
+ALTER TABLE search_lists ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE search_lists ADD COLUMN deleted_at INTEGER;
+
+ALTER TABLE saved_result_snapshots ADD COLUMN sync_id TEXT;
+ALTER TABLE saved_result_snapshots ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE saved_result_snapshots ADD COLUMN deleted_at INTEGER;

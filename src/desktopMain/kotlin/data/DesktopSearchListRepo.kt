@@ -70,6 +70,7 @@ class DesktopSearchListRepo : SearchListRepo {
                 it[SearchLists.name]      = listName
                 it[SearchLists.createdAt] = now
                 it[SearchLists.updatedAt] = now
+                it[SearchLists.syncId]    = java.util.UUID.randomUUID().toString()
             }[SearchLists.id]
         }
         insertCards(id, cards)
@@ -86,17 +87,21 @@ class DesktopSearchListRepo : SearchListRepo {
                 .groupBy({ it[SearchListCards.listId] }, { it[SearchListCards.cardName] })
 
             SearchLists.selectAll()
+                .where { SearchLists.deleted eq false }
                 .orderBy(SearchLists.updatedAt, SortOrder.DESC)
-                .map { row ->
-                    SavedSearchList(
-                        id        = row[SearchLists.id],
-                        name      = row[SearchLists.name],
-                        cards     = cardsByList[row[SearchLists.id]] ?: emptyList(),
-                        updatedAt = row[SearchLists.updatedAt],
-                    )
-                }
+                .map { row -> row.toSavedSearchList(cardsByList[row[SearchLists.id]] ?: emptyList()) }
         }
     }
+
+    private fun ResultRow.toSavedSearchList(cards: List<String>) = SavedSearchList(
+        id        = this[SearchLists.id],
+        name      = this[SearchLists.name],
+        cards     = cards,
+        updatedAt = this[SearchLists.updatedAt],
+        syncId    = this[SearchLists.syncId],
+        deleted   = this[SearchLists.deleted],
+        deletedAt = this[SearchLists.deletedAt],
+    )
 
     override suspend fun create(name: String, cards: List<String>): Int = withContext(Dispatchers.IO) {
         // 'listName' avoids shadowing by SearchLists.name inside the table-receiver lambda.
@@ -107,6 +112,7 @@ class DesktopSearchListRepo : SearchListRepo {
                 it[SearchLists.name]      = listName
                 it[SearchLists.createdAt] = now
                 it[SearchLists.updatedAt] = now
+                it[SearchLists.syncId]    = java.util.UUID.randomUUID().toString()
             }[SearchLists.id]
         }
         insertCards(newId, cards)
@@ -161,11 +167,60 @@ class DesktopSearchListRepo : SearchListRepo {
         refresh()
     }
 
+    // Soft-delete (tombstone), not a hard row delete: Google Drive sync needs to see this list was
+    // deleted (via deleted=true/deletedAt) so the tombstone propagates through the latest-wins
+    // merge to the other device instead of a naive sync resurrecting it. Cards are left intact in
+    // case a concurrent edit on the other device is newer and "wins" back over this delete.
     override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
-        val lid = id
+        val lid = id; val now = System.currentTimeMillis()
         transaction {
-            SearchListCards.deleteWhere { Op.build { SearchListCards.listId eq lid } }
-            SearchLists.deleteWhere    { Op.build { SearchLists.id eq lid } }
+            SearchLists.update({ Op.build { SearchLists.id eq lid } }) {
+                it[SearchLists.deleted]   = true
+                it[SearchLists.deletedAt] = now
+                it[SearchLists.updatedAt] = now
+            }
+        }
+        refresh()
+    }
+
+    override suspend fun allForSync(): List<SavedSearchList> = withContext(Dispatchers.IO) {
+        transaction {
+            val cardsByList = SearchListCards.selectAll()
+                .orderBy(SearchListCards.position)
+                .groupBy({ it[SearchListCards.listId] }, { it[SearchListCards.cardName] })
+
+            SearchLists.selectAll().map { row -> row.toSavedSearchList(cardsByList[row[SearchLists.id]] ?: emptyList()) }
+        }
+    }
+
+    override suspend fun applyRemote(record: SavedSearchList): Unit = withContext(Dispatchers.IO) {
+        val sid = requireNotNull(record.syncId) { "applyRemote requires a non-null syncId" }
+        val existingId = transaction {
+            SearchLists.selectAll().where { SearchLists.syncId eq sid }.firstOrNull()?.get(SearchLists.id)
+        }
+        if (existingId == null) {
+            val newId = transaction {
+                SearchLists.insert {
+                    it[SearchLists.name]      = record.name
+                    it[SearchLists.createdAt] = record.updatedAt
+                    it[SearchLists.updatedAt] = record.updatedAt
+                    it[SearchLists.syncId]    = sid
+                    it[SearchLists.deleted]   = record.deleted
+                    it[SearchLists.deletedAt] = record.deletedAt
+                }[SearchLists.id]
+            }
+            insertCards(newId, record.cards)
+        } else {
+            transaction {
+                SearchListCards.deleteWhere { Op.build { SearchListCards.listId eq existingId } }
+                SearchLists.update({ Op.build { SearchLists.id eq existingId } }) {
+                    it[SearchLists.name]      = record.name
+                    it[SearchLists.updatedAt] = record.updatedAt
+                    it[SearchLists.deleted]   = record.deleted
+                    it[SearchLists.deletedAt] = record.deletedAt
+                }
+            }
+            insertCards(existingId, record.cards)
         }
         refresh()
     }

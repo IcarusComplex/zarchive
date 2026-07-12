@@ -13,18 +13,34 @@ SELECT value FROM settings WHERE key = ?;
 setSetting:
 INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?);
 
+-- sync_id/deleted/deleted_at: Google Drive sync (see sync/SyncMerge.kt in commonMain). sync_id is
+-- the stable cross-device identity local autoincrement ids can't provide (both platforms' ids start
+-- counting from 1). deleted/deleted_at are a soft-delete tombstone so a delete propagates through
+-- the latest-wins merge instead of a naive sync resurrecting the row.
 CREATE TABLE search_lists (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    sync_id TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at INTEGER
 );
 
 selectAllLists:
-SELECT * FROM search_lists ORDER BY updated_at DESC;
+SELECT * FROM search_lists WHERE deleted = 0 ORDER BY updated_at DESC;
+
+selectAllListsForSync:
+SELECT * FROM search_lists;
+
+selectListBySyncId:
+SELECT * FROM search_lists WHERE sync_id = ?;
 
 insertList:
-INSERT INTO search_lists(name, created_at, updated_at) VALUES (?, ?, ?);
+INSERT INTO search_lists(name, created_at, updated_at, sync_id) VALUES (?, ?, ?, ?);
+
+insertListForSync:
+INSERT INTO search_lists(name, created_at, updated_at, sync_id, deleted, deleted_at) VALUES (?, ?, ?, ?, ?, ?);
 
 lastInsertRowId:
 SELECT last_insert_rowid();
@@ -35,8 +51,12 @@ UPDATE search_lists SET updated_at = ? WHERE id = ?;
 renameList:
 UPDATE search_lists SET name = ?, updated_at = ? WHERE id = ?;
 
+-- Soft-delete (tombstone), not a hard row delete -- see the table comment above.
 deleteList:
-DELETE FROM search_lists WHERE id = ?;
+UPDATE search_lists SET deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?;
+
+updateListForSync:
+UPDATE search_lists SET name = ?, updated_at = ?, deleted = ?, deleted_at = ? WHERE id = ?;
 
 CREATE TABLE search_list_cards (
     list_id INTEGER NOT NULL,
@@ -54,6 +74,7 @@ INSERT INTO search_list_cards(list_id, position, card_name) VALUES (?, ?, ?);
 deleteListCards:
 DELETE FROM search_list_cards WHERE list_id = ?;
 
+-- sync_id/deleted/deleted_at: Google Drive sync -- see the matching comment on search_lists above.
 CREATE TABLE saved_result_snapshots (
     id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
@@ -64,20 +85,35 @@ CREATE TABLE saved_result_snapshots (
     results_json TEXT NOT NULL,
     excluded_cards_json TEXT,
     unchecked_lines_json TEXT,
-    pinned_listings_json TEXT
+    pinned_listings_json TEXT,
+    sync_id TEXT,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    deleted_at INTEGER
 );
 
 selectAllSnapshots:
-SELECT * FROM saved_result_snapshots ORDER BY saved_at DESC;
+SELECT * FROM saved_result_snapshots WHERE deleted = 0 ORDER BY saved_at DESC;
+
+selectAllSnapshotsForSync:
+SELECT * FROM saved_result_snapshots;
 
 selectSnapshotById:
 SELECT * FROM saved_result_snapshots WHERE id = ?;
 
+selectSnapshotBySyncId:
+SELECT * FROM saved_result_snapshots WHERE sync_id = ?;
+
 insertSnapshot:
 INSERT INTO saved_result_snapshots(
     name, description, saved_at, card_count, cards_json, results_json,
-    excluded_cards_json, unchecked_lines_json, pinned_listings_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+    excluded_cards_json, unchecked_lines_json, pinned_listings_json, sync_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+insertSnapshotForSync:
+INSERT INTO saved_result_snapshots(
+    name, description, saved_at, card_count, cards_json, results_json,
+    excluded_cards_json, unchecked_lines_json, pinned_listings_json, sync_id, deleted, deleted_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateSnapshot:
 UPDATE saved_result_snapshots SET
@@ -85,8 +121,15 @@ UPDATE saved_result_snapshots SET
     excluded_cards_json = ?, unchecked_lines_json = ?, pinned_listings_json = ?
 WHERE id = ?;
 
+updateSnapshotForSync:
+UPDATE saved_result_snapshots SET
+    name = ?, description = ?, saved_at = ?, card_count = ?, cards_json = ?, results_json = ?,
+    excluded_cards_json = ?, unchecked_lines_json = ?, pinned_listings_json = ?, deleted = ?, deleted_at = ?
+WHERE id = ?;
+
+-- Soft-delete (tombstone), not a hard row delete -- see the table comment above.
 deleteSnapshot:
-DELETE FROM saved_result_snapshots WHERE id = ?;
+UPDATE saved_result_snapshots SET deleted = 1, deleted_at = ?, saved_at = ? WHERE id = ?;
 
 CREATE TABLE cf_throttle_rules (
     base_url TEXT NOT NULL PRIMARY KEY,

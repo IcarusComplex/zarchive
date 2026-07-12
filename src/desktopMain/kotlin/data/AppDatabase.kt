@@ -17,6 +17,13 @@ object SearchLists : Table("search_lists") {
     val name      = text("name")
     val createdAt = long("created_at")
     val updatedAt = long("updated_at")
+    // Google Drive sync (see sync/SyncMerge.kt): syncId is the stable cross-device identity
+    // (local auto-increment ids collide across devices, both start counting from 1). deleted/
+    // deletedAt are a soft-delete tombstone so a delete propagates through the latest-wins merge
+    // instead of a naive sync resurrecting the row.
+    val syncId    = text("sync_id").nullable()
+    val deleted   = bool("deleted").default(false)
+    val deletedAt = long("deleted_at").nullable()
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -40,6 +47,10 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
     val excludedCardsJson  = text("excluded_cards_json").nullable()   // JSON Set<String>
     val uncheckedLinesJson = text("unchecked_lines_json").nullable()  // JSON Set<String> (URLs)
     val pinnedListingsJson = text("pinned_listings_json").nullable()  // JSON Map<String,String>
+    // Google Drive sync — see the matching comment on SearchLists above.
+    val syncId    = text("sync_id").nullable()
+    val deleted   = bool("deleted").default(false)
+    val deletedAt = long("deleted_at").nullable()
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -78,6 +89,7 @@ object AppDatabase {
             )
         }
         migrateCfThresholdV2()
+        migrateSyncV1Backfill()
     }
 
     // ── Settings ───────────────────────────────────────────────────────────────
@@ -172,6 +184,31 @@ object AppDatabase {
                 it[CfThrottleRules.tier] = 1
             }
             Settings.upsert { it[Settings.key] = "_cf_v2_threshold"; it[Settings.value] = "true" }
+        }
+    }
+
+    // ── Sync backfill (v1) ──────────────────────────────────────────────────────
+
+    // One-time: assigns a syncId to every pre-existing row so Google Drive sync has a stable
+    // cross-device identity for rows created before sync existed. New rows get a syncId at
+    // creation time instead (see DesktopSearchListRepo/DesktopSearchResultRepo).
+    private fun migrateSyncV1Backfill() {
+        val done = transaction {
+            Settings.selectAll().where { Settings.key eq "_sync_v1_backfill" }.count() > 0
+        }
+        if (done) return
+        transaction {
+            SearchLists.selectAll().where { SearchLists.syncId.isNull() }.forEach { row ->
+                SearchLists.update({ SearchLists.id eq row[SearchLists.id] }) {
+                    it[syncId] = java.util.UUID.randomUUID().toString()
+                }
+            }
+            SavedResultSnapshots.selectAll().where { SavedResultSnapshots.syncId.isNull() }.forEach { row ->
+                SavedResultSnapshots.update({ SavedResultSnapshots.id eq row[SavedResultSnapshots.id] }) {
+                    it[syncId] = java.util.UUID.randomUUID().toString()
+                }
+            }
+            Settings.upsert { it[Settings.key] = "_sync_v1_backfill"; it[Settings.value] = "true" }
         }
     }
 }

@@ -26,13 +26,16 @@ class AndroidSearchListRepo : SearchListRepo {
                 name = row.name,
                 cards = queries.selectCardsForList(row.id).executeAsList(),
                 updatedAt = row.updated_at,
+                syncId = row.sync_id,
+                deleted = row.deleted != 0L,
+                deletedAt = row.deleted_at,
             )
         }
     }
 
     override suspend fun create(name: String, cards: List<String>): Int = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        queries.insertList(name, now, now)
+        queries.insertList(name, now, now, java.util.UUID.randomUUID().toString())
         val newId = queries.lastInsertRowId().executeAsOne()
         insertCards(newId, cards)
         refresh()
@@ -63,9 +66,47 @@ class AndroidSearchListRepo : SearchListRepo {
         refresh()
     }
 
+    // Soft-delete (tombstone), not a hard row delete: Google Drive sync needs to see this list was
+    // deleted so the tombstone propagates through the latest-wins merge to the other device instead
+    // of a naive sync resurrecting it. Cards are left intact in case a concurrent edit on the other
+    // device is newer and "wins" back over this delete.
     override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
-        queries.deleteListCards(id.toLong())
-        queries.deleteList(id.toLong())
+        val now = System.currentTimeMillis()
+        queries.deleteList(now, now, id.toLong())
+        refresh()
+    }
+
+    override suspend fun allForSync(): List<SavedSearchList> = withContext(Dispatchers.IO) {
+        queries.selectAllListsForSync().executeAsList().map { row ->
+            SavedSearchList(
+                id = row.id.toInt(),
+                name = row.name,
+                cards = queries.selectCardsForList(row.id).executeAsList(),
+                updatedAt = row.updated_at,
+                syncId = row.sync_id,
+                deleted = row.deleted != 0L,
+                deletedAt = row.deleted_at,
+            )
+        }
+    }
+
+    override suspend fun applyRemote(record: SavedSearchList): Unit = withContext(Dispatchers.IO) {
+        val sid = requireNotNull(record.syncId) { "applyRemote requires a non-null syncId" }
+        val existing = queries.selectListBySyncId(sid).executeAsOneOrNull()
+        if (existing == null) {
+            queries.insertListForSync(
+                record.name, record.updatedAt, record.updatedAt, sid,
+                if (record.deleted) 1L else 0L, record.deletedAt,
+            )
+            val newId = queries.lastInsertRowId().executeAsOne()
+            insertCards(newId, record.cards)
+        } else {
+            queries.deleteListCards(existing.id)
+            queries.updateListForSync(
+                record.name, record.updatedAt, if (record.deleted) 1L else 0L, record.deletedAt, existing.id,
+            )
+            insertCards(existing.id, record.cards)
+        }
         refresh()
     }
 

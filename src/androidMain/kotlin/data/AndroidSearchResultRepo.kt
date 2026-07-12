@@ -29,6 +29,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
                 savedAt = row.saved_at,
                 cardCount = row.card_count.toInt(),
                 cards = json.decodeFromString(row.cards_json),
+                syncId = row.sync_id,
             )
         }
     }
@@ -52,6 +53,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
             excluded_cards_json = json.encodeToString(excludedCards.toList()),
             unchecked_lines_json = json.encodeToString(uncheckedLines.toList()),
             pinned_listings_json = json.encodeToString(pinnedListings),
+            sync_id = java.util.UUID.randomUUID().toString(),
         )
         refresh()
     }
@@ -92,8 +94,53 @@ class AndroidSearchResultRepo : SearchResultRepo {
         )
     }
 
+    // Soft-delete (tombstone) -- see the matching comment on AndroidSearchListRepo.delete().
     override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
-        queries.deleteSnapshot(id.toLong())
+        val now = System.currentTimeMillis()
+        queries.deleteSnapshot(now, now, id.toLong())
+        refresh()
+    }
+
+    override suspend fun allForSync(): List<SyncedResultRecord> = withContext(Dispatchers.IO) {
+        queries.selectAllSnapshotsForSync().executeAsList().map { row ->
+            SyncedResultRecord(
+                id = row.id.toInt(),
+                syncId = row.sync_id,
+                name = row.name,
+                description = row.description,
+                savedAt = row.saved_at,
+                cards = json.decodeFromString(row.cards_json),
+                results = json.decodeFromString(row.results_json),
+                excludedCards = json.decodeFromString<List<String>>(row.excluded_cards_json ?: "[]").toSet(),
+                uncheckedLines = json.decodeFromString<List<String>>(row.unchecked_lines_json ?: "[]").toSet(),
+                pinnedListings = json.decodeFromString(row.pinned_listings_json ?: "{}"),
+                deleted = row.deleted != 0L,
+                deletedAt = row.deleted_at,
+            )
+        }
+    }
+
+    override suspend fun applyRemote(record: SyncedResultRecord): Unit = withContext(Dispatchers.IO) {
+        val sid = requireNotNull(record.syncId) { "applyRemote requires a non-null syncId" }
+        val existing = queries.selectSnapshotBySyncId(sid).executeAsOneOrNull()
+        val cardsJson = json.encodeToString(record.cards)
+        val resultsJson = json.encodeToString(record.results)
+        val excludedJson = json.encodeToString(record.excludedCards.toList())
+        val uncheckedJson = json.encodeToString(record.uncheckedLines.toList())
+        val pinnedJson = json.encodeToString(record.pinnedListings)
+        if (existing == null) {
+            queries.insertSnapshotForSync(
+                record.name, record.description, record.savedAt, record.cards.size.toLong(),
+                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson,
+                sid, if (record.deleted) 1L else 0L, record.deletedAt,
+            )
+        } else {
+            queries.updateSnapshotForSync(
+                record.name, record.description, record.savedAt, record.cards.size.toLong(),
+                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson,
+                if (record.deleted) 1L else 0L, record.deletedAt, existing.id,
+            )
+        }
         refresh()
     }
 }

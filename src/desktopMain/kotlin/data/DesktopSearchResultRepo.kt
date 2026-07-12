@@ -24,6 +24,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
     private fun refresh() {
         _entries.value = transaction {
             SavedResultSnapshots.selectAll()
+                .where { SavedResultSnapshots.deleted eq false }
                 .orderBy(SavedResultSnapshots.savedAt, SortOrder.DESC)
                 .map { row ->
                     SavedResultEntry(
@@ -33,6 +34,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                         savedAt     = row[SavedResultSnapshots.savedAt],
                         cardCount   = row[SavedResultSnapshots.cardCount],
                         cards       = json.decodeFromString(row[SavedResultSnapshots.cardsJson]),
+                        syncId      = row[SavedResultSnapshots.syncId],
                     )
                 }
         }
@@ -64,6 +66,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                 it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
                 it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
                 it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                it[SavedResultSnapshots.syncId]             = java.util.UUID.randomUUID().toString()
             }
         }
         refresh()
@@ -119,10 +122,81 @@ class DesktopSearchResultRepo : SearchResultRepo {
         )
     }
 
+    // Soft-delete (tombstone) -- see the matching comment on DesktopSearchListRepo.delete().
     override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
-        val lid = id
+        val lid = id; val now = System.currentTimeMillis()
         transaction {
-            SavedResultSnapshots.deleteWhere { Op.build { SavedResultSnapshots.id eq lid } }
+            SavedResultSnapshots.update({ Op.build { SavedResultSnapshots.id eq lid } }) {
+                it[SavedResultSnapshots.deleted]   = true
+                it[SavedResultSnapshots.deletedAt] = now
+                it[SavedResultSnapshots.savedAt]   = now
+            }
+        }
+        refresh()
+    }
+
+    override suspend fun allForSync(): List<SyncedResultRecord> = withContext(Dispatchers.IO) {
+        transaction {
+            SavedResultSnapshots.selectAll().map { row ->
+                SyncedResultRecord(
+                    id             = row[SavedResultSnapshots.id],
+                    syncId         = row[SavedResultSnapshots.syncId],
+                    name           = row[SavedResultSnapshots.name],
+                    description    = row[SavedResultSnapshots.description],
+                    savedAt        = row[SavedResultSnapshots.savedAt],
+                    cards          = json.decodeFromString(row[SavedResultSnapshots.cardsJson]),
+                    results        = json.decodeFromString(row[SavedResultSnapshots.resultsJson]),
+                    excludedCards  = json.decodeFromString<List<String>>(row[SavedResultSnapshots.excludedCardsJson] ?: "[]").toSet(),
+                    uncheckedLines = json.decodeFromString<List<String>>(row[SavedResultSnapshots.uncheckedLinesJson] ?: "[]").toSet(),
+                    pinnedListings = json.decodeFromString(row[SavedResultSnapshots.pinnedListingsJson] ?: "{}"),
+                    deleted        = row[SavedResultSnapshots.deleted],
+                    deletedAt      = row[SavedResultSnapshots.deletedAt],
+                )
+            }
+        }
+    }
+
+    override suspend fun applyRemote(record: SyncedResultRecord): Unit = withContext(Dispatchers.IO) {
+        val sid = requireNotNull(record.syncId) { "applyRemote requires a non-null syncId" }
+        val cardsEnc     = json.encodeToString(record.cards)
+        val resultsEnc   = json.encodeToString(record.results)
+        val excludedEnc  = json.encodeToString(record.excludedCards.toList())
+        val uncheckedEnc = json.encodeToString(record.uncheckedLines.toList())
+        val pinnedEnc    = json.encodeToString(record.pinnedListings)
+        transaction {
+            val existingId = SavedResultSnapshots.selectAll()
+                .where { SavedResultSnapshots.syncId eq sid }
+                .firstOrNull()?.get(SavedResultSnapshots.id)
+            if (existingId == null) {
+                SavedResultSnapshots.insert {
+                    it[SavedResultSnapshots.name]               = record.name
+                    it[SavedResultSnapshots.description]        = record.description
+                    it[SavedResultSnapshots.savedAt]            = record.savedAt
+                    it[SavedResultSnapshots.cardCount]          = record.cards.size
+                    it[SavedResultSnapshots.cardsJson]          = cardsEnc
+                    it[SavedResultSnapshots.resultsJson]        = resultsEnc
+                    it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
+                    it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
+                    it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                    it[SavedResultSnapshots.syncId]             = sid
+                    it[SavedResultSnapshots.deleted]            = record.deleted
+                    it[SavedResultSnapshots.deletedAt]          = record.deletedAt
+                }
+            } else {
+                SavedResultSnapshots.update({ Op.build { SavedResultSnapshots.id eq existingId } }) {
+                    it[SavedResultSnapshots.name]               = record.name
+                    it[SavedResultSnapshots.description]        = record.description
+                    it[SavedResultSnapshots.savedAt]            = record.savedAt
+                    it[SavedResultSnapshots.cardCount]          = record.cards.size
+                    it[SavedResultSnapshots.cardsJson]          = cardsEnc
+                    it[SavedResultSnapshots.resultsJson]        = resultsEnc
+                    it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
+                    it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
+                    it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                    it[SavedResultSnapshots.deleted]            = record.deleted
+                    it[SavedResultSnapshots.deletedAt]          = record.deletedAt
+                }
+            }
         }
         refresh()
     }
