@@ -183,10 +183,10 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                                 onImageTap = { expandedImagePath = it },
                             )
                         }
-                        ResultsTab.ORDERS -> Text(
-                            "Order lists (Phase 10).",
-                            color = OnSurfaceVariant.copy(alpha = 0.6f),
-                            fontSize = 13.sp,
+                        ResultsTab.ORDERS -> OrderListsScreen(
+                            vm = vm,
+                            onOpenUrl = platformActions::openUrl,
+                            onImageTap = { expandedImagePath = it },
                         )
                         ResultsTab.MONITORS -> Text(
                             "Search monitors — deferred (Phase 14).",
