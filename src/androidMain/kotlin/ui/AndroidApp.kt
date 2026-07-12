@@ -174,9 +174,13 @@ fun AndroidApp(
     }
     // Bridges MonitorWorker's hits back into the live UI (in addition to the system notification
     // it always posts) so the alerts modal below still pops immediately if the app happens to be
-    // open when a scheduled check finds something.
+    // open when a scheduled check finds something. MonitorWorker itself never resolves card art
+    // (it's a headless check, not a full search), so also kick off image resolution here.
     LaunchedEffect(Unit) {
-        MonitorHitBus.hits.collect { hits -> vm.monitorAlerts.addAll(hits) }
+        MonitorHitBus.hits.collect { hits ->
+            vm.monitorAlerts.addAll(hits)
+            vm.resolveImagesForMonitorHits(hits)
+        }
     }
     // A tapped notification's payload -- single hit opens its detail modal directly, a multi-hit
     // batch just relies on monitorAlerts (already populated via MonitorHitBus above, or about to be
@@ -186,6 +190,7 @@ fun AndroidApp(
             is PendingMonitorNav.SingleHit -> {
                 detailResultAllowPin = false
                 detailResult = nav.result
+                vm.resolveImagesForMonitorHits(listOf(nav.result))
                 onMonitorNavConsumed()
             }
             PendingMonitorNav.OpenAlerts -> onMonitorNavConsumed()

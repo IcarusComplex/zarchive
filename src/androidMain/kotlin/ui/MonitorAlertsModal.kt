@@ -74,7 +74,7 @@ fun MonitorAlertsModal(
             modifier = Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(hits, key = { "${it.store}|${it.title}|${it.priceZar}" }) { hit ->
+            items(hits.sortedByPriceAsc(), key = { "${it.store}|${it.title}|${it.priceZar}" }) { hit ->
                 MonitorFoundRow(hit, images, onOpenUrl)
             }
         }

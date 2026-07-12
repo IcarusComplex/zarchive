@@ -251,6 +251,31 @@ class SearchViewModel(
     val monitorAlerts = mutableStateListOf<SearchResult>()
     fun dismissAllMonitorAlerts() { monitorAlerts.clear() }
 
+    // Android's monitor hits can arrive from MonitorWorker -- an out-of-process check that never
+    // touches this ViewModel's `images` map at all (unlike runMonitorCheck()'s in-process wrapper
+    // below, which resolves art as part of the same check). Called from AndroidApp whenever hits
+    // reach the UI via MonitorHitBus or a tapped notification's deep link, so their thumbnails
+    // don't stay permanently blank in a freshly (re)launched process.
+    fun resolveImagesForMonitorHits(hits: List<SearchResult>) {
+        if (hits.isEmpty()) return
+        scope.launch(Dispatchers.IO) {
+            val imageService = CardImageService()
+            try {
+                val titleHints = hits.mapNotNull { r -> r.title?.let { it to r.setHint } }.toMap()
+                if (titleHints.isNotEmpty()) {
+                    val resolved = imageService.resolveImages(titleHints)
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
+                }
+                // Card-name fallback (mirrors search()/runMonitorCheck()) for any hit whose own
+                // messy listing title fails to resolve.
+                val resolvedCards = imageService.resolveImages(hits.map { it.card }.distinct())
+                if (resolvedCards.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolvedCards) }
+            } finally {
+                imageService.close()
+            }
+        }
+    }
+
     private var monitorLoopJob: Job? = null
 
     // Runs on the scope's default dispatcher (Main) — same convention as search()/refreshCard().

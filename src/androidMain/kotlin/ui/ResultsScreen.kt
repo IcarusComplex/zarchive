@@ -77,7 +77,8 @@ import ui.theme.SurfaceContainerLowest
 // ~1100dp window) doesn't fit a phone -- ListingCard below stacks the same information into two
 // rows instead of columns. Tap-to-toggle card art replaces the hover popup throughout.
 
-private fun List<SearchResult>.sortedByPriceAsc(): List<SearchResult> =
+// Not private -- also reused by MonitorAlertsModal.kt.
+fun List<SearchResult>.sortedByPriceAsc(): List<SearchResult> =
     sortedWith(compareBy({ it.priceZar == null }, { it.priceZar ?: Double.MAX_VALUE }))
 
 private fun formatZar(v: Double): String {
