@@ -71,7 +71,7 @@ reachable from `desktopMain`:
 | 4 | [phase-4-viewmodel-split.md](phase-4-viewmodel-split.md) | **Done** — verified with a real `vm.search()` run on desktop + Android emulator |
 | 5 | [phase-5-android-database.md](phase-5-android-database.md) | **Done** — real persistence verified across a full process kill on Pixel_9 |
 | 6 | [phase-6-app-shell-search-input.md](phase-6-app-shell-search-input.md) | **Done** — real multi-store search + Stop/cancel verified live on Pixel_9 |
-| 7 | [phase-7-results-card-art.md](phase-7-results-card-art.md) | Not started |
+| 7 | [phase-7-results-card-art.md](phase-7-results-card-art.md) | **Done** — real multi-store results + tap-to-toggle art verified live on Pixel_9; found/fixed an Android cleartext-HTTP bug |
 | 8 | [phase-8-saved-lists-results.md](phase-8-saved-lists-results.md) | Not started |
 | 9 | [phase-9-settings-dialogs.md](phase-9-settings-dialogs.md) | Not started |
 | 10 | [phase-10-order-lists.md](phase-10-order-lists.md) | Not started |

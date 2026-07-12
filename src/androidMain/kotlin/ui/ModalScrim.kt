@@ -13,14 +13,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 
 // Ported verbatim from ui/App.kt's ModalScrim (desktop) — a plain Compose overlay, no
-// desktop-specific API involved. Shared by every dialog phase from here on.
+// desktop-specific API involved. Shared by every dialog phase from here on. [onDismiss] fires when
+// the scrim itself (not the content) is tapped -- Phase 7's tap-to-dismiss card art preview is the
+// first caller to need this; it defaults to a no-op so earlier non-dismissible usage is unaffected.
 @Composable
-fun ModalScrim(content: @Composable BoxScope.() -> Unit) {
+fun ModalScrim(onDismiss: () -> Unit = {}, content: @Composable BoxScope.() -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.65f))
-            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {},
+            .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) { onDismiss() },
         contentAlignment = Alignment.Center,
         content = content,
     )

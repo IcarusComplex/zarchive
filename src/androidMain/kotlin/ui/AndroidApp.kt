@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,6 +39,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -67,8 +70,15 @@ private enum class ResultsTab(val label: String, val icon: ImageVector) {
 @Composable
 fun AndroidApp(vm: SearchViewModel) {
     var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
+    var summaryExpanded by remember { mutableStateOf(true) }
+    var summaryFilter by remember { mutableStateOf("") }
+    var expandedImagePath by remember { mutableStateOf<String?>(null) }
+    val platformActions = remember { PlatformActions() }
+    val resultsScrollState = rememberScrollState()
+    var scrollRootY by remember { mutableStateOf(0) }
 
     ZArchiveTheme {
+        Box(Modifier.fillMaxSize()) {
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -110,7 +120,8 @@ fun AndroidApp(vm: SearchViewModel) {
                 Column(
                     Modifier
                         .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
+                        .verticalScroll(resultsScrollState)
+                        .onGloballyPositioned { scrollRootY = it.positionInRoot().y.toInt() }
                         .padding(16.dp),
                 ) {
                     when (tab) {
@@ -120,11 +131,21 @@ fun AndroidApp(vm: SearchViewModel) {
                                 Spacer(Modifier.height(12.dp))
                                 StatusRow(vm)
                             }
+                            if (vm.searchedCards.isNotEmpty()) {
+                                Spacer(Modifier.height(12.dp))
+                                LuckshackLinks(vm.searchedCards, onOpenUrl = platformActions::openUrl)
+                            }
                             Spacer(Modifier.height(16.dp))
-                            Text(
-                                "Results will appear here (Phase 7).",
-                                color = OnSurfaceVariant.copy(alpha = 0.6f),
-                                fontSize = 13.sp,
+                            ResultsScreen(
+                                vm = vm,
+                                scrollState = resultsScrollState,
+                                scrollRootY = scrollRootY,
+                                summaryExpanded = summaryExpanded,
+                                onSummaryExpandedChange = { summaryExpanded = it },
+                                summaryFilter = summaryFilter,
+                                onSummaryFilterChange = { summaryFilter = it },
+                                onOpenUrl = platformActions::openUrl,
+                                onImageTap = { expandedImagePath = it },
                             )
                         }
                         ResultsTab.ORDERS -> Text(
@@ -140,6 +161,12 @@ fun AndroidApp(vm: SearchViewModel) {
                     }
                 }
             }
+        }
+        if (expandedImagePath != null) {
+            ModalScrim(onDismiss = { expandedImagePath = null }) {
+                EnlargedCardPreview(expandedImagePath!!, onDismiss = { expandedImagePath = null })
+            }
+        }
         }
     }
 }

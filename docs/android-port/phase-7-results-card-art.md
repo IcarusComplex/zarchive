@@ -1,6 +1,16 @@
 # Phase 7 — Results display plus card art (the largest single UI phase)
 
-Status: Not started
+Status: **Done.** Verified on the Pixel_9 emulator with real multi-store searches: a single-card
+query ("sol ring") rendered real per-printing Scryfall art, price-ascending sort, in-stock/
+out-of-stock split (dimmed + grayscale), and a live listing count; a 4-card query
+(lightning bolt/counterspell/brainstorm/swords to plowshares, 293 listings) exercised the
+`CardSummaryPanel` (4/4 found, per-card thumbnails, tap-to-scroll-to-section) and the Luckshack
+chip row. Tap-to-toggle card art (full-screen `ModalScrim` + `EnlargedCardPreview`, dismiss by
+tapping the scrim or the close icon) verified on both a `ListingCard` thumbnail and a
+`CardSummaryEntry` thumbnail. Tapping a row opens the listing URL in Chrome (verified). A real,
+Android-specific bug was found and fixed during verification (see notes below). Full combined
+regression gate (`createDistributable` + `desktopTest` + `assembleDebug`) passes together; desktop
+`.exe` launched standalone to confirm zero regression.
 Depends on: Phase 6
 Blocks: Phase 8, Phase 10, Phase 11 (results rendering used by saved-results, order lists, Warren)
 
@@ -59,6 +69,60 @@ large (20+ card) list for scroll performance.
 
 - `src/main/kotlin/ui/App.kt` (reference only — `SearchResultsTab` through `CardSummaryEntry`, lines
   noted above)
-- `src/androidMain/kotlin/ui/ResultsScreen.kt` (new)
-- `src/androidMain/kotlin/ui/CardArtPreview.kt` (new, tap-to-toggle)
-- `src/androidMain/kotlin/ui/CardSummaryPanel.kt` (new)
+- `src/androidMain/kotlin/ui/ResultsScreen.kt` (new — `ResultsScreen`, `CardSection`, `ListingGroup`,
+  `ListingCard`, `StatusChip`, `CountBadge`, `FilterField`, `LuckshackLinks`)
+- `src/androidMain/kotlin/ui/CardArtPreview.kt` (new — `CardThumbnail`, `ShimmerOverlay`,
+  `EnlargedCardPreview`, shared `imageCache`)
+- `src/androidMain/kotlin/ui/CardSummaryPanel.kt` (new — `CardSummaryPanel`, `CardSummaryEntry`)
+- `src/androidMain/kotlin/ui/ModalScrim.kt` (extended — added an `onDismiss` param so the scrim can
+  close the card art preview, defaulting to a no-op for existing/future non-dismissible callers)
+- `src/androidMain/kotlin/ui/AndroidApp.kt` (wired `ResultsScreen` in place of the Phase 6 placeholder;
+  hoisted the results `ScrollState` + its root position for summary-tap-to-scroll)
+- `src/androidMain/res/xml/network_security_config.xml` (new) + `src/androidMain/AndroidManifest.xml`
+  (`android:networkSecurityConfig` attribute) — see implementation notes
+
+## Implementation notes (deviations/decisions made during execution)
+
+- **Desktop's wide 7-column table doesn't fit a phone.** `ListingRow` is replaced by `ListingCard`: a
+  two-row layout (thumbnail + title/set on top, store + status chip + price + pin/link icons below)
+  instead of desktop's fixed-width columns sized for an ~1100dp window.
+- **Hover popup replaced with a full-screen tap-to-dismiss "lightbox"**, not an anchored
+  `PopupPositionProvider` like desktop. Tapping any thumbnail (`ListingCard` or `CardSummaryEntry`)
+  opens a single shared `ModalScrim` + `EnlargedCardPreview` overlay hoisted at the `AndroidApp` root;
+  tapping the scrim (or the small close icon) dismisses it. Simpler and more mobile-idiomatic than
+  replicating desktop's anchored-positioning math for a tap gesture, and it reuses the `ModalScrim`
+  primitive Phase 6 already built for future dialogs.
+- **`CardSummaryEntry` gained a small tappable thumbnail chip that desktop's row doesn't have.**
+  Desktop's summary row shows art *only* via hover — there's no persistent thumbnail in the row
+  itself. Touch has no hover equivalent, and the row's tap is already claimed by "scroll to this
+  card's section" (`onCardClick`), so a separate small thumbnail was added as the tap target for
+  the art preview. The "Show card on hover" checkbox (desktop-only setting) was dropped entirely —
+  it's a hover-specific affordance with no mobile equivalent.
+  - **`onCardClick` scroll-to-section is real, not a no-op.** Initially stubbed empty during first
+    implementation pass, then wired: `AndroidApp` hoists the results `ScrollState` plus its own
+    `positionInRoot()` (via `onGloballyPositioned`), `ResultsScreen` records each `CardSection`'s
+    `positionInRoot()` in a plain (non-reactive) map as they compose, and tapping a summary entry
+    computes `scrollState.value + (sectionY - scrollRootY)` and calls `animateScrollTo(...)` —
+    verified on-device: tapping a summary entry animates the results scroll to bring that card's
+    section header to the top of the viewport.
+- **No `LazyColumn` for per-card sections — a plain `Column` inside `AndroidApp`'s existing
+  `verticalScroll` container.** `AndroidApp` (Phase 6) already wraps the whole Search Results tab
+  content in one scrollable `Column`; nesting an unbounded-height `LazyColumn` inside that would hit
+  Compose's "infinite height constraints" measurement error. Using a plain `Column` avoids that
+  entirely and matches the single-scroll-container shape Phase 6 established. Verified acceptable
+  scroll performance on-device with a 4-card / 293-listing result set; true virtualization (a real
+  `LazyColumn` with the search screen itself, not just results, inside it) is a candidate follow-up
+  if a much larger result set ever shows jank, but wasn't needed here.
+- **Real Android-specific bug found and fixed: cleartext HTTP blocking.** 3 of the 20 stores in
+  `data.STORES` use plain `http://` URLs (D20 Battleground, Geek Home, Underworld Connections).
+  Android blocks cleartext traffic by default since API 28; desktop's Ktor client has no such
+  restriction, so these stores silently worked on desktop but failed on Android with "CLEARTEXT
+  communication ... not permitted" errors — invisible until this phase actually rendered the
+  per-store error rows. Fixed with a `network_security_config.xml` scoped to exactly those 3 domains
+  (not a blanket `usesCleartextTraffic="true"`), referenced from `AndroidManifest.xml`. Verified with
+  a before/after real search: 49 listings (broken) to 69 (fixed) for "sol ring". This is arguably a
+  Phase 3 (networking) gap rather than a Phase 7 (UI) one, but it was only discoverable once real
+  error text had somewhere to render, so it's fixed and documented here.
+- **`sortedByPriceAsc()` and `formatZar()` duplicated** (not shared with desktop's private
+  equivalents in `App.kt`) — same precedent as Phase 6's `ui/theme/Theme.kt` duplicating the color
+  palette: trivial, dependency-free pure functions, not worth a shared-module extraction yet.
