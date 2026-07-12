@@ -2,13 +2,15 @@
 
 **ZArchive** searches South African Magic: The Gathering stores for card singles — all at once, in one place. Paste a list of cards you need, hit search, and see what's in stock and at what price across every supported SA store. Includes an order optimiser that tells you the cheapest buying plan and how to cover your list from the fewest shops.
 
+Available on **Windows**, **macOS**, and **Android**, with optional sync across all of them via your own Google Drive.
+
 > **Store owner?** If you'd like your store added or removed from ZArchive, please [open a GitHub Issue](https://github.com/IcarusComplex/zarchive/issues/new) with the label **`store-request`** and include your store's name and URL. I'll get back to you there.
 
 ---
 
 ## Download & Install
 
-Go to the [**Releases page**](https://github.com/IcarusComplex/zarchive/releases) and download the zip for your platform from the latest **Stable** release.
+Go to the [**Releases page**](https://github.com/IcarusComplex/zarchive/releases) and download the file for your platform from the latest **Stable** release (zip for Windows/macOS, APK for Android).
 
 ### Windows
 
@@ -53,6 +55,16 @@ Then double-click normally — no more dialogs.
 You only need to do this once.
 
 > **Intel Mac:** The current release targets Apple Silicon only. Intel support may be added in future.
+
+### Android
+
+1. Download `ZArchive-android-<version>.apk` on your phone.
+2. Tap the downloaded file to install. Android will warn that it's from outside the Play Store — tap **Install anyway** (you may need to allow installs from your browser/files app the first time; Android will prompt you through that).
+3. Open **ZArchive** from your app drawer.
+
+The app is signed consistently release-to-release, so future updates install cleanly over the previous version — no need to uninstall first.
+
+> **Debug vs. release:** if you also have a development/debug build installed (`ZArchive Debug`), it's a separate app with a separate package name — the two can coexist on the same device without conflicting.
 
 ---
 
@@ -112,6 +124,36 @@ Each plan shows the total cost and flags any cards not available anywhere. Click
 
 ---
 
+## Sync across devices (Google Drive)
+
+ZArchive can keep your saved card lists and saved search results in sync between all your devices — desktop and Android — using your own Google Drive. No ZArchive account, no ZArchive-run server: everything moves directly between your devices and your Drive.
+
+### Connecting
+
+- **Settings menu → Connect Google Drive**, or the **sync icon** in the header (title bar on desktop, top bar on Android).
+- The first time you save a card list, ZArchive also offers a one-time prompt to connect — you can dismiss it and connect later from Settings any time.
+- Sign in with the Google account you want to sync through and approve access. ZArchive only ever requests access to a single folder it creates itself (see below) — never your whole Drive.
+
+### What happens after connecting
+
+- ZArchive syncs automatically on launch, and a few seconds after any list or result is saved, renamed, or deleted.
+- Click the header sync icon (or **Settings → Sync now**) to sync immediately.
+- A slim status bar briefly shows **Syncing…** / **Synced** / an error message at the bottom of the window.
+
+### Where your data lives
+
+ZArchive creates a folder named **ZArchive** in your own Google Drive (visible under "My Drive" — not a hidden app folder) containing a single file, `zarchive-sync.json`, with all your synced lists and results. You can open, inspect, or back it up like any other Drive file.
+
+### If the same list exists on two devices
+
+Each saved list/result gets a unique ID when first created. Two lists only merge if they share that ID (e.g. the same list, edited on both devices) — the newer edit wins. Two *different* lists that happen to share a name (e.g. both called "Draft picks", created independently on each device) are never merged into one; the newly-synced copy is named **"Draft picks (Cloud)"** so nothing is silently overwritten.
+
+### Disconnecting
+
+**Settings → Disconnect Google Drive** stops syncing and clears ZArchive's local record of the connection. Your data stays in the ZArchive folder in your Drive — delete it yourself from Drive if you want it gone entirely. To fully revoke ZArchive's access to your Google account, visit [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+
+---
+
 ## Settings
 
 Settings are available in the left panel and the gear menu in the title bar. All settings persist between sessions.
@@ -130,6 +172,7 @@ Settings are available in the left panel and the gear menu in the title bar. All
 |---|---|
 | **Early Access** | Opt in to pre-release builds. These may have new features or experimental fixes not yet in a stable release. |
 | **Check for updates** | Manually trigger an update check. Shows the current version. |
+| **Connect Google Drive** / **Sync now** / **Disconnect Google Drive** | Manage cross-device sync — see [Sync across devices](#sync-across-devices-google-drive) above. |
 | **Report a bug** | Opens a GitHub issue in your browser with the `bug` label pre-applied. |
 
 ### Luckshack links
@@ -145,6 +188,8 @@ ZArchive checks for updates every time it launches. A slim status bar appears at
 If a newer version is available, a dialog appears. Click **Download & Install** — ZArchive will download the update in the background (progress shown), then close itself, replace its own files, and relaunch automatically. No manual zip extraction needed.
 
 To opt in to pre-release (Early Access) builds, enable **Early Access** in the gear menu. Pre-release builds may have new features not yet in a stable release.
+
+On Android, the update flow is the same up through the download; ZArchive then hands the downloaded APK to Android's own package installer, which asks you to tap **Install** to finish (a system requirement — apps outside the Play Store can't silently replace themselves).
 
 ---
 
@@ -166,7 +211,11 @@ ZArchive never writes into its own installation folder at runtime.
 | Card image cache | `~/.zarchive/images/` |
 | Settings | `~/Library/Preferences/co.za.zarchive.plist` (via Java Preferences API) |
 
-The image cache can be safely deleted at any time — ZArchive will re-download art on next search.
+### Android
+
+Everything (image cache, settings, saved lists/results) lives in the app's own private storage, managed automatically by Android — there's nothing to browse or clean up manually.
+
+The image cache can be safely deleted at any time (Windows/macOS) — ZArchive will re-download art on next search.
 
 ---
 
@@ -183,6 +232,12 @@ The image cache can be safely deleted at any time — ZArchive will re-download 
 1. Delete `ZArchive.app`.
 2. Delete `~/.zarchive/` (image cache — optional).
 3. To remove settings: delete `~/Library/Preferences/co.za.zarchive.plist`.
+
+### Android
+
+Uninstall it like any other app (long-press the icon → **Uninstall**, or **Settings → Apps → ZArchive → Uninstall**). This removes all of ZArchive's local data automatically.
+
+If you connected Google Drive sync, uninstalling does **not** revoke that access on its own — visit [myaccount.google.com/permissions](https://myaccount.google.com/permissions) to remove it if you want to.
 
 ---
 
@@ -213,6 +268,9 @@ ZArchive pulls prices directly from each store at search time. If a price looks 
 **"The Warren is missing from results"**
 The Warren is excluded by default because it uses a headless browser and is noticeably slower. Enable **Include The Warren** in the left panel to include it.
 
+**"Google Drive sync says failed / won't connect"**
+Check your internet connection and try **Settings → Sync now** again. If it keeps failing, disconnect and reconnect from Settings — this re-runs the Google sign-in from scratch, which clears up most issues (e.g. a revoked or expired permission).
+
 ---
 
 ## Supporting ZArchive
@@ -229,6 +287,6 @@ No pressure at all — enjoy the app either way.
 
 ZArchive is free, open-source software released under the [MIT License](LICENSE).
 
-Built with [Kotlin](https://kotlinlang.org/) + [Compose Desktop](https://www.jetbrains.com/lp/compose-multiplatform/). Card art via [Scryfall](https://scryfall.com/).
+Built with [Kotlin Multiplatform](https://kotlinlang.org/docs/multiplatform.html) + [Compose Multiplatform](https://www.jetbrains.com/lp/compose-multiplatform/) (desktop + Android from one shared codebase). Card art via [Scryfall](https://scryfall.com/).
 
 Contributions and bug reports welcome on the [Issues page](https://github.com/IcarusComplex/zarchive/issues).
