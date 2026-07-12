@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "co.za.mtg"
-version = "1.0.21"
+version = "1.0.22"
 
 repositories {
     mavenCentral()
@@ -98,7 +98,13 @@ android {
         applicationId = "co.za.zarchive"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
+        // Must strictly increase release-to-release or Android's package installer refuses to
+        // install an update over an existing install -- derived from the semantic version
+        // (1.0.22 -> 10022) instead of a separately-tracked counter, so bumping `version` above
+        // is the only step needed per release.
+        versionCode = version.toString().substringBefore('-').split(".").let { (maj, min, patch) ->
+            maj.toInt() * 10000 + min.toInt() * 100 + patch.toInt()
+        }
         versionName = version.toString()
         manifestPlaceholders["appLabel"] = "ZArchive"
     }
