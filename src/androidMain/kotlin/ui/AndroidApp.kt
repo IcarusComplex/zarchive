@@ -60,10 +60,13 @@ import ui.theme.Primary
 import ui.theme.Surface
 import ui.theme.ZArchiveTheme
 
-private enum class ResultsTab(val label: String, val icon: ImageVector) {
+// hidden: Search Monitors has no real implementation yet (Phase 14, deferred) -- the tab and its
+// placeholder screen stay in place, just excluded from the bottom NavigationBar, so re-enabling it
+// once Phase 14 lands is a one-line flip back to `hidden = false`.
+private enum class ResultsTab(val label: String, val icon: ImageVector, val hidden: Boolean = false) {
     RESULTS("Search Results", Icons.Default.Storefront),
     ORDERS("Order Lists", Icons.Default.ShoppingCart),
-    MONITORS("Search Monitors", Icons.Default.Notifications),
+    MONITORS("Search Monitors", Icons.Default.Notifications, hidden = true),
 }
 
 /**
@@ -144,7 +147,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                         UpdateStatusFooter(vm.updateCheckState)
                     }
                     NavigationBar(containerColor = HeaderBg) {
-                        ResultsTab.entries.forEach { t ->
+                        ResultsTab.entries.filter { !it.hidden }.forEach { t ->
                             val active = t == tab
                             NavigationBarItem(
                                 selected = active,
