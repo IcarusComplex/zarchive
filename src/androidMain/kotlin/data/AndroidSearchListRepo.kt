@@ -17,59 +17,6 @@ class AndroidSearchListRepo : SearchListRepo {
 
     init {
         refresh()
-        seedIfEmpty()
-    }
-
-    // Same one-time seed list as desktop's DesktopSearchListRepo, gated by the same "_seed_v1_lists"
-    // settings flag (now backed by the Android settings table instead of AppDatabase's).
-    private fun seedIfEmpty() {
-        val alreadySeeded = queries.getSetting("_seed_v1_lists").executeAsOneOrNull() != null
-        if (alreadySeeded) return
-        val cards = listOf(
-            "Aragorn and Arwen, Wed",
-            "Abzan Falconer",
-            "Loran of the Third Path",
-            "Nykthos Paragon",
-            "Secure the Wastes",
-            "White Sun's Zenith",
-            "Season of the Burrow",
-            "Tempt with Bunnies",
-            "Avacyn's Pilgrim",
-            "Elvish Mystic",
-            "Kami of Whispered Hopes",
-            "Rishkar, Peema Renegade",
-            "Inspiring Call",
-            "Collective Unconscious",
-            "Harvest Season",
-            "Kodama's Reach",
-            "Rishkar's Expertise",
-            "Shamanic Revelation",
-            "Tempt with Discovery",
-            "Hardened Scales",
-            "Primeval Bounty",
-            "Byrke, Long Ear of the Law",
-            "Cadira, Caller of the Small",
-            "Conclave Mentor",
-            "Dyadrine, Synthesis Amalgam",
-            "Emmara, Soul of the Accord",
-            "Finneas, Ace Archer",
-            "Ghalta and Mavren",
-            "Haliya, Ascendant Cadet",
-            "Hamza, Guardian of Arashin",
-            "Lathiel, the Bounteous Dawn",
-            "Yasharn, Implacable Earth",
-            "Aura Mutation",
-            "March of the Multitudes",
-            "Rite of Harmony",
-            "Camaraderie",
-        )
-        val listName = "Aragorn & Arwen EDH (Example)"
-        val now = System.currentTimeMillis()
-        queries.insertList(listName, now, now)
-        val id = queries.lastInsertRowId().executeAsOne()
-        insertCards(id, cards)
-        queries.setSetting("_seed_v1_lists", "true")
-        refresh()
     }
 
     private fun refresh() {

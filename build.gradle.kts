@@ -98,11 +98,24 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = version.toString()
+        manifestPlaceholders["appLabel"] = "ZArchive"
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // Distinct applicationId (and therefore a separate data directory/database) from the release
+    // build, so a debug build and a signed release build can be installed side by side on the same
+    // device for comparison testing -- without this they share "co.za.zarchive" and Android treats
+    // them as the same app, refusing to install one over the other once they're signed differently
+    // (INSTALL_FAILED_UPDATE_INCOMPATIBLE).
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "ZArchive Debug"
+        }
     }
 
     // Release signing is driven entirely by environment variables (set from GitHub Actions
