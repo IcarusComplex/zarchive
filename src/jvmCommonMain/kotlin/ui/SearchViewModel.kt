@@ -24,6 +24,8 @@ enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
 enum class SyncStatus { DISCONNECTED, IDLE, SYNCING, SYNCED, ERROR }
 
+private const val SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000L
+
 class SearchViewModel(
     private val searchListRepo: SearchListRepo,
     private val searchResultRepo: SearchResultRepo,
@@ -400,10 +402,20 @@ class SearchViewModel(
         private set
     private var syncDebounceJob: Job? = null
 
+    // Automatic sync triggers (launch, mutation-debounce) are cooldown-limited to at most once per
+    // 5 minutes -- without this, e.g. Android bringing the app back to the foreground repeatedly
+    // while the user alt-tabs between apps re-ran syncOnLaunch's LaunchedEffect(Unit) each time,
+    // hammering Drive far more than needed. Persisted (not just in-memory) so a relaunch shortly
+    // after the last sync doesn't immediately fire another one either. Manual "Sync now" always
+    // bypasses this -- it's an explicit request, not an automatic trigger.
+    private var lastSyncAttemptAt: Long
+        get() = SettingsStore.getSetting("sync.lastAttemptAt", "0").toLongOrNull() ?: 0L
+        set(value) = SettingsStore.setSetting("sync.lastAttemptAt", value.toString())
+
     /** Called once on app launch (next to [checkForUpdates]) -- silently does nothing if not connected. */
     fun syncOnLaunch() {
         if (!syncEngine.isConnected) return
-        scope.launch(Dispatchers.IO) { runSync() }
+        scope.launch(Dispatchers.IO) { runSyncThrottled() }
     }
 
     // Called at the end of every list/result mutation. Debounced so a burst of edits (e.g. typing
@@ -413,11 +425,17 @@ class SearchViewModel(
         syncDebounceJob?.cancel()
         syncDebounceJob = scope.launch(Dispatchers.IO) {
             delay(3_000)
-            runSync()
+            runSyncThrottled()
         }
     }
 
+    private suspend fun runSyncThrottled() {
+        if (System.currentTimeMillis() - lastSyncAttemptAt < SYNC_MIN_INTERVAL_MS) return
+        runSync()
+    }
+
     private suspend fun runSync() {
+        lastSyncAttemptAt = System.currentTimeMillis()
         withContext(Dispatchers.Main) { syncStatus = SyncStatus.SYNCING; syncError = null }
         val result = syncEngine.syncNow()
         withContext(Dispatchers.Main) {
