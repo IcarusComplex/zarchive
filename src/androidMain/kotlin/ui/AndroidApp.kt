@@ -1,5 +1,6 @@
 package ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +44,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.BuildInfo
+import kotlinx.coroutines.delay
 import ui.theme.HeaderBg
 import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
@@ -64,16 +67,26 @@ private enum class ResultsTab(val label: String, val icon: ImageVector) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AndroidApp(vm: SearchViewModel) {
+fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     var tab by remember { mutableStateOf(ResultsTab.RESULTS) }
     var summaryExpanded by remember { mutableStateOf(true) }
     var summaryFilter by remember { mutableStateOf("") }
     var expandedImagePath by remember { mutableStateOf<String?>(null) }
     var showListsDialog by remember { mutableStateOf(false) }
     var showResultsDialog by remember { mutableStateOf(false) }
+    var showSearchOptionsDialog by remember { mutableStateOf(false) }
+    var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
     val platformActions = remember { PlatformActions() }
     val resultsScrollState = rememberScrollState()
     var scrollRootY by remember { mutableStateOf(0) }
+
+    LaunchedEffect(Unit) { vm.checkForUpdates() }
+    LaunchedEffect(vm.updateCheckState) {
+        if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE || vm.updateCheckState == UpdateCheckState.UPDATE_FOUND) {
+            delay(5_000)
+            vm.dismissUpdateStatus()
+        }
+    }
 
     ZArchiveTheme {
         Box(Modifier.fillMaxSize()) {
@@ -106,27 +119,33 @@ fun AndroidApp(vm: SearchViewModel) {
                         IconButton(onClick = { showResultsDialog = true }) {
                             Icon(Icons.Default.Archive, "Saved results", tint = OnSurfaceVariant)
                         }
+                        SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = HeaderBg),
                 )
             },
             bottomBar = {
-                NavigationBar(containerColor = HeaderBg) {
-                    ResultsTab.entries.forEach { t ->
-                        val active = t == tab
-                        NavigationBarItem(
-                            selected = active,
-                            onClick = { tab = t },
-                            icon = { Icon(t.icon, null) },
-                            label = { Text(t.label, fontSize = 11.sp, maxLines = 1) },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = Primary,
-                                selectedTextColor = Primary,
-                                unselectedIconColor = OnSurfaceVariant.copy(alpha = 0.7f),
-                                unselectedTextColor = OnSurfaceVariant.copy(alpha = 0.7f),
-                                indicatorColor = Primary.copy(alpha = 0.15f),
-                            ),
-                        )
+                Column {
+                    AnimatedVisibility(visible = vm.updateCheckState != UpdateCheckState.IDLE) {
+                        UpdateStatusFooter(vm.updateCheckState)
+                    }
+                    NavigationBar(containerColor = HeaderBg) {
+                        ResultsTab.entries.forEach { t ->
+                            val active = t == tab
+                            NavigationBarItem(
+                                selected = active,
+                                onClick = { tab = t },
+                                icon = { Icon(t.icon, null) },
+                                label = { Text(t.label, fontSize = 11.sp, maxLines = 1) },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = Primary,
+                                    selectedTextColor = Primary,
+                                    unselectedIconColor = OnSurfaceVariant.copy(alpha = 0.7f),
+                                    unselectedTextColor = OnSurfaceVariant.copy(alpha = 0.7f),
+                                    indicatorColor = Primary.copy(alpha = 0.15f),
+                                ),
+                            )
+                        }
                     }
                 }
             },
@@ -142,7 +161,7 @@ fun AndroidApp(vm: SearchViewModel) {
                 ) {
                     when (tab) {
                         ResultsTab.RESULTS -> {
-                            SearchInputScreen(vm)
+                            SearchInputScreen(vm, onOpenSearchOptions = { showSearchOptionsDialog = true })
                             if (vm.isSearching || vm.statusText.isNotEmpty()) {
                                 Spacer(Modifier.height(12.dp))
                                 StatusRow(vm)
@@ -189,6 +208,54 @@ fun AndroidApp(vm: SearchViewModel) {
         }
         if (showResultsDialog) {
             SavedResultsDialog(vm, onDismiss = { showResultsDialog = false })
+        }
+        if (showSearchOptionsDialog) {
+            SearchOptionsDialog(vm, onDismiss = { showSearchOptionsDialog = false })
+        }
+        if (showCrashDialog && pendingCrash != null) {
+            CrashReportDialog(
+                crashLog = pendingCrash,
+                onCopyToClipboard = platformActions::copyToClipboard,
+                onOpenUrl = platformActions::openUrl,
+                onDismiss = { showCrashDialog = false },
+            )
+        }
+        if (vm.downloadProgress != null) {
+            DownloadProgressDialog(
+                phase = vm.downloadPhase,
+                progress = vm.downloadProgress!!,
+                error = vm.downloadError,
+                onCancel = { vm.cancelDownload() },
+            )
+        } else if (vm.updateInfo != null) {
+            UpdateDialog(
+                info = vm.updateInfo!!,
+                onOpenUrl = platformActions::openUrl,
+                onDismiss = { vm.updateInfo = null },
+            )
+        }
+        if (vm.showAddToSearchDialog) {
+            AddToSearchDialog(
+                newCount = vm.pendingAddCount,
+                totalCount = vm.pendingTotalCount,
+                unavailableCount = vm.pendingUnavailableCount,
+                onAddNew = { vm.confirmAddToSearch() },
+                onAddNewAndRefresh = { vm.confirmAddNewAndRefreshUnavailable() },
+                onSearchAll = { vm.declineAddToSearch() },
+                onDismiss = { vm.showAddToSearchDialog = false },
+            )
+        }
+        if (vm.showAllAlreadySearchedDialog) {
+            AllAlreadySearchedDialog(
+                count = vm.alreadySearchedCount,
+                unavailableCount = vm.alreadySearchedUnavailableCount,
+                onRefreshUnavailable = { vm.confirmRefreshUnavailable() },
+                onResearch = { vm.confirmResearchAll() },
+                onDismiss = { vm.dismissAllAlreadySearched() },
+            )
+        }
+        if (vm.showSearchSummary) {
+            SearchSummaryDialog(vm)
         }
     }
 }

@@ -78,7 +78,7 @@ reachable from `desktopMain`:
 | 6 | [phase-6-app-shell-search-input.md](phase-6-app-shell-search-input.md) | **Done** — real multi-store search + Stop/cancel verified live on Pixel_9 |
 | 7 | [phase-7-results-card-art.md](phase-7-results-card-art.md) | **Done** — real multi-store results + tap-to-toggle art verified live on Pixel_9; found/fixed an Android cleartext-HTTP bug |
 | 8 | [phase-8-saved-lists-results.md](phase-8-saved-lists-results.md) | **Done** — saved lists/results dialogs verified live; bottom nav replaces top folder-tabs (Android only) |
-| 9 | [phase-9-settings-dialogs.md](phase-9-settings-dialogs.md) | Not started |
+| 9 | [phase-9-settings-dialogs.md](phase-9-settings-dialogs.md) | **Done** — settings menu, Search Options, and a real forced-crash round-trip all verified live on Pixel_9 |
 | 10 | [phase-10-order-lists.md](phase-10-order-lists.md) | Not started |
 | 11 | [phase-11-warren-webview.md](phase-11-warren-webview.md) | Not started |
 | 12 | [phase-12-distribution-update.md](phase-12-distribution-update.md) | Not started |

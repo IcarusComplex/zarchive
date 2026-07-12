@@ -2,17 +2,24 @@ package ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -29,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ui.theme.Mono
 import ui.theme.OnSurface
+import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
 import ui.theme.Primary
 import ui.theme.SurfaceContainerLow
@@ -44,8 +52,19 @@ import ui.theme.ErrorColor
  * the only way to trigger a search here.
  */
 @Composable
-fun SearchInputScreen(vm: SearchViewModel) {
+fun SearchInputScreen(vm: SearchViewModel, onOpenSearchOptions: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            modifier = Modifier
+                .align(Alignment.End)
+                .clickable(onClick = onOpenSearchOptions)
+                .padding(bottom = 6.dp),
+        ) {
+            Icon(Icons.Default.Settings, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
+            Text("Search Options", fontSize = 12.sp, color = OnSurfaceVariant)
+        }
         var focused by remember { mutableStateOf(false) }
         BasicTextField(
             value = vm.query,

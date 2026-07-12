@@ -13,6 +13,7 @@ import ui.SearchViewModel
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val pendingCrash = ZArchiveApplication.readAndClearCrashLog()
         setContent {
             val vm = remember {
                 SearchViewModel(
@@ -24,7 +25,7 @@ class MainActivity : ComponentActivity() {
                     // a browser-backed store with no searcher supplied), not a crash.
                 )
             }
-            AndroidApp(vm)
+            AndroidApp(vm, pendingCrash)
         }
     }
 }
