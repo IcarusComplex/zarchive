@@ -9,19 +9,21 @@ import java.io.File;
  * transparent square canvas, matching Android's 108dp-canvas / ~66dp-safe-zone adaptive icon
  * spec -- content outside the safe zone can be clipped by circular/squircle OEM masks.
  *
- * Usage: java MakeAndroidIcon <source.png> <output.png> <canvasSize>
+ * Usage: java MakeAndroidIcon <source.png> <output.png> <canvasSize> [scale]
+ *   scale defaults to 0.65 (adaptive-icon safe zone); pass 1.0 for a full-bleed inline logo.
  */
 public class MakeAndroidIcon {
     static final double SAFE_ZONE_SCALE = 0.65;
 
     public static void main(String[] args) throws Exception {
         if (args.length < 3) {
-            System.err.println("Usage: java MakeAndroidIcon <source.png> <output.png> <canvasSize>");
+            System.err.println("Usage: java MakeAndroidIcon <source.png> <output.png> <canvasSize> [scale]");
             System.exit(1);
         }
         BufferedImage src = ImageIO.read(new File(args[0]));
         int canvas = Integer.parseInt(args[2]);
-        int content = (int) Math.round(canvas * SAFE_ZONE_SCALE);
+        double scale = args.length >= 4 ? Double.parseDouble(args[3]) : SAFE_ZONE_SCALE;
+        int content = (int) Math.round(canvas * scale);
         int offset = (canvas - content) / 2;
 
         BufferedImage out = new BufferedImage(canvas, canvas, BufferedImage.TYPE_INT_ARGB);

@@ -4,7 +4,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.ExperimentalTextApi
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import co.za.zarchive.R
 
 // ── Arcane Market Ledger palette (see CLAUDE.md) — same values as ui/App.kt's desktop palette.
 // Duplicated here (not shared) since these are plain Color constants with no logic; if a later
@@ -28,6 +33,15 @@ val ErrorColor                = Color(0xFFFFB4AB)
 val HeaderBg                 = Color(0xFF00020C)
 
 val Mono = FontFamily.Monospace
+
+// Display font for the header title -- Cinzel (Google Fonts, OFL-licensed, bundled as a variable
+// font in res/font/cinzel.ttf; see res/font/OFL.txt). A carved-stone-style serif matching the
+// "Arcane Market Ledger" theme better than the system default sans used everywhere else.
+@OptIn(ExperimentalTextApi::class)
+val Cinzel = FontFamily(
+    Font(R.font.cinzel, FontWeight.Normal, variationSettings = FontVariation.Settings(FontVariation.weight(400))),
+    Font(R.font.cinzel, FontWeight.Bold, variationSettings = FontVariation.Settings(FontVariation.weight(700))),
+)
 
 @Composable
 fun ZArchiveTheme(content: @Composable () -> Unit) {
