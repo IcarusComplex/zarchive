@@ -127,18 +127,24 @@ fun ShimmerOverlay() {
     )
 }
 
-private val ENLARGED_CARD_W = 260.dp
-private val ENLARGED_CARD_H = 364.dp
+// MTG card aspect ratio (2.5in : 3.5in = 5:7), matching the original fixed 260x364 size.
+private const val CARD_ASPECT_H_OVER_W = 364f / 260f
+private const val CARD_PREVIEW_WIDTH_FRACTION = 0.85f
 
 // Full-screen tap-to-dismiss preview, hosted inside a ModalScrim by the caller (AndroidApp) —
 // replaces desktop's anchored hover Popup with a mobile-idiomatic centered "lightbox" that
-// dismisses on tapping anywhere on the scrim, including a small explicit close affordance.
+// dismisses on tapping anywhere on the scrim, including a small explicit close affordance. Sized
+// to 85% of the screen width (not a fixed dp size) so it reads as a real "zoomed in" card on any
+// phone, with height derived from the fixed MTG card aspect ratio.
 @Composable
 fun EnlargedCardPreview(path: String, onDismiss: () -> Unit) {
     val bmp = rememberCardBitmap(path)
+    val screenWidth = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.dp
+    val width = screenWidth * CARD_PREVIEW_WIDTH_FRACTION
+    val height = width * CARD_ASPECT_H_OVER_W
     Box(
         Modifier
-            .size(ENLARGED_CARD_W, ENLARGED_CARD_H)
+            .size(width, height)
             .shadow(24.dp, RoundedCornerShape(8.dp))
             .clip(RoundedCornerShape(8.dp)),
     ) {
