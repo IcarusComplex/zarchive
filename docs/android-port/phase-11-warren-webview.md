@@ -1,6 +1,16 @@
 # Phase 11 — The Warren: Android WebView searcher
 
-Status: Not started
+Status: **Done.** Verified on the Pixel_9 emulator with real, live production searches. A "sol ring"
+search returned a genuine (if unhelpful) result: The Warren's own search backend returned 5 fuzzy
+substring matches (e.g. "Solemn Offering" — matches because "offe-RING" contains "ring"), all
+correctly filtered out by the existing, already-tested `isRelevant()` function, yielding 0 relevant
+hits — proving the pipeline is live and correctly discriminating, not just returning empty by
+accident. A "swords to plowshares" search then returned a genuine relevant hit: "Swords to
+Plowshares - Judge Gift Cards 2013" at R925,00, 2 in stock, which rendered correctly in the results
+list sorted by price alongside every other store, and the store status grid showed "The Warren 1/1"
+DONE. Full combined regression gate (`createDistributable` + `desktopTest` + `assembleDebug`) passes
+together; desktop `.exe` launched standalone to confirm zero regression (the WebView dependency is
+`androidMain`-only, no desktop impact).
 Depends on: Phase 0B (feasibility spike), Phase 3 (SearchEngine dispatch), Phase 6/7 (results
 plumbing), Phase 9 (ZArchiveApplication holder)
 Blocks: none downstream (leaf feature phase)
@@ -57,8 +67,40 @@ and foreground it again; rotate the device mid-search; confirm no crash and a re
 
 ## Critical files
 
-- `src/main/kotlin/network/BrowserSearcher.kt` (reference only — URL/pagination/JSON contract, not
-  ported directly)
+- `src/main/kotlin/network/BrowserSearcher.kt` (reference only — URL/pagination/JSON contract,
+  ported close to verbatim for the JSON field-extraction logic)
 - `src/androidMain/kotlin/network/AndroidWarrenSearcher.kt` (new)
-- `src/commonMain/kotlin/engine/SearchEngine.kt` (dispatch hook for the platform-special-cased
-  searcher)
+- `src/androidMain/kotlin/androidapp/MainActivity.kt` (constructs `AndroidWarrenSearcher()` and
+  passes it as `SearchViewModel`'s `warrenSearcher` argument)
+- `build.gradle.kts` / `gradle/libs.versions.toml` (added `androidx.webkit:webkit` dependency to
+  `androidMain`)
+
+## Implementation notes (deviations/decisions made during execution)
+
+- **No `SearchEngine.kt` dispatch changes were needed at all** — the plan anticipated needing a new
+  "platform-special-cased searcher" hook, but Phase 3/4 had already built exactly this seam:
+  `SearchEngine.runSearch`/`checkStore` accept a `sharedBrowserSearcher: BrowserBackedSearcher?`
+  parameter and copy `store = storeName` onto whatever it returns. `AndroidWarrenSearcher` just
+  implements that existing interface and gets passed into `SearchViewModel`'s constructor in
+  `MainActivity.kt`, identical in shape to how desktop passes `BrowserSearcher(2)`. This is simpler
+  than the plan assumed because the abstraction had already matured past what Phase 11's own doc
+  (written before Phase 3/4 were implemented) anticipated.
+- **A real, unvalidated risk flagged in the Phase 0B spike notes did manifest**: "This spike's
+  WebView was never attached to the visible view hierarchy... a one-off spike succeeding doesn't
+  rule out reliability issues under sustained real-world use." The first real test silently returned
+  empty results with no crash and no error — the detached WebView's JS timers/fetch resolution were
+  being throttled by Chromium since it considered the WebView not visible/foregrounded. Fixed with
+  explicit `webView.onResume()` + `webView.resumeTimers()`, called once after creation and again at
+  the start of every `search()` call.
+- **`SearchEngine.checkStore` calls `browserSearcher.search()` once per card, sequentially** (a
+  plain `for` loop, not concurrent `async`) for the `BROWSER` platform, so `AndroidWarrenSearcher`'s
+  internal `Mutex` is a defensive guard, not a real contention point in practice — confirmed by
+  reading `SearchEngine.kt` rather than assumed.
+- **Diagnosing "why does this return 0 results" required temporarily logging the raw intercepted
+  JSON body**, which revealed The Warren's own search backend does fuzzy substring matching
+  server-side (a "sol ring" query matched "Solemn Offering" because "ring" is a substring of
+  "Offering") — not a bug in the Android port, but the same `isRelevant()` whole-word-match filter
+  already documented in CLAUDE.md correctly rejecting irrelevant results, exactly as it does for
+  every other store. This diagnostic logging (a per-response body dump and a very chatty
+  `onPageFinished` callback firing ~40 times per navigation, likely from the React app's client-side
+  routing) was removed after confirming the fix worked; only clean production code remains.

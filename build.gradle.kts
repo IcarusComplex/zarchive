@@ -80,6 +80,7 @@ kotlin {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.kotlinx.coroutines.android)
                 implementation(libs.sqldelight.android.driver)
+                implementation(libs.androidx.webkit)
             }
         }
     }

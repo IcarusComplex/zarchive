@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.runtime.remember
 import data.AndroidSearchListRepo
 import data.AndroidSearchResultRepo
+import network.AndroidWarrenSearcher
 import ui.AndroidApp
 import ui.PlatformActions
 import ui.SearchViewModel
@@ -20,9 +21,9 @@ class MainActivity : ComponentActivity() {
                     searchListRepo = AndroidSearchListRepo(),
                     searchResultRepo = AndroidSearchResultRepo(),
                     platformActions = PlatformActions(),
-                    // warrenSearcher stays null until Phase 11's WebView-based searcher exists —
-                    // The Warren is simply skipped (SearchEngine.runSearch's existing behavior for
-                    // a browser-backed store with no searcher supplied), not a crash.
+                    // Phase 11: a persistent, application-scoped WebView-based searcher for The
+                    // Warren, replacing desktop's Playwright-driven BrowserSearcher.
+                    warrenSearcher = AndroidWarrenSearcher(),
                 )
             }
             AndroidApp(vm, pendingCrash)
