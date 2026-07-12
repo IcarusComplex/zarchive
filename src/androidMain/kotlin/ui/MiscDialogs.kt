@@ -17,9 +17,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.CloudDone
-import androidx.compose.material.icons.filled.CloudOff
-import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
@@ -100,42 +97,6 @@ fun UpdateStatusFooter(state: UpdateCheckState, error: String? = null) {
                         "Couldn't check for updates" + (error?.let { " — $it" } ?: ""),
                         fontSize = 11.sp, color = ErrorColor,
                     )
-                }
-                else -> {}
-            }
-        }
-    }
-}
-
-@Composable
-fun SyncStatusFooter(state: SyncStatus, error: String?) {
-    val borderColor = when (state) {
-        SyncStatus.SYNCED -> Tertiary
-        SyncStatus.ERROR -> ErrorColor
-        else -> OutlineVariant
-    }
-    Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
-        HorizontalDivider(color = borderColor.copy(alpha = 0.5f))
-        if (state == SyncStatus.SYNCING) {
-            LinearProgressIndicator(modifier = Modifier.fillMaxWidth().height(2.dp), color = Primary, trackColor = SurfaceContainerHighest)
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            when (state) {
-                SyncStatus.SYNCING -> {
-                    Icon(Icons.Default.CloudSync, null, tint = Primary, modifier = Modifier.size(13.dp))
-                    Text("Syncing with Google Drive…", fontSize = 11.sp, color = OnSurfaceVariant)
-                }
-                SyncStatus.SYNCED -> {
-                    Icon(Icons.Default.CloudDone, null, tint = Tertiary, modifier = Modifier.size(13.dp))
-                    Text("Synced with Google Drive", fontSize = 11.sp, color = Tertiary)
-                }
-                SyncStatus.ERROR -> {
-                    Icon(Icons.Default.CloudOff, null, tint = ErrorColor, modifier = Modifier.size(13.dp))
-                    Text("Sync failed" + (error?.let { " — $it" } ?: ""), fontSize = 11.sp, color = ErrorColor)
                 }
                 else -> {}
             }

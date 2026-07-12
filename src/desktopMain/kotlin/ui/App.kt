@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -215,13 +216,6 @@ fun WindowScope.App(
                 ) {
                     UpdateStatusFooter(vm.updateCheckState, vm.updateCheckError)
                 }
-                AnimatedVisibility(
-                    visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,
-                    enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
-                    exit  = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
-                ) {
-                    SyncStatusFooter(vm.syncStatus, vm.syncError)
-                }
             }
             // Modal dialogs — rendered on top of the full app
             if (vm.downloadProgress != null) {
@@ -300,18 +294,9 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, windowState: WindowState, 
                         }
                     }
                     // Low-friction, always-visible entry point to (re)connect/sync -- distinct from
-                    // the same actions buried in the Settings menu. Always rendered (toggling its
-                    // visibility on syncStatus caused a visible pop-in/out flicker); just dimmed
-                    // and inert while a sync is already in flight instead.
-                    GhostIconButton(
-                        Icons.Default.CloudSync, "Sync now",
-                        tint = if (vm.syncStatus == SyncStatus.SYNCING) OnSurfaceVariant.copy(alpha = 0.35f) else OnSurfaceVariant,
-                        iconSize = 14.dp,
-                    ) {
-                        if (vm.syncStatus != SyncStatus.SYNCING) {
-                            if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
-                        }
-                    }
+                    // the same actions buried in the Settings menu. Always rendered; the icon itself
+                    // communicates progress/outcome (spinning/check/cross) instead of a bottom toast.
+                    SyncIconButton(vm)
                     Spacer(Modifier.width(2.dp))
                     SettingsMenu(vm)
                     Spacer(Modifier.width(2.dp))
@@ -334,6 +319,46 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, windowState: WindowState, 
                 }
             }
         }
+    }
+}
+
+// Icon-only sync affordance: spins while syncing, then briefly shows a check/cross for the
+// outcome before settling back to the idle cloud icon (vm.dismissSyncStatus, driven by the
+// LaunchedEffect(vm.syncStatus) timer in App()) -- no separate toast/footer needed.
+@Composable
+private fun SyncIconButton(vm: SearchViewModel) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val angle by rememberInfiniteTransition(label = "syncSpin").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(900, easing = LinearEasing)),
+        label = "syncAngle",
+    )
+    val (icon, tint) = when (vm.syncStatus) {
+        SyncStatus.SYNCING -> Icons.Default.Sync to OnSurfaceVariant
+        SyncStatus.SYNCED  -> Icons.Default.Check to Tertiary
+        SyncStatus.ERROR   -> Icons.Default.Close to ErrorColor
+        else               -> Icons.Default.CloudSync to OnSurfaceVariant
+    }
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(if (hovered) SurfaceContainerHigh else Color.Transparent)
+            .hoverable(interaction)
+            .clickable(enabled = vm.syncStatus != SyncStatus.SYNCING) {
+                if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
+            }
+            .padding(8.dp),
+    ) {
+        Icon(
+            icon,
+            contentDescription = "Sync now",
+            tint = tint,
+            modifier = Modifier
+                .size(14.dp)
+                .rotate(if (vm.syncStatus == SyncStatus.SYNCING) angle else 0f),
+        )
     }
 }
 
@@ -1413,46 +1438,6 @@ private fun UpdateStatusFooter(state: UpdateCheckState, error: String? = null) {
                         "Couldn't check for updates" + (error?.let { " — $it" } ?: ""),
                         fontSize = 11.sp, color = ErrorColor,
                     )
-                }
-                else -> {}
-            }
-        }
-    }
-}
-
-@Composable
-private fun SyncStatusFooter(state: SyncStatus, error: String?) {
-    val borderColor = when (state) {
-        SyncStatus.SYNCED -> Tertiary
-        SyncStatus.ERROR  -> ErrorColor
-        else              -> OutlineVariant
-    }
-    Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
-        HorizontalDivider(color = borderColor.copy(alpha = 0.5f))
-        if (state == SyncStatus.SYNCING) {
-            LinearProgressIndicator(
-                modifier = Modifier.fillMaxWidth().height(2.dp),
-                color = Primary,
-                trackColor = SurfaceContainerHighest,
-            )
-        }
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            when (state) {
-                SyncStatus.SYNCING -> {
-                    Icon(Icons.Default.CloudSync, contentDescription = null, tint = Primary, modifier = Modifier.size(13.dp))
-                    Text("Syncing with Google Drive…", fontSize = 11.sp, color = OnSurfaceVariant)
-                }
-                SyncStatus.SYNCED -> {
-                    Icon(Icons.Default.CloudDone, contentDescription = null, tint = Tertiary, modifier = Modifier.size(13.dp))
-                    Text("Synced with Google Drive", fontSize = 11.sp, color = Tertiary)
-                }
-                SyncStatus.ERROR -> {
-                    Icon(Icons.Default.CloudOff, contentDescription = null, tint = ErrorColor, modifier = Modifier.size(13.dp))
-                    Text("Sync failed" + (error?.let { " — $it" } ?: ""), fontSize = 11.sp, color = ErrorColor)
                 }
                 else -> {}
             }

@@ -1,6 +1,11 @@
 package ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,11 +25,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -46,6 +54,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -56,12 +65,14 @@ import data.BuildInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import ui.theme.Cinzel
+import ui.theme.ErrorColor
 import ui.theme.HeaderBg
 import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
 import ui.theme.Primary
 import ui.theme.Surface
+import ui.theme.Tertiary
 import ui.theme.ZArchiveTheme
 
 // Fixed LazyColumn item index where the RESULTS tab's per-card sections start: SearchInputScreen,
@@ -162,19 +173,10 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                             Icon(Icons.Default.Archive, "Saved results", tint = OnSurfaceVariant)
                         }
                         // Low-friction, always-visible entry point to (re)connect/sync -- distinct
-                        // from the same actions buried in the Settings menu. Always rendered
-                        // (toggling visibility on syncStatus caused a pop-in/out flicker); just
-                        // dimmed and inert while a sync is already in flight instead.
-                        IconButton(onClick = {
-                            if (vm.syncStatus != SyncStatus.SYNCING) {
-                                if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
-                            }
-                        }) {
-                            Icon(
-                                Icons.Default.CloudSync, "Sync now",
-                                tint = if (vm.syncStatus == SyncStatus.SYNCING) OnSurfaceVariant.copy(alpha = 0.35f) else OnSurfaceVariant,
-                            )
-                        }
+                        // from the same actions buried in the Settings menu. Always rendered; the
+                        // icon itself communicates progress/outcome (spinning/check/cross) instead
+                        // of a bottom toast.
+                        SyncIconButton(vm)
                         SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = HeaderBg),
@@ -184,11 +186,6 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                 Column {
                     AnimatedVisibility(visible = vm.updateCheckState != UpdateCheckState.IDLE) {
                         UpdateStatusFooter(vm.updateCheckState, vm.updateCheckError)
-                    }
-                    AnimatedVisibility(
-                        visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,
-                    ) {
-                        SyncStatusFooter(vm.syncStatus, vm.syncError)
                     }
                     NavigationBar(containerColor = HeaderBg) {
                         ResultsTab.entries.filter { !it.hidden }.forEach { t ->
@@ -392,5 +389,35 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                 onDismiss = { vm.dismissFirstListSyncPrompt() },
             )
         }
+    }
+}
+
+// Icon-only sync affordance: spins while syncing, then briefly shows a check/cross for the
+// outcome before settling back to the idle cloud icon (vm.dismissSyncStatus, driven by the
+// LaunchedEffect(vm.syncStatus) timer in AndroidApp()) -- no separate toast/footer needed.
+@Composable
+private fun SyncIconButton(vm: SearchViewModel) {
+    val angle by rememberInfiniteTransition(label = "syncSpin").animateFloat(
+        initialValue = 0f,
+        targetValue = 360f,
+        animationSpec = infiniteRepeatable(animation = tween(900, easing = LinearEasing)),
+        label = "syncAngle",
+    )
+    val (icon, tint) = when (vm.syncStatus) {
+        SyncStatus.SYNCING -> Icons.Default.Sync to OnSurfaceVariant
+        SyncStatus.SYNCED  -> Icons.Default.Check to Tertiary
+        SyncStatus.ERROR   -> Icons.Default.Close to ErrorColor
+        else               -> Icons.Default.CloudSync to OnSurfaceVariant
+    }
+    IconButton(onClick = {
+        if (vm.syncStatus != SyncStatus.SYNCING) {
+            if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
+        }
+    }) {
+        Icon(
+            icon, "Sync now",
+            tint = tint,
+            modifier = Modifier.rotate(if (vm.syncStatus == SyncStatus.SYNCING) angle else 0f),
+        )
     }
 }

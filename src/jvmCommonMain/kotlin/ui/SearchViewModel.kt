@@ -403,12 +403,12 @@ class SearchViewModel(
         private set
     private var syncDebounceJob: Job? = null
 
-    // Automatic sync triggers (launch, mutation-debounce) are cooldown-limited to at most once per
-    // 5 minutes -- without this, e.g. Android bringing the app back to the foreground repeatedly
-    // while the user alt-tabs between apps re-ran syncOnLaunch's LaunchedEffect(Unit) each time,
-    // hammering Drive far more than needed. Persisted (not just in-memory) so a relaunch shortly
-    // after the last sync doesn't immediately fire another one either. Manual "Sync now" always
-    // bypasses this -- it's an explicit request, not an automatic trigger.
+    // Passive/automatic sync triggers (app launch, coming back to the foreground -- e.g. Android
+    // bringing the app back after the user alt-tabs, or desktop minimize/restore) are cooldown-limited
+    // to at most once per 5 minutes so they don't hammer Drive on every window focus change.
+    // Persisted (not just in-memory) so a relaunch shortly after the last sync doesn't immediately
+    // fire another one either. Explicit user actions -- editing/saving a list (markDirtyAndScheduleSync)
+    // or "Sync now" -- always bypass this cooldown; the user just made a change and expects it to sync.
     private var lastSyncAttemptAt: Long
         get() = SettingsStore.getSetting("sync.lastAttemptAt", "0").toLongOrNull() ?: 0L
         set(value) = SettingsStore.setSetting("sync.lastAttemptAt", value.toString())
@@ -420,13 +420,15 @@ class SearchViewModel(
     }
 
     // Called at the end of every list/result mutation. Debounced so a burst of edits (e.g. typing
-    // out a new list) coalesces into one round-trip instead of one per keystroke/click.
+    // out a new list) coalesces into one round-trip instead of one per keystroke/click. This is an
+    // explicit user edit, not an automatic background trigger, so it bypasses the 5-minute cooldown
+    // and always syncs once the debounce settles.
     private fun markDirtyAndScheduleSync() {
         if (!syncEngine.isConnected) return
         syncDebounceJob?.cancel()
         syncDebounceJob = scope.launch(Dispatchers.IO) {
             delay(3_000)
-            runSyncThrottled()
+            runSync()
         }
     }
 
