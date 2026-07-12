@@ -17,11 +17,12 @@ import kotlinx.serialization.json.Json
 import network.BrowserBackedSearcher
 import network.CardImageService
 import network.UpdateInfo
+import network.UpdateCheckResult
 import network.checkForUpdate
 import sync.SyncEngine
 
 enum class StoreStatus { PENDING, CHECKING, DONE }
-enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
+enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND, CHECK_FAILED }
 enum class SyncStatus { DISCONNECTED, IDLE, SYNCING, SYNCED, ERROR }
 
 private const val SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000L
@@ -668,6 +669,7 @@ class SearchViewModel(
 
     var updateInfo by mutableStateOf<UpdateInfo?>(null)
     var updateCheckState by mutableStateOf(UpdateCheckState.IDLE)
+    var updateCheckError by mutableStateOf<String?>(null)
 
     // null = idle, 0–1 = progress, -1 = error
     var downloadProgress by mutableStateOf<Float?>(null)
@@ -708,11 +710,25 @@ class SearchViewModel(
     fun checkForUpdates() {
         if (updateCheckState == UpdateCheckState.CHECKING) return
         updateCheckState = UpdateCheckState.CHECKING
+        updateCheckError = null
         scope.launch(Dispatchers.IO) {
-            val info = runCatching { checkForUpdate(earlyAccess) }.getOrNull()
+            val result = checkForUpdate(earlyAccess)
             withContext(Dispatchers.Main) {
-                updateInfo = info
-                updateCheckState = if (info != null) UpdateCheckState.UPDATE_FOUND else UpdateCheckState.UP_TO_DATE
+                when (result) {
+                    is UpdateCheckResult.UpdateFound -> {
+                        updateInfo = result.info
+                        updateCheckState = UpdateCheckState.UPDATE_FOUND
+                    }
+                    is UpdateCheckResult.UpToDate -> {
+                        updateInfo = null
+                        updateCheckState = UpdateCheckState.UP_TO_DATE
+                    }
+                    is UpdateCheckResult.Failed -> {
+                        updateInfo = null
+                        updateCheckError = result.reason
+                        updateCheckState = UpdateCheckState.CHECK_FAILED
+                    }
+                }
             }
         }
     }

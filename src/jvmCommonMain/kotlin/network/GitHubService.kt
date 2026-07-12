@@ -27,7 +27,21 @@ data class UpdateInfo(
     val downloadUrl: String?,
 )
 
-suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
+/**
+ * Distinguishes "checked, no newer version" from "the check itself failed" -- these must never be
+ * conflated (a GitHub API rate-limit response or a network hiccup used to silently report as
+ * "already up to date" via a bare `UpdateInfo?`, which is actively misleading: a mobile carrier's
+ * shared/NAT'd IP can easily exhaust GitHub's unauthenticated 60-req/hour limit in a way a desktop
+ * on a less-contended IP rarely does, and the user has no way to tell "confirmed current" from
+ * "couldn't tell").
+ */
+sealed class UpdateCheckResult {
+    data class UpdateFound(val info: UpdateInfo) : UpdateCheckResult()
+    data object UpToDate : UpdateCheckResult()
+    data class Failed(val reason: String) : UpdateCheckResult()
+}
+
+suspend fun checkForUpdate(includePrerelease: Boolean): UpdateCheckResult {
     val client = HttpClient(OkHttp)
     return runCatching {
         val url = if (includePrerelease)
@@ -38,16 +52,20 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
             header(HttpHeaders.Accept, "application/vnd.github+json")
             header(HttpHeaders.UserAgent, "ZArchive/${BuildInfo.VERSION}")
         }
-        if (!resp.status.isSuccess()) return@runCatching null
+        if (!resp.status.isSuccess()) {
+            return@runCatching UpdateCheckResult.Failed("GitHub API returned HTTP ${resp.status.value}")
+        }
         val body = resp.bodyAsText()
         val release: JsonObject? = if (includePrerelease) {
             ghJson.parseToJsonElement(body).jsonArray.firstOrNull()?.jsonObject
         } else {
             ghJson.parseToJsonElement(body).jsonObject
         }
-        val tag     = release?.get("tag_name")?.jsonPrimitive?.content ?: return@runCatching null
-        val htmlUrl = release["html_url"]?.jsonPrimitive?.content    ?: return@runCatching null
-        if (!isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) return@runCatching null
+        val tag     = release?.get("tag_name")?.jsonPrimitive?.content
+            ?: return@runCatching UpdateCheckResult.Failed("Unexpected response from GitHub")
+        val htmlUrl = release["html_url"]?.jsonPrimitive?.content
+            ?: return@runCatching UpdateCheckResult.Failed("Unexpected response from GitHub")
+        if (!isNewerVersion(tag.trimStart('v'), BuildInfo.VERSION)) return@runCatching UpdateCheckResult.UpToDate
 
         // Pick the platform-appropriate asset from the release assets. java.vm.name reports
         // "Dalvik"/"ART" on Android (there is no equivalent os.name signal -- Android's os.name is
@@ -76,8 +94,9 @@ suspend fun checkForUpdate(includePrerelease: Boolean): UpdateInfo? {
             assets.firstOrNull()
         )?.get("browser_download_url")?.jsonPrimitive?.content
 
-        UpdateInfo(tag, htmlUrl, downloadUrl)
-    }.also { client.close() }.getOrNull()
+        UpdateCheckResult.UpdateFound(UpdateInfo(tag, htmlUrl, downloadUrl))
+    }.getOrElse { e -> UpdateCheckResult.Failed(e.message ?: "Check failed") }
+        .also { client.close() }
 }
 
 /**

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
@@ -63,10 +64,11 @@ import ui.theme.Tertiary
 // instead of desktop's fixed 380-480dp widths, which don't translate to phone screens.
 
 @Composable
-fun UpdateStatusFooter(state: UpdateCheckState) {
+fun UpdateStatusFooter(state: UpdateCheckState, error: String? = null) {
     val borderColor = when (state) {
         UpdateCheckState.UPDATE_FOUND -> Primary
         UpdateCheckState.UP_TO_DATE -> Tertiary
+        UpdateCheckState.CHECK_FAILED -> ErrorColor
         else -> OutlineVariant
     }
     Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
@@ -91,6 +93,13 @@ fun UpdateStatusFooter(state: UpdateCheckState) {
                 UpdateCheckState.UP_TO_DATE -> {
                     Icon(Icons.Default.Check, null, tint = Tertiary, modifier = Modifier.size(13.dp))
                     Text("Already up to date", fontSize = 11.sp, color = Tertiary)
+                }
+                UpdateCheckState.CHECK_FAILED -> {
+                    Icon(Icons.Default.ErrorOutline, null, tint = ErrorColor, modifier = Modifier.size(13.dp))
+                    Text(
+                        "Couldn't check for updates" + (error?.let { " — $it" } ?: ""),
+                        fontSize = 11.sp, color = ErrorColor,
+                    )
                 }
                 else -> {}
             }

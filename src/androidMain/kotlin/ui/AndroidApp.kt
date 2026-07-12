@@ -108,7 +108,10 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     LaunchedEffect(Unit) { vm.checkForUpdates() }
     LaunchedEffect(Unit) { vm.syncOnLaunch() }
     LaunchedEffect(vm.updateCheckState) {
-        if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE || vm.updateCheckState == UpdateCheckState.UPDATE_FOUND) {
+        if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE ||
+            vm.updateCheckState == UpdateCheckState.UPDATE_FOUND ||
+            vm.updateCheckState == UpdateCheckState.CHECK_FAILED
+        ) {
             delay(5_000)
             vm.dismissUpdateStatus()
         }
@@ -180,7 +183,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
             bottomBar = {
                 Column {
                     AnimatedVisibility(visible = vm.updateCheckState != UpdateCheckState.IDLE) {
-                        UpdateStatusFooter(vm.updateCheckState)
+                        UpdateStatusFooter(vm.updateCheckState, vm.updateCheckError)
                     }
                     AnimatedVisibility(
                         visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,

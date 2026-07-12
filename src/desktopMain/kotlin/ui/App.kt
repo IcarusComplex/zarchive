@@ -158,7 +158,8 @@ fun WindowScope.App(
     // Auto-dismiss the update status footer after 5 seconds
     LaunchedEffect(vm.updateCheckState) {
         if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE ||
-            vm.updateCheckState == UpdateCheckState.UPDATE_FOUND
+            vm.updateCheckState == UpdateCheckState.UPDATE_FOUND ||
+            vm.updateCheckState == UpdateCheckState.CHECK_FAILED
         ) {
             delay(5_000)
             vm.dismissUpdateStatus()
@@ -212,7 +213,7 @@ fun WindowScope.App(
                     enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
                     exit  = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
                 ) {
-                    UpdateStatusFooter(vm.updateCheckState)
+                    UpdateStatusFooter(vm.updateCheckState, vm.updateCheckError)
                 }
                 AnimatedVisibility(
                     visible = vm.syncStatus == SyncStatus.SYNCING || vm.syncStatus == SyncStatus.SYNCED || vm.syncStatus == SyncStatus.ERROR,
@@ -1372,11 +1373,12 @@ private fun SettingsActionItem(label: String, sublabel: String? = null, icon: an
 }
 
 @Composable
-private fun UpdateStatusFooter(state: UpdateCheckState) {
+private fun UpdateStatusFooter(state: UpdateCheckState, error: String? = null) {
     val borderColor = when (state) {
-        UpdateCheckState.UPDATE_FOUND -> Primary
-        UpdateCheckState.UP_TO_DATE   -> Tertiary
-        else                          -> OutlineVariant
+        UpdateCheckState.UPDATE_FOUND  -> Primary
+        UpdateCheckState.UP_TO_DATE    -> Tertiary
+        UpdateCheckState.CHECK_FAILED  -> ErrorColor
+        else                           -> OutlineVariant
     }
     Column(Modifier.fillMaxWidth().background(SurfaceContainerLowest)) {
         HorizontalDivider(color = borderColor.copy(alpha = 0.5f))
@@ -1404,6 +1406,13 @@ private fun UpdateStatusFooter(state: UpdateCheckState) {
                 UpdateCheckState.UP_TO_DATE -> {
                     Icon(Icons.Default.Check, contentDescription = null, tint = Tertiary, modifier = Modifier.size(13.dp))
                     Text("Already up to date", fontSize = 11.sp, color = Tertiary)
+                }
+                UpdateCheckState.CHECK_FAILED -> {
+                    Icon(Icons.Default.ErrorOutline, contentDescription = null, tint = ErrorColor, modifier = Modifier.size(13.dp))
+                    Text(
+                        "Couldn't check for updates" + (error?.let { " — $it" } ?: ""),
+                        fontSize = 11.sp, color = ErrorColor,
+                    )
                 }
                 else -> {}
             }
