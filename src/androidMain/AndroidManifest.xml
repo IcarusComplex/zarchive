@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Needed to launch Android's package installer on the downloaded update APK (Phase 12). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:name="androidapp.ZArchiveApplication"
+        android:label="${appLabel}"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:networkSecurityConfig="@xml/network_security_config">
+        <!-- configChanges: SearchViewModel lives in a plain Compose `remember` tied to this
+             Activity (Phase 13 finding), not a retained-across-recreation ViewModel. Without this,
+             Android's default rotation/multi-window-resize behavior destroys and recreates the
+             Activity, silently wiping in-progress search state. Handling the change ourselves keeps
+             the same Activity instance alive; Compose recomposes for the new size/orientation for
+             free. -->
+        <activity
+            android:name="androidapp.MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:theme="@style/Theme.ZArchive.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Exposes the downloaded update APK (in cacheDir) to Android's package installer via a
+             content:// URI. Installers on API 24+ cannot be handed a raw file:// URI. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+</manifest>

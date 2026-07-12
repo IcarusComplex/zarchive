@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Exposes only context.cacheDir (where PlatformActions.android.kt downloads update.apk) to the
+     FileProvider. Nothing else in the app's storage is shared. -->
+<paths>
+    <cache-path name="updates" path="." />
+</paths>

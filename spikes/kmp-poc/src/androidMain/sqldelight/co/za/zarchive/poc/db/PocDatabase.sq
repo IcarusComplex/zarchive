@@ -1,0 +1,94 @@
+-- Phase 0C spike: schema mirrors all 5 tables in the desktop project's data/AppDatabase.kt
+-- (Exposed/H2), hand-duplicated here for SQLDelight/Android per the plan's explicit decision to
+-- keep the two databases fully separate.
+
+CREATE TABLE settings (
+    key TEXT NOT NULL PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE search_lists (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE search_list_cards (
+    list_id INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    card_name TEXT NOT NULL,
+    PRIMARY KEY (list_id, position)
+);
+
+CREATE TABLE saved_result_snapshots (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    saved_at INTEGER NOT NULL,
+    card_count INTEGER NOT NULL,
+    cards_json TEXT NOT NULL,
+    results_json TEXT NOT NULL,
+    excluded_cards_json TEXT,
+    unchecked_lines_json TEXT,
+    pinned_listings_json TEXT
+);
+
+CREATE TABLE cf_throttle_rules (
+    base_url TEXT NOT NULL PRIMARY KEY,
+    card_threshold INTEGER NOT NULL,
+    tier INTEGER NOT NULL,
+    tier_large INTEGER NOT NULL DEFAULT 2,
+    last_hit_at INTEGER NOT NULL,
+    last_hit_cards INTEGER NOT NULL
+);
+
+-- ── settings ────────────────────────────────────────────────────────────────
+getSetting:
+SELECT value FROM settings WHERE key = ?;
+
+setSetting:
+INSERT OR REPLACE INTO settings(key, value) VALUES (?, ?);
+
+-- ── search_lists / search_list_cards ────────────────────────────────────────
+selectAllLists:
+SELECT * FROM search_lists ORDER BY updated_at DESC;
+
+insertList:
+INSERT INTO search_lists(name, created_at, updated_at) VALUES (?, ?, ?);
+
+lastInsertRowId:
+SELECT last_insert_rowid();
+
+insertListCard:
+INSERT INTO search_list_cards(list_id, position, card_name) VALUES (?, ?, ?);
+
+selectCardsForList:
+SELECT card_name FROM search_list_cards WHERE list_id = ? ORDER BY position;
+
+touchList:
+UPDATE search_lists SET updated_at = ? WHERE id = ?;
+
+deleteList:
+DELETE FROM search_lists WHERE id = ?;
+
+deleteListCards:
+DELETE FROM search_list_cards WHERE list_id = ?;
+
+-- ── saved_result_snapshots ───────────────────────────────────────────────────
+selectAllSnapshots:
+SELECT * FROM saved_result_snapshots ORDER BY saved_at DESC;
+
+insertSnapshot:
+INSERT INTO saved_result_snapshots(
+    name, description, saved_at, card_count, cards_json, results_json,
+    excluded_cards_json, unchecked_lines_json, pinned_listings_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- ── cf_throttle_rules ─────────────────────────────────────────────────────────
+selectAllThrottleRules:
+SELECT * FROM cf_throttle_rules;
+
+upsertThrottleRule:
+INSERT OR REPLACE INTO cf_throttle_rules(base_url, card_threshold, tier, tier_large, last_hit_at, last_hit_cards)
+VALUES (?, ?, ?, ?, ?, ?);

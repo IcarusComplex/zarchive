@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.ZArchive" parent="android:Theme.Material.NoActionBar" />
+
+    <!-- androidx.core.splashscreen theme: shows the same dark background + book/gem foreground
+         art as the app icon while the app cold-starts, then hands off to Theme.ZArchive with the
+         library's built-in fade-out exit animation. A smooth home-screen-to-app transition on
+         every API level back to minSdk, not just Android 12+. -->
+    <style name="Theme.ZArchive.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/ic_launcher_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@mipmap/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.ZArchive</item>
+    </style>
+</resources>

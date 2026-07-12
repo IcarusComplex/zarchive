@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android blocks cleartext (plain HTTP) traffic by default since API 28. Desktop's Ktor client has
+  no such restriction, so these 3 stores (out of data.STORES) work fine there but fail on Android
+  with "CLEARTEXT communication not permitted" unless explicitly allow-listed here. Scoped to exactly
+  these domains, not a blanket usesCleartextTraffic="true", so every other store still gets the
+  default HTTPS-only enforcement.
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">d20battleground.co.za</domain>
+        <domain includeSubdomains="true">geekhome.co.za</domain>
+        <domain includeSubdomains="true">underworldconnections.co.za</domain>
+    </domain-config>
+</network-security-config>

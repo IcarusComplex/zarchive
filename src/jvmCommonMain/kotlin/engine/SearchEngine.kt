@@ -1,0 +1,392 @@
+package engine
+
+import data.*
+import io.ktor.client.*
+import io.ktor.client.engine.okhttp.*
+import io.ktor.client.plugins.*
+import io.ktor.client.plugins.DefaultRequest
+import io.ktor.client.plugins.HttpSend
+import io.ktor.client.plugins.plugin
+import io.ktor.client.request.*
+import io.ktor.http.*
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import network.*
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManager
+import javax.net.ssl.X509TrustManager
+
+// ── Throttle profiles ──────────────────────────────────────────────────────────
+
+/**
+ * Per-domain concurrency and pacing parameters.
+ *
+ * The base tier for every search is determined by total card-store pairs (cards * stores):
+ *   < 300  -> tier 1 (light; small searches stay fast)
+ *   >= 300 -> tier 2 minimum (medium; large searches throttled to avoid CF rate limits)
+ *
+ * Per-store escalation stored in the DB can raise the effective tier above the base. Each
+ * store tracks two independent tiers — small-bucket and large-bucket — so a 429 on a large
+ * search doesn't penalise future small searches, and vice versa.
+ *
+ * Platform matters: Shopify makes 1 suggest.json + N handle.js requests per card and is
+ * aggressively CF-protected. WooCommerce/BigCommerce make 1 request per card and rarely 429.
+ * BROWSER (Playwright/WebView) stores bypass the Ktor rate limiter entirely.
+ */
+data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
+    companion object {
+        val NONE  = ThrottleProfile(2, 0L)
+        // Shopify profiles — applied when search ≥ 300 cards.
+        val TIER1 = ThrottleProfile(2, 200L)   // light: ~5 req/s per store
+        val TIER2 = ThrottleProfile(1, 500L)   // medium: ~2 req/s, serialised
+        val TIER3 = ThrottleProfile(1, 800L)   // heavy: ~1.25 req/s, serialised
+
+        fun forTier(tier: Int): ThrottleProfile = when (tier) {
+            1    -> TIER1
+            2    -> TIER2
+            else -> TIER3
+        }
+
+        // Non-Shopify platforms make far fewer HTTP requests per card and are rarely
+        // rate-limited — use lighter profiles to keep large searches reasonably fast.
+        fun forTierAndPlatform(tier: Int, platform: Platform): ThrottleProfile = when (platform) {
+            Platform.SHOPIFY -> forTier(tier)
+            Platform.WOOCOMMERCE, Platform.WC_STORE_API -> when (tier) {
+                1    -> ThrottleProfile(3, 0L)
+                2    -> ThrottleProfile(2, 150L)
+                else -> ThrottleProfile(1, 300L)
+            }
+            Platform.BIGCOMMERCE -> when (tier) {
+                1    -> ThrottleProfile(3, 0L)
+                else -> ThrottleProfile(2, 100L)
+            }
+            Platform.PRESTASHOP -> when (tier) {
+                1    -> ThrottleProfile(2, 100L)
+                else -> ThrottleProfile(1, 300L)
+            }
+            else -> forTier(tier)
+        }
+    }
+}
+
+// ── Per-host rate limiter ──────────────────────────────────────────────────────
+
+/**
+ * Installed into the Ktor client via HttpSend.intercept so that every client.get() —
+ * including nested handle.js / product-page fetches inside a single card search —
+ * is throttled per domain automatically.
+ *
+ * [hostProfiles] maps domain names (e.g. "greedygold.co.za") to their throttle profile.
+ * Hosts not in the map use ThrottleProfile.NONE (no delay, no semaphore).
+ *
+ * The mutex only guards the (fast) get-or-create of a host's semaphore — the actual
+ * withPermit/delay/block() execution runs outside the lock, so per-host (and cross-host)
+ * concurrency is unaffected, same as the ConcurrentHashMap.getOrPut this replaces.
+ */
+class PerHostRateLimiter(
+    private val hostProfiles: Map<String, ThrottleProfile>,
+) {
+    private val mutex = Mutex()
+    private val semaphores = mutableMapOf<String, Semaphore>()
+
+    suspend fun <T> withThrottle(host: String, block: suspend () -> T): T {
+        val profile = hostProfiles[host] ?: ThrottleProfile.NONE
+        if (profile === ThrottleProfile.NONE) return block()
+        val sem = mutex.withLock { semaphores.getOrPut(host) { Semaphore(profile.maxConcurrent) } }
+        return sem.withPermit {
+            delay(profile.minDelayMs)
+            block()
+        }
+    }
+}
+
+// ── Internal state ─────────────────────────────────────────────────────────────
+
+private val platformCacheMutex = Mutex()
+private val platformCache = mutableMapOf<String, Platform>()
+private val cfBlockedMutex = Mutex()
+private val cfBlockedStores = mutableSetOf<String>()
+
+// Retry delays for transient non-429 errors: 1 s then 5 s then propagate.
+private val RETRY_DELAYS_MS = listOf(1_000L, 5_000L)
+
+private fun extractHost(baseUrl: String): String? =
+    runCatching { java.net.URI(baseUrl).host?.takeIf { it.isNotBlank() } }.getOrNull()
+
+// ── HTTP client ────────────────────────────────────────────────────────────────
+
+// Accept any certificate — small SA stores often have expired/self-signed certs.
+private val permissiveTrustManager = object : X509TrustManager {
+    override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+    override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+}
+
+private val permissiveSslContext: SSLContext = SSLContext.getInstance("TLS").apply {
+    init(null, arrayOf<TrustManager>(permissiveTrustManager), SecureRandom())
+}
+
+fun buildHttpClient(rateLimiter: PerHostRateLimiter): HttpClient {
+    val client = HttpClient(OkHttp) {
+        engine {
+            config {
+                sslSocketFactory(permissiveSslContext.socketFactory, permissiveTrustManager)
+                hostnameVerifier { _, _ -> true }
+            }
+        }
+        install(HttpRedirect) { checkHttpMethod = false }
+        install(HttpTimeout) {
+            requestTimeoutMillis = 20_000
+            connectTimeoutMillis = 12_000
+        }
+        install(DefaultRequest) {
+            header(HttpHeaders.UserAgent,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+            header(HttpHeaders.Accept,
+                "text/html,application/xhtml+xml,application/xml;q=0.9," +
+                "image/avif,image/webp,image/apng,*/*;q=0.8")
+            header(HttpHeaders.AcceptLanguage, "en-ZA,en;q=0.9")
+            header("sec-ch-ua",
+                "\"Google Chrome\";v=\"124\",\"Chromium\";v=\"124\",\"Not-A.Brand\";v=\"99\"")
+            header("sec-ch-ua-mobile",   "?0")
+            header("sec-ch-ua-platform", "\"Windows\"")
+            header("sec-fetch-dest",     "document")
+            header("sec-fetch-mode",     "navigate")
+            header("sec-fetch-site",     "none")
+            header("sec-fetch-user",     "?1")
+            header("upgrade-insecure-requests", "1")
+        }
+    }
+    // Intercept every request at the send level so all HTTP calls — including nested
+    // handle.js / product-page fetches — are throttled per domain.
+    client.plugin(HttpSend).intercept { request ->
+        rateLimiter.withThrottle(request.url.host) { execute(request) }
+    }
+    return client
+}
+
+// ── Retry / CF-block handling ──────────────────────────────────────────────────
+
+/**
+ * Runs [block] with up to 2 retries for transient errors.
+ * On a [CloudflareBlockedException]: marks the store blocked for this session,
+ * invokes [onCfBlocked] (so the caller can persist the event to the DB), and rethrows.
+ */
+private suspend fun <T> withRetry(
+    baseUrl: String,
+    onCfBlocked: ((String) -> Unit)? = null,
+    block: suspend () -> T,
+): T {
+    if (cfBlockedMutex.withLock { baseUrl in cfBlockedStores }) throw CloudflareBlockedException()
+
+    var lastError: Exception? = null
+    for (attempt in 0..2) {
+        if (attempt > 0) delay(RETRY_DELAYS_MS[attempt - 1])
+        try {
+            return block()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: CloudflareBlockedException) {
+            cfBlockedMutex.withLock { cfBlockedStores.add(baseUrl) }
+            onCfBlocked?.invoke(baseUrl)
+            throw e
+        } catch (e: Exception) {
+            lastError = e
+        }
+    }
+    throw lastError!!
+}
+
+// ── Per-store search ───────────────────────────────────────────────────────────
+
+// onResults is called once per card as results arrive; onStoreComplete once per store.
+suspend fun checkStore(
+    client: HttpClient,
+    storeName: String,
+    baseUrl: String,
+    cards: List<String>,
+    browserSearcher: BrowserBackedSearcher?,
+    onProgress: suspend (String) -> Unit,
+    onResults: suspend (List<SearchResult>) -> Unit,
+    onStoreComplete: suspend (String) -> Unit,
+    // Called on the IO thread when a 429 is encountered; receives the base URL and
+    // the number of cards being searched so the caller can persist a throttle rule.
+    onCfBlocked: ((baseUrl: String, cardCount: Int) -> Unit)? = null,
+) {
+    onProgress(storeName)
+    // Only successful detections are cached for the session. UNKNOWN/UNREACHABLE results —
+    // usually a transient blip or momentary rate-limit — are NOT cached so the store is
+    // retried on the next search rather than stuck "check manually" until restart.
+    val platform = platformCacheMutex.withLock { platformCache[baseUrl] } ?: run {
+        val detected = KNOWN_PLATFORMS[baseUrl] ?: detectPlatform(client, baseUrl)
+        if (detected != Platform.UNKNOWN && detected != Platform.UNREACHABLE) {
+            platformCacheMutex.withLock { platformCache[baseUrl] = detected }
+        }
+        detected
+    }
+
+    if (platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE) {
+        cards.forEach { card ->
+            onResults(listOf(SearchResult(
+                store = storeName, card = card, title = null,
+                priceZar = null, available = null, url = baseUrl,
+                note = "[${platform.name.lowercase()} — check manually]",
+            )))
+        }
+        onStoreComplete(storeName)
+        return
+    }
+
+    if (platform == Platform.BROWSER) {
+        if (browserSearcher == null) {
+            cards.forEach { card ->
+                onResults(listOf(SearchResult(
+                    store = storeName, card = card, title = null,
+                    priceZar = null, available = null, url = baseUrl,
+                    note = "[browser unavailable]",
+                )))
+            }
+        } else {
+            for (card in cards) {
+                val rows = try {
+                    val hits = browserSearcher.search(baseUrl, card)
+                    if (hits.isEmpty()) listOf(SearchResult(
+                        store = storeName, card = card, title = null,
+                        priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                    ))
+                    else hits.map { it.copy(store = storeName) }
+                } catch (e: Exception) {
+                    listOf(SearchResult(
+                        store = storeName, card = card, title = null,
+                        priceZar = null, available = null, url = baseUrl,
+                        note = "[error: ${e.message?.take(60)}]",
+                    ))
+                }
+                onResults(rows)
+            }
+        }
+        onStoreComplete(storeName)
+        return
+    }
+
+    val searcher: suspend (HttpClient, String, String) -> List<SearchResult> = when (platform) {
+        Platform.SHOPIFY      -> ::searchShopify
+        Platform.WOOCOMMERCE  -> ::searchWooCommerce
+        Platform.WC_STORE_API -> ::searchWcStoreApi
+        Platform.OPENCART     -> ::searchOpenCart
+        Platform.BIGCOMMERCE  -> ::searchBigCommerce
+        Platform.PRESTASHOP   -> ::searchPrestaShop
+        Platform.WARREN_API   -> ::searchWarrenApi
+        else                  -> { _, _, _ -> emptyList() }
+    }
+
+    // 2 concurrent card-processing lanes per store, with a random jitter before each.
+    // Actual HTTP request pacing is handled by the per-host rate limiter in the client.
+    val sem = Semaphore(2)
+    coroutineScope {
+        cards.map { card ->
+            async {
+                sem.withPermit {
+                    delay((500L..2000L).random())
+                    val rows = try {
+                        val hits = withRetry(
+                            baseUrl,
+                            onCfBlocked = { url -> onCfBlocked?.invoke(url, cards.size) },
+                        ) { searcher(client, baseUrl, card) }
+                        if (hits.isEmpty()) listOf(SearchResult(
+                            store = storeName, card = card, title = null,
+                            priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                        ))
+                        else hits.map { it.copy(store = storeName) }
+                    } catch (e: Exception) {
+                        listOf(SearchResult(
+                            store = storeName, card = card, title = null,
+                            priceZar = null, available = null, url = baseUrl,
+                            note = "[error: ${e.message?.take(60)}]",
+                        ))
+                    }
+                    onResults(rows)
+                }
+            }
+        }.awaitAll()
+    }
+    onStoreComplete(storeName)
+}
+
+// ── Top-level search orchestrator ──────────────────────────────────────────────
+
+suspend fun runSearch(
+    cards: List<String>,
+    stores: Map<String, String> = STORES,
+    onProgress: suspend (String) -> Unit,
+    onResults: suspend (List<SearchResult>) -> Unit,
+    onStoreComplete: suspend (String) -> Unit,
+    // Called (on an IO thread) when a store is rate-limited by Cloudflare. Receives the store name.
+    onStoreCfBlocked: ((String) -> Unit)? = null,
+    // Pass a long-lived BrowserBackedSearcher from the ViewModel so the browser session (Playwright
+    // on desktop, WebView on Android) survives between search clicks. If null, and no
+    // [createBrowserSearcher] factory is supplied either, browser-backed stores are skipped.
+    sharedBrowserSearcher: BrowserBackedSearcher? = null,
+    // Platform-specific factory for a temporary browser searcher when no shared instance is
+    // supplied (desktop passes `{ parallelism -> BrowserSearcher(parallelism) }`). Keeps this
+    // shared orchestrator free of any compile-time dependency on a concrete Playwright/WebView type.
+    createBrowserSearcher: ((parallelism: Int) -> BrowserBackedSearcher)? = null,
+) {
+    cfBlockedMutex.withLock { cfBlockedStores.clear() }
+
+    // Determine the base tier from total card-store pairs: < 300 = tier 1, >= 300 = tier 2.
+    // This base applies to every store; per-store DB history can only raise it, never lower it.
+    // BROWSER stores are excluded — they manage their own concurrency.
+    val totalSearches = cards.size * stores.size
+    val isLargeSearch = totalSearches >= 300
+    val baseTier = if (isLargeSearch) 2 else 1
+
+    val cfRules = loadActiveCfThrottleRules()
+    val hostProfiles: Map<String, ThrottleProfile> = stores.values.mapNotNull { baseUrl ->
+        val host     = extractHost(baseUrl) ?: return@mapNotNull null
+        val platform = KNOWN_PLATFORMS[baseUrl] ?: Platform.SHOPIFY
+        if (platform == Platform.BROWSER || platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE)
+            return@mapNotNull null
+        val rule = cfRules[baseUrl]
+        val tier = if (rule == null) baseTier
+                   else if (isLargeSearch) maxOf(baseTier, rule.tierLarge)
+                   else maxOf(baseTier, rule.tierSmall)
+        host to ThrottleProfile.forTierAndPlatform(tier, platform)
+    }.toMap()
+
+    val rateLimiter = PerHostRateLimiter(hostProfiles)
+    val client = buildHttpClient(rateLimiter)
+
+    val hasBrowserStores = stores.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
+    val localBrowserSearcher = if (hasBrowserStores && sharedBrowserSearcher == null) {
+        val parallelism = (cards.size / 3 + 1).coerceIn(1, 3)
+        createBrowserSearcher?.invoke(parallelism)
+    } else null
+    val effectiveBrowserSearcher = sharedBrowserSearcher ?: localBrowserSearcher
+
+    try {
+        coroutineScope {
+            stores.map { (name, base) ->
+                async(Dispatchers.IO) {
+                    checkStore(
+                        client, name, base, cards, effectiveBrowserSearcher,
+                        onProgress, onResults, onStoreComplete,
+                        onCfBlocked = { url, cardCount ->
+                            runCatching { recordCfThrottleBlock(url, cardCount, isLargeSearch) }
+                            onStoreCfBlocked?.invoke(name)
+                        },
+                    )
+                }
+            }.awaitAll()
+        }
+    } finally {
+        client.close()
+        localBrowserSearcher?.close()
+    }
+}

@@ -12,6 +12,14 @@ build/
 gradle-app.setting
 !gradle/wrapper/gradle-wrapper.jar   # wrapper jar IS tracked (needed to build)
 
+# ── Kotlin compiler incremental/error-report state ────────────
+.kotlin/
+
+# ── Android (per-machine SDK path, not portable across dev machines) ─────────
+local.properties
+.cxx/
+captures/
+
 # ── Recovery / backup folders (kept on disk, not in git) ──────
 /RECOVERY/
 
