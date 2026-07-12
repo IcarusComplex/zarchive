@@ -14,10 +14,10 @@ import java.net.URLDecoder
  * immediately after -- it is never a long-lived listening service.
  */
 actual class GoogleOAuthFlow actual constructor() {
-    actual val clientId: String = GoogleAuthConfig.DESKTOP_CLIENT_ID
-    actual val clientSecret: String? = GoogleAuthConfig.DESKTOP_CLIENT_SECRET
+    actual val refreshClientId: String = GoogleAuthConfig.DESKTOP_CLIENT_ID
+    actual val refreshClientSecret: String? = GoogleAuthConfig.DESKTOP_CLIENT_SECRET
 
-    actual suspend fun authenticate(scope: String): GoogleAuthResult? {
+    actual suspend fun authenticate(scope: String): GoogleTokens? {
         val server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         val redirectUri = "http://127.0.0.1:${server.address.port}/oauth2redirect"
         val pkce = generatePkce()
@@ -38,13 +38,14 @@ actual class GoogleOAuthFlow actual constructor() {
         }
         server.start()
 
-        return try {
-            PlatformActions().openUrl(buildGoogleAuthUrl(clientId, redirectUri, scope, pkce))
-            val code = withTimeoutOrNull(120_000) { codeDeferred.await() }
-            code?.let { GoogleAuthResult(it, pkce.verifier, redirectUri) }
+        val code = try {
+            PlatformActions().openUrl(buildGoogleAuthUrl(refreshClientId, redirectUri, scope, pkce))
+            withTimeoutOrNull(120_000) { codeDeferred.await() }
         } finally {
             server.stop(0)
         }
+        code ?: return null
+        return exchangeGoogleAuthCode(refreshClientId, refreshClientSecret, redirectUri, code, pkce.verifier)
     }
 }
 

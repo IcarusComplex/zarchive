@@ -84,7 +84,7 @@ kotlin {
                 implementation(libs.sqldelight.android.driver)
                 implementation(libs.androidx.webkit)
                 implementation(libs.androidx.splashscreen)
-                implementation(libs.androidx.browser)
+                implementation(libs.play.services.auth)
             }
         }
     }
@@ -244,6 +244,8 @@ val generateGoogleAuthConfig by tasks.registering {
         val desktopClientSecret = secretOrPlaceholder("google.desktop.clientSecret", "REPLACE_WITH_DESKTOP_CLIENT_SECRET")
         val androidClientIdRelease = secretOrPlaceholder("google.android.release.clientId", "REPLACE_WITH_RELEASE_ANDROID_CLIENT_ID.apps.googleusercontent.com")
         val androidClientIdDebug = secretOrPlaceholder("google.android.debug.clientId", "REPLACE_WITH_DEBUG_ANDROID_CLIENT_ID.apps.googleusercontent.com")
+        val webClientId = secretOrPlaceholder("google.web.clientId", "REPLACE_WITH_WEB_CLIENT_ID.apps.googleusercontent.com")
+        val webClientSecret = secretOrPlaceholder("google.web.clientSecret", "REPLACE_WITH_WEB_CLIENT_SECRET")
         val out = generatedKotlinDir.get().file("network/GoogleAuthConfig.kt").asFile
         out.parentFile.mkdirs()
         out.writeText("""
@@ -256,6 +258,12 @@ val generateGoogleAuthConfig by tasks.registering {
                 const val DESKTOP_CLIENT_SECRET = "$desktopClientSecret"
                 const val ANDROID_CLIENT_ID_RELEASE = "$androidClientIdRelease"
                 const val ANDROID_CLIENT_ID_DEBUG = "$androidClientIdDebug"
+
+                // "Web application" client used only as the serverClientId for Android's
+                // Authorization API requestOfflineAccess() -- never used for a redirect, no
+                // hosting/domain involved. The app redeems the resulting serverAuthCode itself.
+                const val WEB_CLIENT_ID = "$webClientId"
+                const val WEB_CLIENT_SECRET = "$webClientSecret"
 
                 // drive.file is the real access we need; userinfo.email is only so the settings UI can
                 // show "Connected as you@gmail.com" -- both are Google "non-sensitive" scopes (no

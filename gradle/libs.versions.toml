@@ -14,7 +14,7 @@ junitJupiter = "5.10.2"
 sqldelight = "2.0.2"
 androidxWebkit = "1.12.1"
 androidxSplashscreen = "1.0.1"
-androidxBrowser = "1.8.0"
+playServicesAuth = "21.2.0"
 
 [libraries]
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
@@ -34,7 +34,7 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 sqldelight-android-driver = { module = "app.cash.sqldelight:android-driver", version.ref = "sqldelight" }
 androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "androidxWebkit" }
 androidx-splashscreen = { module = "androidx.core:core-splashscreen", version.ref = "androidxSplashscreen" }
-androidx-browser = { module = "androidx.browser:browser", version.ref = "androidxBrowser" }
+play-services-auth = { module = "com.google.android.gms:play-services-auth", version.ref = "playServicesAuth" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

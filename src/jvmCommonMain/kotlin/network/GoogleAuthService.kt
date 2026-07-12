@@ -74,6 +74,33 @@ suspend fun exchangeGoogleAuthCode(
     }.also { client.close() }.getOrNull()
 }
 
+/**
+ * Exchanges a Google Play Services "server auth code" (from Android's Authorization API
+ * requestOfflineAccess()) for an access + refresh token pair. Unlike [exchangeGoogleAuthCode],
+ * there's no redirect_uri or PKCE verifier involved -- Play Services already verified the app's
+ * identity (package name + signing cert) before issuing the code, so this is a plain code-for-
+ * tokens swap against the Web client that was passed as the serverClientId.
+ */
+suspend fun exchangeGoogleServerAuthCode(
+    clientId: String,
+    clientSecret: String,
+    serverAuthCode: String,
+): GoogleTokens? {
+    val client = HttpClient(OkHttp)
+    return runCatching {
+        val resp = client.submitForm(
+            url = "https://oauth2.googleapis.com/token",
+            formParameters = Parameters.build {
+                append("code", serverAuthCode)
+                append("client_id", clientId)
+                append("client_secret", clientSecret)
+                append("grant_type", "authorization_code")
+            },
+        )
+        parseTokenResponse(resp)
+    }.also { client.close() }.getOrNull()
+}
+
 /** Exchanges a stored refresh token for a fresh access token (refresh_token is not re-issued). */
 suspend fun refreshGoogleAccessToken(
     clientId: String,

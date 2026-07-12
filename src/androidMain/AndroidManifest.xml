@@ -29,23 +29,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Catches the Google OAuth redirect from Chrome Custom Tabs. Scheme is the app's own
-             applicationId (AGP substitutes ${applicationId} automatically, including the ".debug"
-             suffix on debug builds), so debug and release each get a distinct, non-colliding
-             redirect URI and therefore need their own Google Cloud "Android" OAuth client
-             registration (keyed by package name + signing SHA-1). -->
-        <activity
-            android:name="androidapp.OAuthRedirectActivity"
-            android:exported="true"
-            android:theme="@android:style/Theme.NoDisplay">
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="${applicationId}" android:host="oauth2redirect" />
-            </intent-filter>
-        </activity>
-
         <!-- Exposes the downloaded update APK (in cacheDir) to Android's package installer via a
              content:// URI. Installers on API 24+ cannot be handed a raw file:// URI. -->
         <provider

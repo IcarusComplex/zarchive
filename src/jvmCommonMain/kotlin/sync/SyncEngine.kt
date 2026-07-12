@@ -11,7 +11,6 @@ import network.GoogleAuthConfig
 import network.GoogleOAuthFlow
 import network.createDriveFile
 import network.downloadDriveFile
-import network.exchangeGoogleAuthCode
 import network.fetchGoogleAccountEmail
 import network.findDriveFile
 import network.findOrCreateDriveFolder
@@ -45,15 +44,8 @@ class SyncEngine(
 
     /** Runs the interactive consent flow and stores the resulting refresh token. */
     suspend fun connect(): Result<Unit> {
-        val authResult = oauthFlow.authenticate(GoogleAuthConfig.SCOPE)
-            ?: return Result.failure(Exception("Sign-in was cancelled"))
-        val tokens = exchangeGoogleAuthCode(
-            clientId = oauthFlow.clientId,
-            clientSecret = oauthFlow.clientSecret,
-            redirectUri = authResult.redirectUri,
-            code = authResult.code,
-            codeVerifier = authResult.codeVerifier,
-        ) ?: return Result.failure(Exception("Token exchange failed"))
+        val tokens = oauthFlow.authenticate(GoogleAuthConfig.SCOPE)
+            ?: return Result.failure(Exception("Sign-in was cancelled or the token exchange failed"))
         val refreshToken = tokens.refreshToken
             ?: return Result.failure(Exception(
                 "Google didn't return a refresh token. If you've connected ZArchive before, " +
@@ -76,7 +68,7 @@ class SyncEngine(
     suspend fun syncNow(): Result<Unit> {
         val refreshToken = SettingsStore.getSetting(KEY_REFRESH_TOKEN, "").ifBlank { null }
             ?: return Result.failure(Exception("Not connected"))
-        val tokens = refreshGoogleAccessToken(oauthFlow.clientId, oauthFlow.clientSecret, refreshToken)
+        val tokens = refreshGoogleAccessToken(oauthFlow.refreshClientId, oauthFlow.refreshClientSecret, refreshToken)
             ?: return Result.failure(Exception("Couldn't refresh Google access -- try reconnecting"))
         val accessToken = tokens.accessToken
 

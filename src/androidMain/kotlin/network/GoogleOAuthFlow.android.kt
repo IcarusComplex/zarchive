@@ -1,47 +1,73 @@
 package network
 
-import android.content.Intent
-import android.net.Uri
 import androidapp.ZArchiveApplication
-import androidx.browser.customtabs.CustomTabsIntent
-import co.za.zarchive.BuildConfig
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
+import com.google.android.gms.auth.api.identity.AuthorizationRequest
+import com.google.android.gms.auth.api.identity.AuthorizationResult
+import com.google.android.gms.auth.api.identity.Identity
+import com.google.android.gms.common.api.Scope
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Android OAuth flow: Chrome Custom Tabs (not a WebView -- Google disallows embedded-WebView OAuth)
- * to the consent screen, redirected back into the app via a custom URI scheme caught by the
- * dedicated `OAuthRedirectActivity` (see AndroidManifest.xml). [PendingOAuthRedirect] is the bridge
- * between that separate Activity and this suspended call.
+ * Android OAuth flow via Google Play Services' Authorization API -- NOT a Custom Tabs + custom-
+ * URI-scheme redirect (the original design), because Google fully blocks custom-scheme redirects
+ * for Android OAuth clients ("Error 400: invalid_request -- Custom URI scheme is not enabled for
+ * your Android client", found against a real device; per Google's own docs this is a hard policy,
+ * not a togglable setting: "Custom URI schemes are no longer supported on Android and Chrome apps
+ * due to the risk of app impersonation"). This is Google's actually-supported native-app path.
+ *
+ * [refreshClientId]/[refreshClientSecret] are the "Web application" client passed as
+ * requestOfflineAccess()'s serverClientId -- it's never used for a redirect (no hosting/domain
+ * involved), only as an identifier so Play Services knows which client is allowed to redeem the
+ * resulting serverAuthCode. The app redeems that code itself, directly against Google's token
+ * endpoint, since there's no backend server.
  */
 actual class GoogleOAuthFlow actual constructor() {
-    actual val clientId: String =
-        if (BuildConfig.DEBUG) GoogleAuthConfig.ANDROID_CLIENT_ID_DEBUG else GoogleAuthConfig.ANDROID_CLIENT_ID_RELEASE
-    actual val clientSecret: String? = null
+    actual val refreshClientId: String = GoogleAuthConfig.WEB_CLIENT_ID
+    actual val refreshClientSecret: String? = GoogleAuthConfig.WEB_CLIENT_SECRET
 
-    actual suspend fun authenticate(scope: String): GoogleAuthResult? {
-        // Matches the intent-filter's android:scheme="${applicationId}" android:host="oauth2redirect"
-        // -- debug (".debug" application-id suffix) and release therefore never collide.
-        val redirectUri = "${BuildConfig.APPLICATION_ID}://oauth2redirect"
-        val pkce = generatePkce()
-        val authUrl = buildGoogleAuthUrl(clientId, redirectUri, scope, pkce)
+    actual suspend fun authenticate(scope: String): GoogleTokens? {
+        val context = ZArchiveApplication.appContext
+        val scopes = scope.split(" ").filter { it.isNotBlank() }.map { Scope(it) }
+        val request = AuthorizationRequest.builder()
+            .setRequestedScopes(scopes)
+            .requestOfflineAccess(refreshClientId, true)
+            .build()
+        val authClient = Identity.getAuthorizationClient(context)
 
-        val deferred = CompletableDeferred<Uri?>()
-        PendingOAuthRedirect.deferred = deferred
-        runCatching {
-            val customTabsIntent = CustomTabsIntent.Builder().build()
-            customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            customTabsIntent.launchUrl(ZArchiveApplication.appContext, Uri.parse(authUrl))
+        val initial: AuthorizationResult = suspendCancellableCoroutine<AuthorizationResult?> { cont ->
+            authClient.authorize(request)
+                .addOnSuccessListener { result -> cont.resumeWith(Result.success(result)) }
+                .addOnFailureListener { cont.resumeWith(Result.success(null)) }
+        } ?: return null
+
+        // Already-granted case (e.g. re-authenticating after a token was cleared but consent was
+        // never revoked) skips the UI entirely; otherwise launch the consent screen Play Services
+        // handed back a PendingIntent for, via the launcher MainActivity registered.
+        val authResult: AuthorizationResult = if (initial.hasResolution()) {
+            val pendingIntent = initial.pendingIntent ?: return null
+            val launcher = AndroidAuthorizationBridge.launcher ?: return null
+            val deferred = CompletableDeferred<ActivityResult>()
+            AndroidAuthorizationBridge.pendingDeferred = deferred
+            launcher.launch(IntentSenderRequest.Builder(pendingIntent.intentSender).build())
+            val activityResult: ActivityResult = withTimeoutOrNull(180_000) { deferred.await() } ?: return null
+            AndroidAuthorizationBridge.pendingDeferred = null
+            runCatching { authClient.getAuthorizationResultFromIntent(activityResult.data) }.getOrNull() ?: return null
+        } else {
+            initial
         }
 
-        val resultUri = withTimeoutOrNull(180_000) { deferred.await() }
-        PendingOAuthRedirect.deferred = null
-        val code = resultUri?.getQueryParameter("code") ?: return null
-        return GoogleAuthResult(code, pkce.verifier, redirectUri)
+        val serverAuthCode = authResult.serverAuthCode ?: return null
+        return exchangeGoogleServerAuthCode(refreshClientId, requireNotNull(refreshClientSecret), serverAuthCode)
     }
 }
 
-/** Set for the duration of one in-flight [GoogleOAuthFlow.authenticate] call; null otherwise. */
-object PendingOAuthRedirect {
-    var deferred: CompletableDeferred<Uri?>? = null
+/** Bridges MainActivity's registered ActivityResultLauncher to this suspended flow. */
+object AndroidAuthorizationBridge {
+    var launcher: ActivityResultLauncher<IntentSenderRequest>? = null
+    var pendingDeferred: CompletableDeferred<ActivityResult>? = null
 }
