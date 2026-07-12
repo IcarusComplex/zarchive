@@ -272,6 +272,12 @@ fun WindowScope.App(
             if (vm.showSearchSummary) {
                 SearchSummaryDialog(vm)
             }
+            if (vm.showFirstListSyncPrompt) {
+                FirstListSyncPromptDialog(
+                    onConnect = { vm.acceptFirstListSyncPrompt() },
+                    onDismiss = { vm.dismissFirstListSyncPrompt() },
+                )
+            }
         }
     }
 }
@@ -291,6 +297,15 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, windowState: WindowState, 
                         GhostIconButton(Icons.Default.BugReport, "Debug", tint = OnSurfaceVariant, iconSize = 14.dp) {
                             debugDir.mkdirs(); Desktop.getDesktop().open(debugDir)
                         }
+                    }
+                    // Low-friction, always-visible entry point to (re)connect/sync -- distinct from
+                    // the same actions buried in the Settings menu. Hidden once actually synced;
+                    // the SyncStatusFooter already covers that "just synced" feedback.
+                    if (vm.syncStatus != SyncStatus.SYNCED) {
+                        GhostIconButton(Icons.Default.CloudSync, "Sync now", tint = OnSurfaceVariant, iconSize = 14.dp) {
+                            if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
+                        }
+                        Spacer(Modifier.width(2.dp))
                     }
                     SettingsMenu(vm)
                     Spacer(Modifier.width(2.dp))
@@ -1564,6 +1579,38 @@ private fun AddToSearchDialog(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Cancel", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun FirstListSyncPromptDialog(onConnect: () -> Unit, onDismiss: () -> Unit) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(420.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Sync across devices?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                Text(
+                    "Connect Google Drive to keep your saved lists and results in sync between this " +
+                        "computer and your phone. You can also do this later from Settings.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Spacer(Modifier.height(2.dp))
+                Button(
+                    onClick = onConnect,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                ) { Text("Connect Google Drive", fontSize = 12.sp) }
+                TextButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { Text("Not now", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
             }
         }
     }

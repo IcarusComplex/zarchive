@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Archive
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.FormatListBulleted
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.ShoppingCart
@@ -144,6 +145,16 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                         }
                         IconButton(onClick = { showResultsDialog = true }) {
                             Icon(Icons.Default.Archive, "Saved results", tint = OnSurfaceVariant)
+                        }
+                        // Low-friction, always-visible entry point to (re)connect/sync -- distinct
+                        // from the same actions buried in the Settings menu. Hidden once actually
+                        // synced; the SyncStatusFooter already covers that "just synced" feedback.
+                        if (vm.syncStatus != SyncStatus.SYNCED) {
+                            IconButton(onClick = {
+                                if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
+                            }) {
+                                Icon(Icons.Default.CloudSync, "Sync now", tint = OnSurfaceVariant)
+                            }
                         }
                         SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
                     },
@@ -305,6 +316,12 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
         }
         if (vm.showSearchSummary) {
             SearchSummaryDialog(vm)
+        }
+        if (vm.showFirstListSyncPrompt) {
+            FirstListSyncPromptDialog(
+                onConnect = { vm.acceptFirstListSyncPrompt() },
+                onDismiss = { vm.dismissFirstListSyncPrompt() },
+            )
         }
     }
 }

@@ -469,6 +469,28 @@ class SearchViewModel(
         }
     }
 
+    // One-time nudge shown the first time ever a user saves a list, if they haven't already
+    // connected Google Drive -- guarded by a persisted flag (SettingsStore) so it never shows
+    // again after that, regardless of whether they accept or dismiss it.
+    var showFirstListSyncPrompt by mutableStateOf(false)
+        private set
+
+    private fun maybePromptFirstListSync(wasFirstList: Boolean) {
+        if (!wasFirstList || syncEngine.isConnected) return
+        if (SettingsStore.getSettingBoolean("sync.firstListPromptShown", false)) return
+        SettingsStore.setSettingBoolean("sync.firstListPromptShown", true)
+        showFirstListSyncPrompt = true
+    }
+
+    fun dismissFirstListSyncPrompt() {
+        showFirstListSyncPrompt = false
+    }
+
+    fun acceptFirstListSyncPrompt() {
+        showFirstListSyncPrompt = false
+        connectGoogleDrive {}
+    }
+
     // ── Saved search lists ─────────────────────────────────────────────────────
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
 
@@ -592,9 +614,11 @@ class SearchViewModel(
     fun saveSearchList(name: String) {
         val cards = query.lines().map { it.trim() }.filter { it.isNotBlank() }
         if (cards.isEmpty()) return
+        val wasFirstList = savedLists.value.isEmpty()
         lastLoadedListName = name
         scope.launch(Dispatchers.IO) { searchListRepo.create(name, cards) }
         markDirtyAndScheduleSync()
+        maybePromptFirstListSync(wasFirstList)
     }
 
     // Overwrites an existing list (same id) instead of creating a duplicate — used when the

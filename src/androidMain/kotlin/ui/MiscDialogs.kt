@@ -328,6 +328,29 @@ fun AddToSearchDialog(
 }
 
 @Composable
+fun FirstListSyncPromptDialog(onConnect: () -> Unit, onDismiss: () -> Unit) {
+    ModalScrim(onDismiss = onDismiss) {
+        DialogSurface {
+            Text("Sync across devices?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+            Text(
+                "Connect Google Drive to keep your saved lists and results in sync between your " +
+                    "phone and other devices. You can also do this later from Settings.",
+                fontSize = 13.sp, color = OnSurface,
+            )
+            Button(
+                onClick = onConnect,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(4.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+            ) { Text("Connect Google Drive", fontSize = 12.sp) }
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                Text("Not now", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+            }
+        }
+    }
+}
+
+@Composable
 fun AllAlreadySearchedDialog(
     count: Int,
     unavailableCount: Int,
