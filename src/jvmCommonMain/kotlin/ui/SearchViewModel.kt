@@ -10,6 +10,8 @@ import data.luckshackSearchUrl
 import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.debounce
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import network.BrowserBackedSearcher
@@ -313,6 +315,78 @@ class SearchViewModel(
 
     init {
         if (monitorEnabledState) startMonitorLoop()
+
+        // Android can kill this whole process while the app is merely backgrounded (Samsung's
+        // battery manager is particularly aggressive about it) -- unlike a config change
+        // (Phase-13's configChanges fix), that's not something any Activity-lifecycle flag can
+        // prevent, so the only real fix is persisting the in-progress session and restoring it on
+        // the next cold launch. Reactive + debounced (not "only after a full search completes") so
+        // a kill mid-search still leaves a recoverable snapshot. Desktop writes this too (harmless,
+        // cheap) but never reads it back -- its process only ever ends via an explicit user quit.
+        scope.launch {
+            sessionSnapshotFlow().collect { (q, cards, res) -> persistSession(q, cards, res) }
+        }
+    }
+
+    @OptIn(kotlinx.coroutines.FlowPreview::class)
+    private fun sessionSnapshotFlow() =
+        snapshotFlow { Triple(query, searchedCards.toList(), results.toList()) }.debounce(2_000)
+
+    private val sessionJson = Json { ignoreUnknownKeys = true }
+
+    @Serializable
+    private data class SessionSnapshot(val query: String, val searchedCards: List<String>, val results: List<SearchResult>)
+
+    private fun persistSession(q: String, cards: List<String>, res: List<SearchResult>) {
+        SettingsStore.setSetting("session.snapshot", sessionJson.encodeToString(SessionSnapshot(q, cards, res)))
+    }
+
+    /**
+     * Restores the last in-progress search after this process was killed and relaunched from
+     * scratch (Android only -- see the [init] block comment). A no-op if there's nothing to
+     * restore or a search is already in flight (e.g. called twice, or a hot launch).
+     */
+    fun restoreSessionIfAny() {
+        if (query.isNotEmpty() || results.isNotEmpty()) return
+        val raw = SettingsStore.getSetting("session.snapshot", "").ifBlank { return }
+        val snapshot = runCatching { sessionJson.decodeFromString<SessionSnapshot>(raw) }.getOrNull() ?: return
+        if (snapshot.results.isEmpty() && snapshot.searchedCards.isEmpty()) return
+
+        query = snapshot.query
+        searchedCards = snapshot.searchedCards
+        results.addAll(snapshot.results)
+        statusText = "Restored — ${snapshot.results.count { it.title != null }} listings"
+
+        // Image paths aren't persisted (they're deterministic disk-cache lookups, cheap to redo)
+        // -- mirrors loadSavedResult's per-store-batched resolution.
+        scope.launch {
+            val imageService = CardImageService()
+            try {
+                val seenTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+                val cardNamesJob = scope.launch(Dispatchers.IO) {
+                    val keys = snapshot.searchedCards.filter { seenTitles.add(it) }
+                    if (keys.isEmpty()) return@launch
+                    val resolved = imageService.resolveImages(keys)
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
+                }
+                val storeJobs = snapshot.results
+                    .filter { it.title != null }
+                    .groupBy { it.store }
+                    .map { (_, storeResults) ->
+                        scope.launch(Dispatchers.IO) {
+                            val hints = storeResults
+                                .mapNotNull { r -> r.title?.takeIf { seenTitles.add(it) }?.let { it to r.setHint } }
+                                .toMap()
+                            if (hints.isEmpty()) return@launch
+                            val resolved = imageService.resolveImages(hints)
+                            if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
+                        }
+                    }
+                (storeJobs + cardNamesJob).forEach { it.join() }
+            } finally {
+                imageService.close()
+            }
+        }
     }
 
     // ── Google Drive sync ────────────────────────────────────────────────────────

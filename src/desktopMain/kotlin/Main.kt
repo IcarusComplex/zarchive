@@ -83,7 +83,7 @@ fun main() {
         // Fill the AWT window background with the app surface colour so the brief
         // gap between a window move and the next Compose repaint is invisible.
         SideEffect { window.background = java.awt.Color(0x0B, 0x13, 0x26) }
-        App(::exitApplication, pendingCrash)
+        App(windowState, ::exitApplication, pendingCrash)
     }
     }
 }

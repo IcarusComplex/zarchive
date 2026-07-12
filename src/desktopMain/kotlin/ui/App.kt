@@ -54,6 +54,8 @@ import androidx.compose.foundation.window.WindowDraggableArea
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.input.pointer.*
 import androidx.compose.ui.window.WindowScope
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
@@ -126,6 +128,7 @@ private fun formatZar(v: Double): String {
 
 @Composable
 fun WindowScope.App(
+    windowState: WindowState,
     onCloseRequest: () -> Unit = {},
     pendingCrash: String? = null,
 ) {
@@ -174,7 +177,7 @@ fun WindowScope.App(
         Box(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxSize().background(Surface).border(1.dp, OutlineVariant)) {
                 // Thin draggable title bar — OS controls only
-                TitleBar(vm, onCloseRequest)
+                TitleBar(vm, windowState, onCloseRequest)
                 HorizontalDivider(color = OutlineVariant)
                 Row(Modifier.weight(1f).fillMaxWidth()) {
                     // Left search panel
@@ -274,7 +277,7 @@ fun WindowScope.App(
 }
 
 @Composable
-private fun WindowScope.TitleBar(vm: SearchViewModel, onCloseRequest: () -> Unit) {
+private fun WindowScope.TitleBar(vm: SearchViewModel, windowState: WindowState, onCloseRequest: () -> Unit) {
     WindowDraggableArea {
         Surface(color = HeaderBg, modifier = Modifier.fillMaxWidth().height(32.dp)) {
             Box(Modifier.fillMaxSize()) {
@@ -293,15 +296,16 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, onCloseRequest: () -> Unit
                     Spacer(Modifier.width(2.dp))
                     Box(Modifier.width(1.dp).height(12.dp).background(OutlineVariant.copy(alpha = 0.5f)))
                     Spacer(Modifier.width(2.dp))
+                    // Go through Compose's own WindowState (not the raw AWT Frame's extendedState)
+                    // so Compose's window-state tracking never disagrees with the OS window --
+                    // keeps minimize/maximize/restore from being able to disturb the composition
+                    // (and therefore vm's in-memory search/results state) in any way.
                     GhostIconButton(Icons.Default.Remove, "Minimize", tint = OnSurfaceVariant, iconSize = 14.dp) {
-                        runCatching { (window as? java.awt.Frame)?.extendedState = java.awt.Frame.ICONIFIED }
+                        windowState.isMinimized = true
                     }
                     GhostIconButton(Icons.Default.Fullscreen, "Maximize / Restore", tint = OnSurfaceVariant, iconSize = 14.dp) {
-                        runCatching {
-                            val f = window as? java.awt.Frame ?: return@GhostIconButton
-                            f.extendedState = if (f.extendedState and java.awt.Frame.MAXIMIZED_BOTH != 0)
-                                java.awt.Frame.NORMAL else java.awt.Frame.MAXIMIZED_BOTH
-                        }
+                        windowState.placement = if (windowState.placement == WindowPlacement.Maximized)
+                            WindowPlacement.Floating else WindowPlacement.Maximized
                     }
                     GhostIconButton(Icons.Default.Close, "Close", tint = ErrorColor, iconSize = 14.dp) {
                         onCloseRequest()

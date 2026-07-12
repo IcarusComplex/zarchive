@@ -91,6 +91,7 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     val resultsScrollState = rememberScrollState()
     var scrollRootY by remember { mutableStateOf(0) }
 
+    LaunchedEffect(Unit) { vm.restoreSessionIfAny() }
     LaunchedEffect(Unit) { vm.checkForUpdates() }
     LaunchedEffect(Unit) { vm.syncOnLaunch() }
     LaunchedEffect(vm.updateCheckState) {
