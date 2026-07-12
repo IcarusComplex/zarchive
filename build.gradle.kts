@@ -1,9 +1,12 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "1.9.23"
-    id("org.jetbrains.compose") version "1.6.11"
-    kotlin("plugin.serialization") version "1.9.23"
+    alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.jetbrains.compose)
+    alias(libs.plugins.kotlin.compose.compiler)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 group = "co.za.mtg"
@@ -15,28 +18,89 @@ repositories {
     maven("https://maven.pkg.jetbrains.space/public/p/compose/dev")
 }
 
-dependencies {
-    implementation(compose.desktop.currentOs)
-    implementation(compose.material3)
-    implementation(compose.materialIconsExtended)
-    implementation("io.ktor:ktor-client-core:2.3.10")
-    implementation("io.ktor:ktor-client-cio:2.3.10")
-    implementation("org.jsoup:jsoup:1.17.2")
-    implementation("com.microsoft.playwright:playwright:1.52.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-swing:1.8.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+kotlin {
+    jvm("desktop")
+    androidTarget {
+        compilerOptions {
+            jvmTarget.set(JvmTarget.JVM_17)
+        }
+    }
 
-    // Local database — Exposed DSL over H2 file-mode embedded DB in ~/.zarchive/
-    implementation("org.jetbrains.exposed:exposed-core:0.50.1")
-    implementation("org.jetbrains.exposed:exposed-jdbc:0.50.1")
-    implementation("com.h2database:h2:2.2.224")
-
-    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    sourceSets {
+        val commonMain by getting {
+            dependencies {
+                implementation(compose.runtime)
+                implementation(compose.foundation)
+                implementation(compose.material3)
+                implementation(compose.materialIconsExtended)
+                implementation(libs.kotlinx.serialization.json)
+            }
+        }
+        val commonTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+            }
+        }
+        // Intermediate JVM-family source set shared by desktop(jvm) + android targets, for
+        // dependencies (Jsoup) that are plain JVM jars, not published as KMP artifacts, and so
+        // cannot be depended on from commonMain directly. Also hosts the networking/parsing/cache
+        // stack itself (Searchers/CardImageService/ScryfallSetIndex/GitHubService/SearchEngine),
+        // per the pattern validated in the Phase 0 spike (spikes/kmp-poc).
+        val jvmCommonMain by creating {
+            dependsOn(commonMain)
+            dependencies {
+                implementation(libs.jsoup)
+                implementation(libs.ktor.client.core)
+                implementation(libs.ktor.client.okhttp)
+                implementation(libs.kotlinx.coroutines.core)
+            }
+        }
+        val desktopMain by getting {
+            dependsOn(jvmCommonMain)
+            dependencies {
+                implementation(compose.desktop.currentOs)
+                implementation(libs.playwright)
+                implementation(libs.kotlinx.coroutines.swing)
+                implementation(libs.exposed.core)
+                implementation(libs.exposed.jdbc)
+                implementation(libs.h2)
+            }
+        }
+        val desktopTest by getting {
+            dependencies {
+                implementation(kotlin("test-junit5"))
+                implementation(libs.junit.jupiter)
+                runtimeOnly(libs.junit.platform.launcher)
+            }
+        }
+        val androidMain by getting {
+            dependsOn(jvmCommonMain)
+            dependencies {
+                implementation(libs.androidx.activity.compose)
+            }
+        }
+    }
 }
 
-tasks.test {
+android {
+    namespace = "co.za.zarchive"
+    compileSdk = 36
+
+    defaultConfig {
+        applicationId = "co.za.zarchive"
+        minSdk = 26
+        targetSdk = 36
+        versionCode = 1
+        versionName = version.toString()
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+tasks.withType<Test> {
     useJUnitPlatform()
 }
 
@@ -83,7 +147,8 @@ compose.desktop {
     }
 }
 
-// Generates BuildInfo.kt with the app version baked in at compile time.
+// Generates BuildInfo.kt with the app version baked in at compile time. Lives in commonMain's
+// generated sources so both the desktop and Android apps report the same BuildInfo.VERSION.
 val generatedKotlinDir = layout.buildDirectory.dir("generated/kotlin")
 
 val generateBuildInfo by tasks.registering {
@@ -96,12 +161,14 @@ val generateBuildInfo by tasks.registering {
     }
 }
 
-tasks.named("compileKotlin") { dependsOn(generateBuildInfo) }
+kotlin.sourceSets.getByName("commonMain").kotlin.srcDir(generatedKotlinDir)
 
-sourceSets {
-    main {
-        kotlin.srcDir(generatedKotlinDir)
-    }
+// Matches every Kotlin compile task across every target/variant (compileKotlinDesktop,
+// compileDebugKotlinAndroid, compileReleaseKotlinAndroid, etc.) by task type rather than name —
+// a name-prefix match ("compileKotlin*") silently misses Android's "compile<Variant>Kotlin<Target>"
+// naming and only surfaces as a Gradle task-validation error under certain build orderings.
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
+    dependsOn(generateBuildInfo)
 }
 
 // Inject debug flag only during `gradlew run` — never present in packaged distributions
