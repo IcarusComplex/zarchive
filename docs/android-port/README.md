@@ -42,6 +42,11 @@ these have a free ride to Android — each needed a deliberate decision.
    fetch-interception trick (not a server-side proxy) — the WebView runs the site's own JS once to
    mint a session, intercepts the resulting API response, then reuses the session for paginated
    `evaluateJavascript` calls, mirroring Playwright's `waitForResponse`/`page.evaluate` today.
+6. **Tab navigation**: the 3 top-level sections (Search Results / Order Lists / Search Monitors) are
+   a bottom `NavigationBar` on Android, not the top folder-tab row Phase 6 originally shipped —
+   bottom nav is the native Android/Material3 convention for top-level destinations and sits at
+   comfortable thumb-reach on a phone. **Desktop is untouched**: its `FolderTabs` stays exactly as
+   built (top tabs below the window chrome). This changes only `androidMain`'s `AndroidApp.kt`.
 
 ## Environment (confirmed on this machine)
 
@@ -72,7 +77,7 @@ reachable from `desktopMain`:
 | 5 | [phase-5-android-database.md](phase-5-android-database.md) | **Done** — real persistence verified across a full process kill on Pixel_9 |
 | 6 | [phase-6-app-shell-search-input.md](phase-6-app-shell-search-input.md) | **Done** — real multi-store search + Stop/cancel verified live on Pixel_9 |
 | 7 | [phase-7-results-card-art.md](phase-7-results-card-art.md) | **Done** — real multi-store results + tap-to-toggle art verified live on Pixel_9; found/fixed an Android cleartext-HTTP bug |
-| 8 | [phase-8-saved-lists-results.md](phase-8-saved-lists-results.md) | Not started |
+| 8 | [phase-8-saved-lists-results.md](phase-8-saved-lists-results.md) | **Done** — saved lists/results dialogs verified live; bottom nav replaces top folder-tabs (Android only) |
 | 9 | [phase-9-settings-dialogs.md](phase-9-settings-dialogs.md) | Not started |
 | 10 | [phase-10-order-lists.md](phase-10-order-lists.md) | Not started |
 | 11 | [phase-11-warren-webview.md](phase-11-warren-webview.md) | Not started |

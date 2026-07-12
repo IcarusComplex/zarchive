@@ -98,3 +98,11 @@ cancelled."
   entire `jvmCommonMain` networking/parsing stack — not just the new UI — genuinely executes
   correctly on Android, since this is the first phase exercising that code path from real Android UI
   interaction rather than a throwaway Logcat hook.
+- **Superseded during Phase 8: top folder-tabs replaced with a bottom `NavigationBar`** (explicit user
+  decision, README's decision #6). `FolderTabs` as described above/verified in this phase's screenshots
+  was the initial Android implementation; it was changed after Phase 8 landed to the native Android/
+  Material3 bottom-nav convention (comfortable thumb reach) instead of a top tab row imitating
+  desktop's `FolderTabs`. Desktop is completely unaffected — its `FolderTabs`/`App()` stayed exactly as
+  built. See Phase 8's implementation notes for the actual change; this note exists so a reader of
+  this phase's (accurate, at-the-time) screenshots and description isn't confused when `AndroidApp.kt`
+  no longer matches them.

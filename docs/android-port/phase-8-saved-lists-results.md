@@ -1,6 +1,15 @@
 # Phase 8 — Saved lists and saved results management
 
-Status: Not started
+Status: **Done.** Verified on the Pixel_9 emulator with a fresh install (`pm clear`): opened the
+Saved Lists dialog from its new `TopAppBar` icon, confirmed the real seed list ("Aragorn & Arwen EDH
+(Example)", 36 cards) renders correctly with edit/delete icons, tapped it to load, confirmed the
+dialog closed and the Search Results tab's query field was populated with all 36 card names. The
+Saved Results dialog (archive icon) opens correctly (empty state, since no result was saved during
+this run). Full combined regression gate (`createDistributable` + `desktopTest` + `assembleDebug`)
+passes together; desktop `.exe` launched standalone to confirm zero regression. Mid-phase, the user
+requested moving Android's top-level tab navigation from a top folder-tab row to a bottom
+`NavigationBar` (README decision #6) — implemented and verified alongside this phase's own scope;
+see the implementation notes below and Phase 6's updated notes.
 Depends on: Phase 5 (real Android DB), Phase 7 (results rendering)
 Blocks: none downstream (leaf feature phase)
 
@@ -45,5 +54,35 @@ if ever run side-by-side).
 
 - `src/main/kotlin/ui/App.kt` (reference only — `SavedListsPanel`, `EditListDialog`,
   `SavedListRow`, `SavedResultRow`, lines noted above)
-- `src/androidMain/kotlin/ui/SavedListsScreen.kt` (new)
-- `src/androidMain/kotlin/ui/SavedResultsScreen.kt` (new)
+- `src/androidMain/kotlin/ui/SavedListsScreen.kt` (new — `SavedListsDialog`)
+- `src/androidMain/kotlin/ui/SavedResultsScreen.kt` (new — `SavedResultsDialog`)
+- `src/androidMain/kotlin/ui/SavedRowsAndDialogs.kt` (new — `SavedListRow`, `SavedResultRow`,
+  `SaveNameDialog`, `ConfirmDialog`, `EditListDialog`, shared by both screens above)
+- `src/androidMain/kotlin/ui/AndroidApp.kt` (two new `TopAppBar` action icons open the dialogs; the
+  top `FolderTabs` row was replaced with a bottom `NavigationBar` — see notes below)
+
+## Implementation notes (deviations/decisions made during execution)
+
+- **No permanent sidebar panel — full-screen `Dialog`s reached from `TopAppBar` icons instead.**
+  Desktop's `SavedListsPanel` is a permanent panel pinned inside the 240dp sidebar (3 rows visible,
+  "+N more" opens a modal for the rest). A phone has no room for a second permanent panel alongside
+  the search input, so both Lists and Results became a single full-screen `Dialog`
+  (`DialogProperties(usePlatformDefaultWidth = false)`) always showing the complete list, opened via
+  a bookmark/archive icon in the `TopAppBar`'s `actions`. This matches the phase plan's own suggestion
+  ("probably a full-screen dialog to mirror desktop's modal-over-content feel").
+- **Hover-reveals-delete/edit-icon pattern dropped — icons are always visible.** Desktop only shows
+  the delete/edit icons on row hover (`SavedListRow`/`SavedResultRow`); touch has no hover state, so
+  both icons render at all times on Android's row.
+- **`SaveNameDialog`/`ConfirmDialog` factored into a shared `SavedRowsAndDialogs.kt`** rather than
+  duplicated once per screen (desktop's `App.kt` has near-identical `AlertDialog` blocks repeated for
+  lists and for results) — same save-name-with-overwrite-confirmation shape serves both.
+- **Bottom `NavigationBar` replaces the top `FolderTabs` row (mid-phase user request, not originally
+  planned for Phase 8).** The 3 top-level sections (Search Results / Order Lists / Search Monitors)
+  now live in a `Scaffold.bottomBar` `NavigationBar` with `NavigationBarItem`s, matching native
+  Android/Material3 top-level-destination convention and comfortable thumb reach — not a port of
+  desktop's `FolderTabs`, which stays completely untouched (`README.md` decision #6). This removed
+  `AndroidApp.kt`'s private `FolderTabs` composable and the `Row` + `HorizontalDivider` that hosted it
+  entirely; several imports (`background`, `border`, `clickable`, `Arrangement`, `horizontalScroll`,
+  `RoundedCornerShape`, `clip`, `SurfaceContainerLowest`) became unused and were removed. Verified via
+  screenshot: tab switching (Search Results <-> Order Lists) and the gold selection indicator both
+  render and behave correctly.
