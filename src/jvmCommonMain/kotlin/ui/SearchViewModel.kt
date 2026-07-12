@@ -1,29 +1,34 @@
 package ui
 
 import androidx.compose.runtime.*
-import data.AppDatabase
 import data.SearchListRepo
 import data.SearchResult
 import data.SearchResultRepo
 import data.STORES
+import data.SettingsStore
 import data.luckshackSearchUrl
 import engine.runSearch
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.swing.Swing
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
-import network.BrowserSearcher
+import network.BrowserBackedSearcher
 import network.CardImageService
 import network.UpdateInfo
 import network.checkForUpdate
-import network.downloadRelease
-import java.io.File
 
 enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND }
 
-class SearchViewModel {
+class SearchViewModel(
+    private val searchListRepo: SearchListRepo,
+    private val searchResultRepo: SearchResultRepo,
+    private val platformActions: PlatformActions,
+    // Long-lived browser-backed searcher for The Warren (Playwright on desktop, WebView on
+    // Android from Phase 11) so its session survives between search clicks. Null skips
+    // browser-backed stores entirely (matches SearchEngine.runSearch's existing behavior).
+    private val warrenSearcher: BrowserBackedSearcher? = null,
+) {
     var query by mutableStateOf("")
     var isSearching by mutableStateOf(false)
     var statusText by mutableStateOf("")
@@ -56,15 +61,15 @@ class SearchViewModel {
     // Stores that were rate-limited by Cloudflare during the current search.
     val cfBlockedStores = mutableStateListOf<String>()
 
-    private var autoOpenLuckshackState by mutableStateOf(AppDatabase.getSettingBoolean("autoOpenLuckshack", false))
+    private var autoOpenLuckshackState by mutableStateOf(SettingsStore.getSettingBoolean("autoOpenLuckshack", false))
     var autoOpenLuckshack: Boolean
         get() = autoOpenLuckshackState
-        set(value) { autoOpenLuckshackState = value; AppDatabase.setSettingBoolean("autoOpenLuckshack", value) }
+        set(value) { autoOpenLuckshackState = value; SettingsStore.setSettingBoolean("autoOpenLuckshack", value) }
 
-    private var includePartialMatchesState by mutableStateOf(AppDatabase.getSettingBoolean("includePartialMatches", false))
+    private var includePartialMatchesState by mutableStateOf(SettingsStore.getSettingBoolean("includePartialMatches", false))
     var includePartialMatches: Boolean
         get() = includePartialMatchesState
-        set(value) { includePartialMatchesState = value; AppDatabase.setSettingBoolean("includePartialMatches", value) }
+        set(value) { includePartialMatchesState = value; SettingsStore.setSettingBoolean("includePartialMatches", value) }
 
     val results = mutableStateListOf<SearchResult>()
 
@@ -73,17 +78,12 @@ class SearchViewModel {
     val images = mutableStateMapOf<String, String>()
 
     private var searchJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.Swing + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // Persists across search calls so the Playwright browser and its CF-clearance session
-    // stay alive — avoids a cold Cloudflare solve on every search click. 2 lanes handles
-    // most multi-card Warren searches without spawning a third idle browser instance.
-    private val warrenSearcher = BrowserSearcher(2)
-
-    private var ignoreBasicLandsState by mutableStateOf(AppDatabase.getSettingBoolean("ignoreBasicLands", true))
+    private var ignoreBasicLandsState by mutableStateOf(SettingsStore.getSettingBoolean("ignoreBasicLands", true))
     var ignoreBasicLands: Boolean
         get() = ignoreBasicLandsState
-        set(value) { ignoreBasicLandsState = value; AppDatabase.setSettingBoolean("ignoreBasicLands", value) }
+        set(value) { ignoreBasicLandsState = value; SettingsStore.setSettingBoolean("ignoreBasicLands", value) }
 
     private var enabledStoresState: Set<String> by mutableStateOf(loadEnabledStores())
     var enabledStores: Set<String>
@@ -91,7 +91,7 @@ class SearchViewModel {
         set(value) {
             enabledStoresState = value
             val disabled = STORES.keys.filter { it !in value }
-            AppDatabase.setSetting("disabledStores", disabled.joinToString(","))
+            SettingsStore.setSetting("disabledStores", disabled.joinToString(","))
         }
 
     fun setStoreEnabled(store: String, enabled: Boolean) {
@@ -99,20 +99,20 @@ class SearchViewModel {
     }
 
     private fun loadEnabledStores(): Set<String> {
-        val raw = AppDatabase.getSetting("disabledStores", "").ifBlank { null }
+        val raw = SettingsStore.getSetting("disabledStores", "").ifBlank { null }
         return if (raw != null) {
             val disabled = raw.split(",").filter { it.isNotBlank() }.toSet()
             STORES.keys.filter { it !in disabled }.toSet()
         } else {
-            val warrenOn = AppDatabase.getSettingBoolean("includeWarren", true)
+            val warrenOn = SettingsStore.getSettingBoolean("includeWarren", true)
             STORES.keys.filter { it != "The Warren" || warrenOn }.toSet()
         }
     }
 
-    private var earlyAccessState by mutableStateOf(AppDatabase.getSettingBoolean("earlyAccess", false))
+    private var earlyAccessState by mutableStateOf(SettingsStore.getSettingBoolean("earlyAccess", false))
     var earlyAccess: Boolean
         get() = earlyAccessState
-        set(value) { earlyAccessState = value; AppDatabase.setSettingBoolean("earlyAccess", value) }
+        set(value) { earlyAccessState = value; SettingsStore.setSettingBoolean("earlyAccess", value) }
 
     // ── Order list UI state (hoisted here so tab switches don't reset it) ───────
     val pinnedListings = mutableStateMapOf<String, String>()  // card name -> pinned listing URL
@@ -125,15 +125,15 @@ class SearchViewModel {
         get() = orderStrategyState
         set(value) { orderStrategyState = value }
 
-    private var hoverOnThumbnailOnlyState by mutableStateOf(AppDatabase.getSettingBoolean("hoverOnThumbnailOnly", false))
+    private var hoverOnThumbnailOnlyState by mutableStateOf(SettingsStore.getSettingBoolean("hoverOnThumbnailOnly", false))
     var hoverOnThumbnailOnly: Boolean
         get() = hoverOnThumbnailOnlyState
-        set(value) { hoverOnThumbnailOnlyState = value; AppDatabase.setSettingBoolean("hoverOnThumbnailOnly", value) }
+        set(value) { hoverOnThumbnailOnlyState = value; SettingsStore.setSettingBoolean("hoverOnThumbnailOnly", value) }
 
-    private var showCardOnHoverState by mutableStateOf(AppDatabase.getSettingBoolean("showCardOnHover", false))
+    private var showCardOnHoverState by mutableStateOf(SettingsStore.getSettingBoolean("showCardOnHover", false))
     var showCardOnHover: Boolean
         get() = showCardOnHoverState
-        set(value) { showCardOnHoverState = value; AppDatabase.setSettingBoolean("showCardOnHover", value) }
+        set(value) { showCardOnHoverState = value; SettingsStore.setSettingBoolean("showCardOnHover", value) }
 
     // ── Search monitor (background interval checker) ────────────────────────────
     // One shared config: a card query + a store selection + an interval, checked on a
@@ -141,13 +141,13 @@ class SearchViewModel {
     // still-in-stock listings already alerted on are deduped via monitorSeenKeys.
     private val monitorJson = Json { ignoreUnknownKeys = true }
 
-    private var monitorQueryState by mutableStateOf(AppDatabase.getSetting("monitorCardQuery", ""))
+    private var monitorQueryState by mutableStateOf(SettingsStore.getSetting("monitorCardQuery", ""))
     private var monitorQueryDebounceJob: Job? = null
     var monitorQuery: String
         get() = monitorQueryState
         set(value) {
             monitorQueryState = value
-            AppDatabase.setSetting("monitorCardQuery", value)
+            SettingsStore.setSetting("monitorCardQuery", value)
             // Debounce: wait for typing to settle for 10s, then recheck immediately with the new
             // query and reset the interval countdown, so edits don't queue up a check per keystroke.
             monitorQueryDebounceJob?.cancel()
@@ -161,22 +161,22 @@ class SearchViewModel {
         }
 
     private var monitorIntervalHoursState by mutableStateOf(
-        (AppDatabase.getSetting("monitorIntervalHours", "1").toIntOrNull() ?: 1).coerceAtLeast(1)
+        (SettingsStore.getSetting("monitorIntervalHours", "1").toIntOrNull() ?: 1).coerceAtLeast(1)
     )
     var monitorIntervalHours: Int
         get() = monitorIntervalHoursState
         set(value) {
             val v = value.coerceAtLeast(1)
             monitorIntervalHoursState = v
-            AppDatabase.setSetting("monitorIntervalHours", v.toString())
+            SettingsStore.setSetting("monitorIntervalHours", v.toString())
         }
 
-    private var monitorEnabledState by mutableStateOf(AppDatabase.getSettingBoolean("monitorEnabled", false))
+    private var monitorEnabledState by mutableStateOf(SettingsStore.getSettingBoolean("monitorEnabled", false))
     var monitorEnabled: Boolean
         get() = monitorEnabledState
         set(value) {
             monitorEnabledState = value
-            AppDatabase.setSettingBoolean("monitorEnabled", value)
+            SettingsStore.setSettingBoolean("monitorEnabled", value)
             if (value) {
                 startMonitorLoop()
             } else {
@@ -191,7 +191,7 @@ class SearchViewModel {
         set(value) {
             monitorStoresState = value
             val disabled = STORES.keys.filter { it !in value }
-            AppDatabase.setSetting("monitorDisabledStores", disabled.joinToString(","))
+            SettingsStore.setSetting("monitorDisabledStores", disabled.joinToString(","))
         }
 
     fun setMonitorStoreEnabled(store: String, enabled: Boolean) {
@@ -199,12 +199,12 @@ class SearchViewModel {
     }
 
     private fun loadMonitorStores(): Set<String> {
-        val disabled = AppDatabase.getSetting("monitorDisabledStores", "")
+        val disabled = SettingsStore.getSetting("monitorDisabledStores", "")
             .split(",").filter { it.isNotBlank() }.toSet()
         return STORES.keys.filter { it !in disabled }.toSet()
     }
 
-    var monitorLastCheckedAt by mutableStateOf(AppDatabase.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L)
+    var monitorLastCheckedAt by mutableStateOf(SettingsStore.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L)
         private set
     var monitorStatusText by mutableStateOf("")
         private set
@@ -212,11 +212,11 @@ class SearchViewModel {
     // Dedup keys ("store|title|price") for listings already alerted on — persisted so a
     // still-in-stock listing doesn't re-alert every interval; only new/changed ones do.
     private val monitorSeenKeys: MutableSet<String> = runCatching {
-        monitorJson.decodeFromString<List<String>>(AppDatabase.getSetting("monitorSeenListingsJson", "[]"))
+        monitorJson.decodeFromString<List<String>>(SettingsStore.getSetting("monitorSeenListingsJson", "[]"))
     }.getOrDefault(emptyList()).toMutableSet()
 
     private fun saveMonitorSeenKeys() {
-        AppDatabase.setSetting("monitorSeenListingsJson", monitorJson.encodeToString(monitorSeenKeys.toList()))
+        SettingsStore.setSetting("monitorSeenListingsJson", monitorJson.encodeToString(monitorSeenKeys.toList()))
     }
 
     // Found-card alerts waiting to be shown — all surfaced together in one scrollable modal.
@@ -228,7 +228,7 @@ class SearchViewModel {
 
     private var monitorLoopJob: Job? = null
 
-    // Runs on the scope's default dispatcher (Swing) — same convention as search()/refreshCard().
+    // Runs on the scope's default dispatcher (Main) — same convention as search()/refreshCard().
     // Compose state (monitorIntervalHours, monitorQuery, monitorStores, monitorAlerts, ...) is only
     // ever read/written from this thread; only the actual network/disk work below hops to IO.
     private fun startMonitorLoop() {
@@ -261,7 +261,7 @@ class SearchViewModel {
             // messy title fails to resolve still has the plain card's art to fall back to.
             imageJobs += scope.launch(Dispatchers.IO) {
                 val resolved = imageService.resolveImages(cards.filter { requestedTitles.add(it) })
-                if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
             }
 
             runSearch(
@@ -271,9 +271,9 @@ class SearchViewModel {
                 onProgress = {},
                 onResults = { rows ->
                     // runSearch fans results out from concurrent per-store IO coroutines, so hop
-                    // back to Swing before touching monitorSeenKeys/monitorAlerts (neither is
+                    // back to Main before touching monitorSeenKeys/monitorAlerts (neither is
                     // thread-safe, and monitorAlerts is Compose-observed state).
-                    withContext(Dispatchers.Swing) {
+                    withContext(Dispatchers.Main) {
                         rows.filter { it.title != null && it.available != false && it.store.isNotBlank() }
                             .forEach { r ->
                                 val key = "${r.store}|${r.title}|${r.priceZar}"
@@ -290,7 +290,7 @@ class SearchViewModel {
                     if (newTitleHints.isNotEmpty()) {
                         imageJobs += scope.launch(Dispatchers.IO) {
                             val resolved = imageService.resolveImages(newTitleHints)
-                            if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                            if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                         }
                     }
                 },
@@ -302,7 +302,7 @@ class SearchViewModel {
             imageService.close()
         }
         val now = System.currentTimeMillis()
-        AppDatabase.setSetting("monitorLastCheckedAt", now.toString())
+        SettingsStore.setSetting("monitorLastCheckedAt", now.toString())
         monitorLastCheckedAt = now
         monitorStatusText =
             if (foundCount == 0) "No new listings found"
@@ -314,7 +314,6 @@ class SearchViewModel {
     }
 
     // ── Saved search lists ─────────────────────────────────────────────────────
-    val searchListRepo = SearchListRepo()
     val savedLists: StateFlow<List<data.SavedSearchList>> get() = searchListRepo.lists
 
     // Name of the last list loaded (or saved) this session — used to pre-fill the "Save list"
@@ -323,7 +322,6 @@ class SearchViewModel {
         private set
 
     // ── Saved search results ───────────────────────────────────────────────────
-    val searchResultRepo = SearchResultRepo()
     val savedResults: StateFlow<List<data.SavedResultEntry>> get() = searchResultRepo.entries
 
     // Name of the last saved result loaded (or saved) this session — same purpose as
@@ -372,7 +370,7 @@ class SearchViewModel {
             val loaded = withContext(Dispatchers.IO) { searchResultRepo.load(id) } ?: return@launch
             val cards        = loaded.cards
             val loadedResults = loaded.results
-            // Populate the VM synchronously on the Swing thread before resolving images.
+            // Populate the VM synchronously on the Main thread before resolving images.
             query         = cards.joinToString("\n")
             searchedCards = cards
             results.clear()
@@ -403,7 +401,7 @@ class SearchViewModel {
                     val keys = cards.filter { seenTitles.add(it) }
                     if (keys.isEmpty()) return@launch
                     val resolved = imageService.resolveImages(keys)
-                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                 }
 
                 // Listing-title arts grouped by store — each store is its own concurrent batch
@@ -417,7 +415,7 @@ class SearchViewModel {
                                 .toMap()
                             if (hints.isEmpty()) return@launch
                             val resolved = imageService.resolveImages(hints)
-                            if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                            if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                         }
                     }
 
@@ -471,60 +469,24 @@ class SearchViewModel {
     var downloadError    by mutableStateOf<String?>(null)
     private var downloadJob: Job? = null
 
-    // Resolved once at startup — null in dev mode or if the exe is not found next to the jar.
-    val installDir: File? = resolveInstallDir()
+    // Resolved once at startup — false in dev mode, on Android (until Phase 12), or if desktop
+    // can't find the installed exe next to the jar.
+    val canInstallUpdate: Boolean = platformActions.canInstallUpdate()
 
     fun startDownload(info: UpdateInfo, onReadyToInstall: () -> Unit) {
-        val url       = info.downloadUrl ?: return
-        val targetDir = installDir       ?: return
-        val isMac     = System.getProperty("os.name", "").lowercase().contains("mac")
+        val url = info.downloadUrl ?: return
         downloadProgress = 0f
         downloadPhase    = "Downloading update…"
         downloadError    = null
         downloadJob = scope.launch(Dispatchers.IO) {
-            runCatching {
-                val tmp = File(System.getProperty("java.io.tmpdir"), "ZArchive-update").also { it.mkdirs() }
-                val zip        = tmp.resolve("ZArchive-update.zip")
-                val extractDir = tmp.resolve("ZArchive-update-extract")
-
-                // Phase 1: download
-                // Guard: only update if not cancelled (cancel sets downloadProgress = null)
-                downloadRelease(url, zip) { p ->
-                    scope.launch(Dispatchers.Swing) { if (downloadProgress != null) downloadProgress = p }
-                }
-
-                // Phase 2: extract in-process so we can report progress before closing
-                withContext(Dispatchers.Swing) { downloadProgress = 0f; downloadPhase = "Extracting…" }
-                extractZipWithProgress(zip, extractDir) { p ->
-                    scope.launch(Dispatchers.Swing) { if (downloadProgress != null) downloadProgress = p }
-                }
-                zip.delete()
-
-                // Phase 3: hand off to a minimal swap script (rename + relaunch only)
-                val pb: ProcessBuilder = if (isMac) {
-                    val script = tmp.resolve("zarchive-swapper.sh")
-                    script.writeText(buildMacSwapScript())
-                    script.setExecutable(true)
-                    ProcessBuilder("bash", script.absolutePath, extractDir.absolutePath, targetDir.absolutePath)
-                } else {
-                    val script = tmp.resolve("zarchive-swapper.ps1")
-                    script.writeText(buildWindowsSwapScript())
-                    ProcessBuilder(
-                        "powershell.exe", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass",
-                        "-File", script.absolutePath,
-                        "-ExtractDir", extractDir.absolutePath,
-                        "-InstallDir", targetDir.absolutePath,
-                    )
-                }
-                pb.redirectOutput(ProcessBuilder.Redirect.DISCARD)
-                pb.redirectError(ProcessBuilder.Redirect.DISCARD)
-                pb.start()
-                withContext(Dispatchers.Swing) { onReadyToInstall() }
-            }.onFailure { e ->
-                withContext(Dispatchers.Swing) {
-                    downloadProgress = -1f
-                    downloadError = e.message ?: "Update failed"
-                }
+            val result = platformActions.triggerUpdateInstall(
+                downloadUrl = url,
+                onProgress = { p -> scope.launch(Dispatchers.Main) { if (downloadProgress != null) downloadProgress = p } },
+                onPhase = { phase -> scope.launch(Dispatchers.Main) { downloadPhase = phase } },
+            )
+            withContext(Dispatchers.Main) {
+                result.onSuccess { onReadyToInstall() }
+                    .onFailure { e -> downloadProgress = -1f; downloadError = e.message ?: "Update failed" }
             }
         }
     }
@@ -542,7 +504,7 @@ class SearchViewModel {
         updateCheckState = UpdateCheckState.CHECKING
         scope.launch(Dispatchers.IO) {
             val info = runCatching { checkForUpdate(earlyAccess) }.getOrNull()
-            withContext(Dispatchers.Swing) {
+            withContext(Dispatchers.Main) {
                 updateInfo = info
                 updateCheckState = if (info != null) UpdateCheckState.UPDATE_FOUND else UpdateCheckState.UP_TO_DATE
             }
@@ -593,7 +555,7 @@ class SearchViewModel {
                 // whenever a messy store listing title fails to resolve its own specific printing.
                 imageJobs += scope.launch(Dispatchers.IO) {
                     val resolved = imageService.resolveImages(cardsToQuery.filter { requestedTitles.add(it) })
-                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                 }
 
                 runSearch(
@@ -601,13 +563,13 @@ class SearchViewModel {
                     stores = storesToSearch,
                     sharedBrowserSearcher = warrenSearcher,
                     onProgress = { storeName ->
-                        withContext(Dispatchers.Swing) {
+                        withContext(Dispatchers.Main) {
                             storeStatuses[storeName] = StoreStatus.CHECKING
                             statusText = "Checking $storeName…"
                         }
                     },
                     onResults = { rows ->
-                        withContext(Dispatchers.Swing) {
+                        withContext(Dispatchers.Main) {
                             results.addAll(rows)
                             // Each call to onResults is one card resolved at one store.
                             rows.firstOrNull()?.store?.takeIf { it.isNotBlank() }?.let { store ->
@@ -623,19 +585,19 @@ class SearchViewModel {
                             imageJobs += scope.launch(Dispatchers.IO) {
                                 val resolved = imageService.resolveImages(newTitleHints)
                                 if (resolved.isNotEmpty()) {
-                                    withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                                    withContext(Dispatchers.Main) { images.putAll(resolved) }
                                 }
                             }
                         }
                     },
                     onStoreComplete = { storeName ->
-                        withContext(Dispatchers.Swing) {
+                        withContext(Dispatchers.Main) {
                             storeStatuses[storeName] = StoreStatus.DONE
                             completedStores++
                         }
                     },
                     onStoreCfBlocked = { storeName ->
-                        scope.launch(Dispatchers.Swing) {
+                        scope.launch(Dispatchers.Main) {
                             if (storeName !in cfBlockedStores) cfBlockedStores.add(storeName)
                         }
                     },
@@ -651,173 +613,6 @@ class SearchViewModel {
     }
 
     companion object {
-        fun resolveInstallDir(): File? {
-            if (System.getProperty("mtg.debug") == "true") return null
-            return runCatching {
-                val loc = object {}.javaClass.protectionDomain?.codeSource?.location ?: return null
-                val jar = File(loc.toURI())
-                // Windows layout: ZArchive/app/*.jar  →  jar.parent.parent = ZArchive/
-                val winCandidate = jar.parentFile?.parentFile
-                if (winCandidate?.resolve("ZArchive.exe")?.exists() == true) return winCandidate
-                // macOS layout:   ZArchive.app/Contents/app/*.jar  →  jar.parent.parent.parent = ZArchive.app/
-                val macCandidate = jar.parentFile?.parentFile?.parentFile
-                if (macCandidate?.name?.endsWith(".app") == true &&
-                    macCandidate.resolve("Contents/MacOS").exists()
-                ) return macCandidate
-                null
-            }.getOrNull()
-        }
-
-        private fun extractZipWithProgress(zip: File, dest: File, onProgress: (Float) -> Unit) {
-            dest.deleteRecursively()
-            dest.mkdirs()
-            java.util.zip.ZipFile(zip).use { zf ->
-                val entries = zf.entries().toList()
-                val total   = entries.size.toFloat().coerceAtLeast(1f)
-                var lastProgressMs = 0L
-                entries.forEachIndexed { idx, entry ->
-                    val out = dest.resolve(entry.name)
-                    if (entry.isDirectory) { out.mkdirs() }
-                    else {
-                        out.parentFile?.mkdirs()
-                        zf.getInputStream(entry).use { it.copyTo(out.outputStream(), bufferSize = 65_536) }
-                    }
-                    // Throttle to ≤10 UI updates/sec — per-entry callbacks for a JRE (thousands
-                    // of files) saturate the EDT and slow extraction significantly.
-                    val now = System.currentTimeMillis()
-                    if (now - lastProgressMs >= 500) {
-                        onProgress((idx + 1) / total)
-                        lastProgressMs = now
-                    }
-                }
-            }
-            onProgress(1f)
-        }
-
-        fun buildWindowsSwapScript(): String {
-            val D = "\$"
-            return """
-param([string]${D}ExtractDir, [string]${D}InstallDir)
-
-${D}log = Join-Path ${D}env:TEMP 'zarchive-updater.log'
-function Log(${D}msg) { "$(Get-Date -f 'HH:mm:ss') ${D}msg" | Out-File -FilePath ${D}log -Append -Encoding utf8 }
-
-Log "Swap started. ExtractDir=${D}ExtractDir InstallDir=${D}InstallDir"
-
-${D}deadline = [datetime]::Now.AddSeconds(30)
-while ((Get-Process -Name 'ZArchive' -ErrorAction SilentlyContinue) -and ([datetime]::Now -lt ${D}deadline)) {
-    Start-Sleep -Milliseconds 500
-}
-Start-Sleep -Seconds 2
-Log "ZArchive process exited"
-
-${D}parent  = Split-Path ${D}InstallDir -Parent
-${D}name    = Split-Path ${D}InstallDir -Leaf
-${D}backup  = Join-Path ${D}parent (${D}name + '-backup')
-${D}swapped = ${D}false
-${D}renamed = ${D}false
-
-try {
-    ${D}extracted = Get-ChildItem ${D}ExtractDir -Directory | Select-Object -First 1
-    if (-not ${D}extracted) { throw "No directory found in extract dir" }
-    if (Test-Path ${D}backup) { Remove-Item ${D}backup -Recurse -Force }
-
-    # Try rename first (clean swap). Retry up to 5x in case JVM handles linger.
-    for (${D}i = 0; ${D}i -lt 5; ${D}i++) {
-        try {
-            Rename-Item ${D}InstallDir (${D}name + '-backup') -ErrorAction Stop
-            ${D}renamed = ${D}true
-            break
-        } catch {
-            Log "Rename attempt $( ${D}i + 1 ) failed: ${D}_ - retrying in 2s"
-            Start-Sleep -Seconds 2
-        }
-    }
-
-    if (${D}renamed) {
-        Move-Item ${D}extracted.FullName ${D}InstallDir -ErrorAction Stop
-        Log "Moved new install into place"
-    } else {
-        # Rename still failing (e.g. Explorer has the folder open) - copy in-place.
-        Log "Rename failed after 5 attempts - falling back to robocopy"
-        robocopy ${D}extracted.FullName ${D}InstallDir /E /IS /IT /PURGE /NFL /NDL /NJH /NJS
-        ${D}rc = ${D}LASTEXITCODE
-        if (${D}rc -ge 8) { throw "robocopy failed with exit code ${D}rc" }
-        Log "In-place update complete (robocopy exit: ${D}rc)"
-    }
-    ${D}swapped = ${D}true
-} catch {
-    Log "Swap failed: ${D}_"
-    if (${D}renamed -and (Test-Path ${D}backup) -and -not (Test-Path ${D}InstallDir)) {
-        Rename-Item ${D}backup ${D}name
-        Log "Restored backup"
-    }
-}
-
-Log "Launching ZArchive.exe (swapped=${D}swapped)"
-Start-Process (Join-Path ${D}InstallDir 'ZArchive.exe')
-
-if (${D}swapped -and (Test-Path ${D}backup)) { Remove-Item ${D}backup -Recurse -Force -ErrorAction SilentlyContinue }
-Remove-Item ${D}ExtractDir -Recurse -Force -ErrorAction SilentlyContinue
-Log "Done"
-""".trimIndent()
-        }
-
-        fun buildMacSwapScript(): String = """
-#!/usr/bin/env bash
-set -uo pipefail
-
-LOG="${'$'}TMPDIR/zarchive-updater.log"
-log() { echo "$(date '+%H:%M:%S') ${'$'}*" >> "${'$'}LOG"; }
-
-EXTRACT_DIR="${'$'}1"
-INSTALL_DIR="${'$'}2"
-INSTALL_PARENT="$(dirname "${'$'}INSTALL_DIR")"
-INSTALL_NAME="$(basename "${'$'}INSTALL_DIR")"
-BACKUP_DIR="${'$'}{INSTALL_PARENT}/${'$'}{INSTALL_NAME}-backup"
-
-log "Swap started. ExtractDir=${'$'}EXTRACT_DIR InstallDir=${'$'}INSTALL_DIR"
-
-# Wait for ZArchive to exit (up to 30 seconds)
-DEADLINE=$(( $(date +%s) + 30 ))
-while pgrep -xq "ZArchive" 2>/dev/null; do
-    [ "$(date +%s)" -ge "${'$'}DEADLINE" ] && break
-    sleep 0.5
-done
-sleep 2
-log "ZArchive process exited"
-
-SWAPPED=false
-
-EXTRACTED=$(find "${'$'}EXTRACT_DIR" -maxdepth 2 -name "*.app" | head -1)
-if [ -z "${'$'}EXTRACTED" ]; then
-    log "No .app bundle found in ${'$'}EXTRACT_DIR"
-else
-    rm -rf "${'$'}BACKUP_DIR"
-    if mv "${'$'}INSTALL_DIR" "${'$'}BACKUP_DIR"; then
-        if mv "${'$'}EXTRACTED" "${'$'}INSTALL_DIR"; then
-            xattr -dr com.apple.quarantine "${'$'}INSTALL_DIR" 2>/dev/null || true
-            # Java zip extraction strips Unix execute bits — restore them.
-            chmod -R a+x "${'$'}INSTALL_DIR/Contents/MacOS" 2>/dev/null || true
-            find "${'$'}INSTALL_DIR/Contents/runtime" -path "*/bin/*" -type f -exec chmod +x {} + 2>/dev/null || true
-            rm -rf "${'$'}BACKUP_DIR"
-            SWAPPED=true
-            log "Swap complete"
-        else
-            log "Move new .app failed - restoring backup"
-            mv "${'$'}BACKUP_DIR" "${'$'}INSTALL_DIR" || true
-        fi
-    else
-        log "Rename old .app failed"
-    fi
-fi
-
-log "Launching ${'$'}INSTALL_DIR (swapped=${'$'}SWAPPED)"
-open "${'$'}INSTALL_DIR"
-rm -rf "${'$'}EXTRACT_DIR"
-log "Done"
-""".trimIndent()
-
         private val BASIC_LANDS = setOf("plains", "island", "swamp", "mountain", "forest",
             "wastes", "snow-covered plains", "snow-covered island", "snow-covered swamp",
             "snow-covered mountain", "snow-covered forest")
@@ -843,12 +638,7 @@ log "Done"
     }
 
     private fun openLuckshackSearches(cards: List<String>) {
-        runCatching {
-            val desktop = java.awt.Desktop.getDesktop()
-            if (java.awt.Desktop.isDesktopSupported() && desktop.isSupported(java.awt.Desktop.Action.BROWSE)) {
-                cards.forEach { card -> runCatching { desktop.browse(java.net.URI(luckshackSearchUrl(card))) } }
-            }
-        }
+        cards.forEach { card -> platformActions.openUrl(luckshackSearchUrl(card)) }
     }
 
     // Entry point from the UI. Detects overlap with existing results and either shows
@@ -985,7 +775,7 @@ log "Done"
             try {
                 imageJobs += scope.launch(Dispatchers.IO) {
                     val resolved = imageService.resolveImages(listOf(card).filter { requestedTitles.add(it) })
-                    if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                    if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                 }
                 runSearch(
                     cards = listOf(card),
@@ -993,14 +783,14 @@ log "Done"
                     sharedBrowserSearcher = warrenSearcher,
                     onProgress = {},
                     onResults = { rows ->
-                        withContext(Dispatchers.Swing) { results.addAll(rows) }
+                        withContext(Dispatchers.Main) { results.addAll(rows) }
                         val newHints = rows.mapNotNull { r -> r.title?.let { it to r.setHint } }
                             .filter { (title, _) -> requestedTitles.add(title) }
                             .toMap()
                         if (newHints.isNotEmpty()) {
                             imageJobs += scope.launch(Dispatchers.IO) {
                                 val resolved = imageService.resolveImages(newHints)
-                                if (resolved.isNotEmpty()) withContext(Dispatchers.Swing) { images.putAll(resolved) }
+                                if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                             }
                         }
                     },
@@ -1009,7 +799,7 @@ log "Done"
                 imageJobs.forEach { it.join() }
             } finally {
                 imageService.close()
-                withContext(Dispatchers.Swing) { refreshingCards.remove(card) }  // Unit value, key removal
+                withContext(Dispatchers.Main) { refreshingCards.remove(card) }  // Unit value, key removal
             }
         }
     }

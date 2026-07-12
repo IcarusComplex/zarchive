@@ -129,7 +129,14 @@ fun WindowScope.App(
     onCloseRequest: () -> Unit = {},
     pendingCrash: String? = null,
 ) {
-    val vm = remember { SearchViewModel() }
+    val vm = remember {
+        SearchViewModel(
+            searchListRepo = data.DesktopSearchListRepo(),
+            searchResultRepo = data.DesktopSearchResultRepo(),
+            platformActions = PlatformActions(),
+            warrenSearcher = network.BrowserSearcher(2),
+        )
+    }
     val colorScheme = darkColorScheme(
         background   = Surface,
         surface      = SurfaceContainer,
@@ -1361,7 +1368,7 @@ private fun UpdateDialog(
     onDismiss: () -> Unit,
     onInstall: () -> Unit,
 ) {
-    val canAutoInstall = info.downloadUrl != null && vm.installDir != null
+    val canAutoInstall = info.downloadUrl != null && vm.canInstallUpdate
     ModalScrim {
         Surface(
             shape = RoundedCornerShape(8.dp),
@@ -3465,12 +3472,8 @@ private fun CardSummaryEntry(
     }
 }
 
-enum class OrderStrategy(val label: String, val icon: ImageVector, val blurb: String) {
-    CHEAPEST("Cheapest total", Icons.Default.Savings,
-        "Lowest possible spend — each card from whichever store is cheapest, even if that means more parcels."),
-    FEWEST("Fewest packages", Icons.Default.Inventory2,
-        "Fewest orders to place — the smallest set of stores that covers everything in stock, price aside."),
-}
+// OrderStrategy moved to jvmCommonMain/kotlin/ui/OrderStrategy.kt (Phase 4) — SearchViewModel
+// (now shared) needs it; same `ui` package, no import needed here.
 
 @Composable
 private fun OrderListsPane(vm: SearchViewModel) {

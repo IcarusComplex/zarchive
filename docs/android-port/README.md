@@ -68,7 +68,7 @@ reachable from `desktopMain`:
 | 1 | [phase-1-kmp-skeleton.md](phase-1-kmp-skeleton.md) | **Done** — desktop + Android both build/run, 107 tests green |
 | 2 | [phase-2-portable-code.md](phase-2-portable-code.md) | **Done** — Models.kt/OrderOptimizer.kt + tests moved, 107 tests green |
 | 3 | [phase-3-networking-parsing-cache.md](phase-3-networking-parsing-cache.md) | **Done** — verified with real network calls on desktop + Android emulator |
-| 4 | [phase-4-viewmodel-split.md](phase-4-viewmodel-split.md) | Not started |
+| 4 | [phase-4-viewmodel-split.md](phase-4-viewmodel-split.md) | **Done** — verified with a real `vm.search()` run on desktop + Android emulator |
 | 5 | [phase-5-android-database.md](phase-5-android-database.md) | Not started |
 | 6 | [phase-6-app-shell-search-input.md](phase-6-app-shell-search-input.md) | Not started |
 | 7 | [phase-7-results-card-art.md](phase-7-results-card-art.md) | Not started |

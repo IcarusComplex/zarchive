@@ -10,28 +10,14 @@ import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 
-data class SavedResultEntry(
-    val id: Int,
-    val name: String,
-    val description: String,
-    val savedAt: Long,
-    val cardCount: Int,
-    val cards: List<String>,
-)
+// SavedResultEntry/LoadedResultSnapshot now live in commonMain/kotlin/data/SearchResultRepo.kt
+// (shared interface) — same `data` package, no import needed here.
 
-data class LoadedResultSnapshot(
-    val cards: List<String>,
-    val results: List<SearchResult>,
-    val excludedCards: Set<String>,
-    val uncheckedLines: Set<String>,
-    val pinnedListings: Map<String, String>,
-)
-
-class SearchResultRepo {
+class DesktopSearchResultRepo : SearchResultRepo {
     private val json = Json { ignoreUnknownKeys = true }
 
     private val _entries = MutableStateFlow<List<SavedResultEntry>>(emptyList())
-    val entries: StateFlow<List<SavedResultEntry>> = _entries.asStateFlow()
+    override val entries: StateFlow<List<SavedResultEntry>> = _entries.asStateFlow()
 
     init { refresh() }
 
@@ -52,7 +38,7 @@ class SearchResultRepo {
         }
     }
 
-    suspend fun save(
+    override suspend fun save(
         name: String,
         description: String,
         cards: List<String>,
@@ -85,7 +71,7 @@ class SearchResultRepo {
 
     // Overwrites an existing snapshot in place (same id), used when the user saves under a
     // name that already matches another saved result and confirms replacing it.
-    suspend fun overwrite(
+    override suspend fun overwrite(
         id: Int,
         name: String,
         description: String,
@@ -117,7 +103,7 @@ class SearchResultRepo {
         refresh()
     }
 
-    suspend fun load(id: Int): LoadedResultSnapshot? = withContext(Dispatchers.IO) {
+    override suspend fun load(id: Int): LoadedResultSnapshot? = withContext(Dispatchers.IO) {
         val lid = id
         val row = transaction {
             SavedResultSnapshots.selectAll()
@@ -133,7 +119,7 @@ class SearchResultRepo {
         )
     }
 
-    suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
+    override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
         val lid = id
         transaction {
             SavedResultSnapshots.deleteWhere { Op.build { SavedResultSnapshots.id eq lid } }

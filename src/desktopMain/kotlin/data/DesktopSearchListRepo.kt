@@ -8,16 +8,12 @@ import kotlinx.coroutines.withContext
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.transactions.transaction
 
-data class SavedSearchList(
-    val id: Int,
-    val name: String,
-    val cards: List<String>,
-    val updatedAt: Long,
-)
+// SavedSearchList now lives in commonMain/kotlin/data/SearchListRepo.kt (shared interface) —
+// same `data` package, no import needed here.
 
-class SearchListRepo {
+class DesktopSearchListRepo : SearchListRepo {
     private val _lists = MutableStateFlow<List<SavedSearchList>>(emptyList())
-    val lists: StateFlow<List<SavedSearchList>> = _lists.asStateFlow()
+    override val lists: StateFlow<List<SavedSearchList>> = _lists.asStateFlow()
 
     init {
         refresh()
@@ -102,7 +98,7 @@ class SearchListRepo {
         }
     }
 
-    suspend fun create(name: String, cards: List<String>): Int = withContext(Dispatchers.IO) {
+    override suspend fun create(name: String, cards: List<String>): Int = withContext(Dispatchers.IO) {
         // 'listName' avoids shadowing by SearchLists.name inside the table-receiver lambda.
         val listName = name
         val now = System.currentTimeMillis()
@@ -119,7 +115,7 @@ class SearchListRepo {
     }
 
     // Call when a list is loaded so it rises to the top of the recency order.
-    suspend fun touch(id: Int): Unit = withContext(Dispatchers.IO) {
+    override suspend fun touch(id: Int): Unit = withContext(Dispatchers.IO) {
         val lid = id
         transaction {
             SearchLists.update({ Op.build { SearchLists.id eq lid } }) {
@@ -129,7 +125,7 @@ class SearchListRepo {
         refresh()
     }
 
-    suspend fun rename(id: Int, newName: String): Unit = withContext(Dispatchers.IO) {
+    override suspend fun rename(id: Int, newName: String): Unit = withContext(Dispatchers.IO) {
         val lid = id
         transaction {
             SearchLists.update({ Op.build { SearchLists.id eq lid } }) {
@@ -140,7 +136,7 @@ class SearchListRepo {
         refresh()
     }
 
-    suspend fun update(id: Int, newName: String, cards: List<String>): Unit = withContext(Dispatchers.IO) {
+    override suspend fun update(id: Int, newName: String, cards: List<String>): Unit = withContext(Dispatchers.IO) {
         val lid = id; val listName = newName; val now = System.currentTimeMillis()
         transaction {
             SearchListCards.deleteWhere { Op.build { SearchListCards.listId eq lid } }
@@ -153,7 +149,7 @@ class SearchListRepo {
         refresh()
     }
 
-    suspend fun updateCards(id: Int, cards: List<String>): Unit = withContext(Dispatchers.IO) {
+    override suspend fun updateCards(id: Int, cards: List<String>): Unit = withContext(Dispatchers.IO) {
         val lid = id
         transaction {
             SearchListCards.deleteWhere { Op.build { SearchListCards.listId eq lid } }
@@ -165,7 +161,7 @@ class SearchListRepo {
         refresh()
     }
 
-    suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
+    override suspend fun delete(id: Int): Unit = withContext(Dispatchers.IO) {
         val lid = id
         transaction {
             SearchListCards.deleteWhere { Op.build { SearchListCards.listId eq lid } }

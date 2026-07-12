@@ -81,22 +81,27 @@ desktop-only until Phase 11 replaces its role for Android via WebView.
 
 ## Critical files
 
-- `src/commonMain (or intermediate jvmCommon)/kotlin/network/Searchers.kt` (moved)
-- `src/commonMain/.../network/CardImageService.kt` (moved)
-- `src/commonMain/.../network/ScryfallSetIndex.kt` (moved)
-- `src/commonMain/.../engine/SearchEngine.kt` (moved, concurrency primitives swapped, CfThrottle
-  path ported)
-- `src/commonMain/.../data/PlatformPaths.kt` (new `expect`)
+- `src/jvmCommonMain/kotlin/network/Searchers.kt` (moved)
+- `src/jvmCommonMain/kotlin/network/CardImageService.kt` (moved)
+- `src/jvmCommonMain/kotlin/network/ScryfallSetIndex.kt` (moved)
+- `src/jvmCommonMain/kotlin/network/GitHubService.kt` (moved, `isNewerVersion` widened to `internal`)
+- `src/jvmCommonMain/kotlin/engine/SearchEngine.kt` (moved, concurrency primitives swapped,
+  CfThrottle path ported, `BrowserBackedSearcher` abstraction added)
+- `src/commonMain/kotlin/data/PlatformPaths.kt` (new `expect`)
+- `src/commonMain/kotlin/data/CfThrottleRule.kt` (new, data class + `expect fun` pair)
+- `src/commonMain/kotlin/network/BrowserBackedSearcher.kt` (new interface)
 - `src/androidMain/kotlin/data/PlatformPaths.android.kt` (new)
 - `src/desktopMain/kotlin/data/PlatformPaths.desktop.kt` (new)
+- `src/androidMain/kotlin/androidapp/ZArchiveApplication.kt` (new, Android `Context` holder)
 
 ## Implementation notes (deviations/decisions made during execution)
 
-- **All 5 files landed directly in `commonMain`, not an intermediate `jvmCommon`** — the 0A spike's
-  validated pattern (Jsoup + Ktor in a shared JVM-family source set) was implemented as `jvmCommonMain`
-  in this project (`dependsOn(commonMain)`; `desktopMain`/`androidMain` both `dependsOn(jvmCommonMain)`),
-  and `Searchers.kt`/`CardImageService.kt`/`ScryfallSetIndex.kt`/`GitHubService.kt`/`SearchEngine.kt`
-  all moved there — not `commonMain` itself, since `commonMain` must stay Jsoup-free (Compose
+- **Correction:** all 5 files landed in the new intermediate `jvmCommonMain` source set, **not**
+  `commonMain` itself. The 0A spike's validated pattern (Jsoup + Ktor in a shared JVM-family source
+  set) was implemented here as `jvmCommonMain` (`dependsOn(commonMain)`;
+  `desktopMain`/`androidMain` both `dependsOn(jvmCommonMain)`), and
+  `Searchers.kt`/`CardImageService.kt`/`ScryfallSetIndex.kt`/`GitHubService.kt`/`SearchEngine.kt`
+  all moved there. `commonMain` itself stays Jsoup-free (Compose
   Multiplatform's actual multiplatform targets, if ever added beyond desktop+Android, couldn't
   depend on a JVM-only jar there).
 - **`BrowserBackedSearcher` interface (new, `commonMain`)** wasn't in the phase's original file

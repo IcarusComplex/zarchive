@@ -77,6 +77,7 @@ kotlin {
             dependsOn(jvmCommonMain)
             dependencies {
                 implementation(libs.androidx.activity.compose)
+                implementation(libs.kotlinx.coroutines.android)
             }
         }
     }
