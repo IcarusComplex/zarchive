@@ -244,7 +244,10 @@ fun secretOrPlaceholder(key: String, placeholder: String) = secretsProps.getProp
 
 val generateGoogleAuthConfig by tasks.registering {
     outputs.dir(generatedKotlinDir)
-    inputs.file(rootProject.file("secrets.properties")).optional(true)
+    // inputs.file(...).optional(true) still fails Gradle 8.13's strict validation when the file
+    // is genuinely absent (always true on CI -- secrets.properties is git-ignored by design), so
+    // only register it as a tracked input when it actually exists locally.
+    rootProject.file("secrets.properties").takeIf { it.exists() }?.let { inputs.file(it) }
     doLast {
         val desktopClientId = secretOrPlaceholder("google.desktop.clientId", "REPLACE_WITH_DESKTOP_CLIENT_ID.apps.googleusercontent.com")
         val desktopClientSecret = secretOrPlaceholder("google.desktop.clientSecret", "REPLACE_WITH_DESKTOP_CLIENT_SECRET")
