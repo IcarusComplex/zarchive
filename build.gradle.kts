@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.jetbrains.compose)
     alias(libs.plugins.kotlin.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.sqldelight)
 }
 
 group = "co.za.mtg"
@@ -78,6 +79,7 @@ kotlin {
             dependencies {
                 implementation(libs.androidx.activity.compose)
                 implementation(libs.kotlinx.coroutines.android)
+                implementation(libs.sqldelight.android.driver)
             }
         }
     }
@@ -103,6 +105,17 @@ android {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+}
+
+// Android-only local database (Phase 5) — desktop's Exposed/H2 database (data/AppDatabase.kt)
+// stays completely separate and untouched, per the plan's explicit decision.
+sqldelight {
+    databases {
+        create("ZArchiveDatabase") {
+            packageName.set("data.db")
+            srcDirs.setFrom("src/androidMain/sqldelight")
+        }
+    }
 }
 
 // jpackage requires a plain MAJOR.MINOR.PATCH version; strip any prerelease suffix (e.g. -beta.1).

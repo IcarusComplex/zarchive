@@ -1,12 +1,19 @@
 package data
 
-// Temporary in-memory stub (non-persistent) until Phase 5's SQLDelight database.
 actual object SettingsStore {
-    private val values = mutableMapOf<String, String>()
+    private val queries get() = AndroidDatabase.instance.zArchiveDatabaseQueries
 
-    actual fun getSetting(key: String, default: String): String = values[key] ?: default
-    actual fun setSetting(key: String, value: String) { values[key] = value }
+    actual fun getSetting(key: String, default: String): String =
+        queries.getSetting(key).executeAsOneOrNull() ?: default
+
+    actual fun setSetting(key: String, value: String) {
+        queries.setSetting(key, value)
+    }
+
     actual fun getSettingBoolean(key: String, default: Boolean): Boolean =
-        values[key]?.toBooleanStrictOrNull() ?: default
-    actual fun setSettingBoolean(key: String, value: Boolean) { values[key] = value.toString() }
+        queries.getSetting(key).executeAsOneOrNull()?.toBooleanStrictOrNull() ?: default
+
+    actual fun setSettingBoolean(key: String, value: Boolean) {
+        queries.setSetting(key, value.toString())
+    }
 }

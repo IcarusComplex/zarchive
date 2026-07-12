@@ -63,6 +63,15 @@ private suspend fun runPhase4VerificationSearch(): String {
     return "vm.search(): ${vm.statusText}\n$summary\n\ncanInstallUpdate=${vm.canInstallUpdate}"
 }
 
+// Phase 5 throwaway verification hook: confirms the real SQLDelight-backed AndroidSearchListRepo
+// persists across process kills (not just in-memory for this launch) and seeds exactly once.
+// Deleted once Phase 6 builds the real saved-lists screen.
+private fun runPhase5VerificationCheck(): String {
+    val repo = data.AndroidSearchListRepo()
+    val lists = repo.lists.value
+    return "Lists: ${lists.size} (${lists.joinToString(", ") { "${it.name} [${it.cards.size} cards]" }})"
+}
+
 // Phase 3 throwaway verification hook: exercises the just-moved SearchEngine/Searchers/
 // CardImageService stack against real store endpoints from the Android emulator, to prove they
 // actually run (not just compile) under the OkHttp engine + jvmCommonMain restructuring. Deleted
@@ -109,9 +118,18 @@ private fun PlaceholderApp() {
         }
         Log.i("ZArchive", "[Phase 4 verification]\n$vmVerification")
     }
+    var dbVerification by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        dbVerification = try {
+            runPhase5VerificationCheck()
+        } catch (e: Exception) {
+            "FAILED: ${e::class.simpleName}: ${e.message}"
+        }
+        Log.i("ZArchive", "[Phase 5 verification]\n$dbVerification")
+    }
     MaterialTheme {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("ZArchive Android — Phase 1 skeleton (v${BuildInfo.VERSION})\n\n$verification\n\n$vmVerification")
+            Text("ZArchive Android — Phase 1 skeleton (v${BuildInfo.VERSION})\n\n$verification\n\n$vmVerification\n\n$dbVerification")
         }
     }
 }
