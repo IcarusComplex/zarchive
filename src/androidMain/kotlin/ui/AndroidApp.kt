@@ -144,10 +144,33 @@ fun AndroidApp(
             vm.dismissSyncStatus()
         }
     }
-    // Android's sole monitor execution path is MonitorWorker (see monitor/MonitorPlatform.android.kt) --
-    // reactively (re)schedule/cancel its periodic WorkManager job whenever the config changes.
-    LaunchedEffect(vm.monitorEnabled, vm.monitorIntervalHours) {
-        MonitorScheduler.reschedule(context, vm.monitorEnabled, vm.monitorIntervalHours)
+    // Android's sole monitor execution path is MonitorWorker (see monitor/MonitorPlatform.android.kt).
+    // reschedule() restarts the periodic job's schedule anchor (CANCEL_AND_REENQUEUE) whenever
+    // called, so the "check every N hours" countdown always runs from whichever of these two
+    // triggers happened most recently, not from whenever the monitor was first ever enabled.
+    //
+    // Mirrors desktop's startMonitorLoop(), which always runs an immediate check the moment the
+    // loop (re)starts, then sleeps for the interval:
+    //  - turning the monitor on (or opening the app with it already on) checks immediately.
+    LaunchedEffect(vm.monitorEnabled) {
+        if (vm.monitorEnabled) {
+            MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
+            MonitorScheduler.checkNow(context)
+        } else {
+            MonitorScheduler.reschedule(context, false, vm.monitorIntervalHours)
+        }
+    }
+    LaunchedEffect(vm.monitorIntervalHours) {
+        if (vm.monitorEnabled) MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
+    }
+    //  - editing the card list debounces 10s (same as desktop), then checks immediately and
+    //    restarts the periodic countdown from that point.
+    LaunchedEffect(vm.monitorQuery) {
+        if (vm.monitorEnabled) {
+            delay(10_000)
+            MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
+            MonitorScheduler.checkNow(context)
+        }
     }
     // Bridges MonitorWorker's hits back into the live UI (in addition to the system notification
     // it always posts) so the alerts modal below still pops immediately if the app happens to be
