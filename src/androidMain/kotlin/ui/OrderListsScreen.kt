@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.OrderLine
+import data.SearchResult
 import data.StoreOrder
 import data.cheapestPlan
 import data.fewestStoresPlan
@@ -76,7 +77,7 @@ private fun formatZar(v: Double): String {
 }
 
 @Composable
-fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTap: (String) -> Unit) {
+fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTap: (String) -> Unit, onCardTap: (SearchResult) -> Unit) {
     val strategy = vm.orderStrategy
     val unchecked = vm.uncheckedOrderLines
     val excludedCards = vm.excludedCards
@@ -175,7 +176,7 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
         Spacer(Modifier.height(12.dp))
 
         plan.storeOrders.forEach { so ->
-            StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, onOpenUrl, onImageTap)
+            StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, onOpenUrl, onImageTap, onCardTap)
             Spacer(Modifier.height(12.dp))
         }
         if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
@@ -202,6 +203,7 @@ private fun StoreOrderCard(
     priceMax: Double?,
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     val activeLines = order.lines
         .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
@@ -264,6 +266,7 @@ private fun StoreOrderCard(
                     },
                     onOpenUrl = onOpenUrl,
                     onImageTap = onImageTap,
+                    onCardTap = onCardTap,
                 )
             }
         }
@@ -278,12 +281,13 @@ private fun OrderLineRow(
     onToggle: (Boolean) -> Unit,
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
+    onCardTap: (SearchResult) -> Unit,
 ) {
     val contentAlpha = if (checked) 1f else 0.4f
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onOpenUrl(line.listing.url) }
+            .clickable { onCardTap(line.listing) }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -38,13 +41,12 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import co.za.zarchive.R
 import data.BuildInfo
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import ui.theme.Cinzel
 import ui.theme.HeaderBg
 import ui.theme.OnSurface
@@ -60,6 +63,12 @@ import ui.theme.OutlineVariant
 import ui.theme.Primary
 import ui.theme.Surface
 import ui.theme.ZArchiveTheme
+
+// Fixed LazyColumn item index where the RESULTS tab's per-card sections start: SearchInputScreen,
+// StatusRow slot, LuckshackLinks slot, a Spacer, and the CardSummaryPanel slot (5 leading items,
+// each always present as a slot even when its content conditionally renders nothing) -- see the
+// RESULTS branch below.
+private const val RESULTS_CARD_ITEMS_START_INDEX = 5
 
 // hidden: Search Monitors has no real implementation yet (Phase 14, deferred) -- the tab and its
 // placeholder screen stay in place, just excluded from the bottom NavigationBar, so re-enabling it
@@ -84,13 +93,16 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
     var summaryFilter by remember { mutableStateOf("") }
     var expandedImagePath by remember { mutableStateOf<String?>(null) }
     var detailResult by remember { mutableStateOf<data.SearchResult?>(null) }
+    // Order-list rows already are the chosen listing for that card, so their detail modal skips
+    // the "Use this version" pin toggle -- only the search-results tab's taps allow pinning.
+    var detailResultAllowPin by remember { mutableStateOf(true) }
     var showListsDialog by remember { mutableStateOf(false) }
     var showResultsDialog by remember { mutableStateOf(false) }
     var showSearchOptionsDialog by remember { mutableStateOf(false) }
     var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
     val platformActions = remember { PlatformActions() }
-    val resultsScrollState = rememberScrollState()
-    var scrollRootY by remember { mutableStateOf(0) }
+    val resultsListState = rememberLazyListState()
+    val resultsScope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) { vm.restoreSessionIfAny() }
     LaunchedEffect(Unit) { vm.checkForUpdates() }
@@ -147,14 +159,18 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                             Icon(Icons.Default.Archive, "Saved results", tint = OnSurfaceVariant)
                         }
                         // Low-friction, always-visible entry point to (re)connect/sync -- distinct
-                        // from the same actions buried in the Settings menu. Hidden once actually
-                        // synced; the SyncStatusFooter already covers that "just synced" feedback.
-                        if (vm.syncStatus != SyncStatus.SYNCED) {
-                            IconButton(onClick = {
+                        // from the same actions buried in the Settings menu. Always rendered
+                        // (toggling visibility on syncStatus caused a pop-in/out flicker); just
+                        // dimmed and inert while a sync is already in flight instead.
+                        IconButton(onClick = {
+                            if (vm.syncStatus != SyncStatus.SYNCING) {
                                 if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
-                            }) {
-                                Icon(Icons.Default.CloudSync, "Sync now", tint = OnSurfaceVariant)
                             }
+                        }) {
+                            Icon(
+                                Icons.Default.CloudSync, "Sync now",
+                                tint = if (vm.syncStatus == SyncStatus.SYNCING) OnSurfaceVariant.copy(alpha = 0.35f) else OnSurfaceVariant,
+                            )
                         }
                         SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
                     },
@@ -194,49 +210,97 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
             containerColor = Surface,
         ) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
-                Column(
-                    Modifier
-                        .fillMaxSize()
-                        .verticalScroll(resultsScrollState)
-                        .onGloballyPositioned { scrollRootY = it.positionInRoot().y.toInt() }
-                        .padding(16.dp),
-                ) {
-                    when (tab) {
-                        ResultsTab.RESULTS -> {
-                            SearchInputScreen(vm, onOpenSearchOptions = { showSearchOptionsDialog = true })
-                            if (vm.isSearching || vm.statusText.isNotEmpty()) {
-                                Spacer(Modifier.height(12.dp))
-                                StatusRow(vm)
+                when (tab) {
+                    ResultsTab.RESULTS -> {
+                        // LazyColumn (Compose's built-in recycled/virtualized list -- the KMP
+                        // equivalent of e.g. React Native's FlashList) instead of a plain Column +
+                        // verticalScroll: a saved result with many searched cards was composing/
+                        // laying out every card's entire results section simultaneously with zero
+                        // recycling, which was extremely laggy. Only on-screen (+ a small buffer
+                        // of) items are ever composed now.
+                        //
+                        // Fixed slot indices (used by the summary panel's "scroll to this card"
+                        // click, see onCardClick below) -- each slot always occupies its index
+                        // regardless of whether its content conditionally renders anything, so the
+                        // card region always starts at a constant offset instead of a shifting one.
+                        val summaryCards = vm.searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
+                        val hasResults = vm.results.map { it.card }.toSet()
+                        val resultCards = summaryCards.filter { it in hasResults || vm.refreshingCards.containsKey(it) }
+
+                        LazyColumn(state = resultsListState, modifier = Modifier.fillMaxSize().padding(16.dp)) {
+                            item { SearchInputScreen(vm, onOpenSearchOptions = { showSearchOptionsDialog = true }) }
+                            item {
+                                if (vm.isSearching || vm.statusText.isNotEmpty()) {
+                                    Spacer(Modifier.height(12.dp))
+                                    StatusRow(vm)
+                                }
                             }
-                            if (vm.searchedCards.isNotEmpty()) {
-                                Spacer(Modifier.height(12.dp))
-                                LuckshackLinks(vm.searchedCards, onOpenUrl = platformActions::openUrl)
+                            item {
+                                if (vm.searchedCards.isNotEmpty()) {
+                                    Spacer(Modifier.height(12.dp))
+                                    LuckshackLinks(vm.searchedCards, onOpenUrl = platformActions::openUrl)
+                                }
                             }
-                            Spacer(Modifier.height(16.dp))
-                            ResultsScreen(
-                                vm = vm,
-                                scrollState = resultsScrollState,
-                                scrollRootY = scrollRootY,
-                                summaryExpanded = summaryExpanded,
-                                onSummaryExpandedChange = { summaryExpanded = it },
-                                summaryFilter = summaryFilter,
-                                onSummaryFilterChange = { summaryFilter = it },
-                                onOpenUrl = platformActions::openUrl,
-                                onImageTap = { expandedImagePath = it },
-                                onCardTap = { detailResult = it },
-                            )
+                            item { Spacer(Modifier.height(16.dp)) }
+                            item {
+                                if (summaryCards.size > 1) {
+                                    CardSummaryPanel(
+                                        cards = summaryCards,
+                                        results = vm.results.toList(),
+                                        images = vm.images,
+                                        isSearching = vm.isSearching,
+                                        onCardClick = { card ->
+                                            val idx = resultCards.indexOf(card)
+                                            if (idx >= 0) {
+                                                resultsScope.launch { resultsListState.animateScrollToItem(RESULTS_CARD_ITEMS_START_INDEX + idx) }
+                                            }
+                                        },
+                                        onImageTap = { expandedImagePath = it },
+                                        includePartialMatches = vm.includePartialMatches,
+                                        expanded = summaryExpanded,
+                                        onExpandedChange = { summaryExpanded = it },
+                                        filter = summaryFilter,
+                                        onFilterChange = { summaryFilter = it },
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                }
+                            }
+                            items(resultCards, key = { it }) { card ->
+                                CardSection(
+                                    card = card,
+                                    results = vm.results.filter { it.card == card },
+                                    images = vm.images,
+                                    isSearching = vm.isSearching,
+                                    isRefreshing = card in vm.refreshingCards,
+                                    pinnedUrl = vm.pinnedListings[card],
+                                    onTogglePin = { url -> if (vm.pinnedListings[card] == url) vm.pinnedListings.remove(card) else vm.pinnedListings[card] = url },
+                                    includePartialMatches = vm.includePartialMatches,
+                                    excludedFromOrder = vm.excludedCards.containsKey(card),
+                                    onToggleExcludeFromOrder = { if (vm.excludedCards.containsKey(card)) vm.excludedCards.remove(card) else vm.excludedCards[card] = Unit },
+                                    onRefresh = { vm.refreshCard(card) },
+                                    onOpenUrl = platformActions::openUrl,
+                                    onCardTap = { detailResultAllowPin = true; detailResult = it },
+                                )
+                                Spacer(Modifier.height(12.dp))
+                            }
                         }
-                        ResultsTab.ORDERS -> OrderListsScreen(
+                    }
+                    ResultsTab.ORDERS -> Column(
+                        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+                    ) {
+                        OrderListsScreen(
                             vm = vm,
                             onOpenUrl = platformActions::openUrl,
                             onImageTap = { expandedImagePath = it },
-                        )
-                        ResultsTab.MONITORS -> Text(
-                            "Search monitors — deferred (Phase 14).",
-                            color = OnSurfaceVariant.copy(alpha = 0.6f),
-                            fontSize = 13.sp,
+                            onCardTap = { detailResultAllowPin = false; detailResult = it },
                         )
                     }
+                    ResultsTab.MONITORS -> Text(
+                        "Search monitors — deferred (Phase 14).",
+                        color = OnSurfaceVariant.copy(alpha = 0.6f),
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(16.dp),
+                    )
                 }
             }
         }
@@ -251,10 +315,12 @@ fun AndroidApp(vm: SearchViewModel, pendingCrash: String? = null) {
                     result = result,
                     imagePath = (result.title?.let { vm.images[it] }) ?: vm.images[result.card],
                     isPinned = vm.pinnedListings[result.card] == result.url,
-                    onTogglePin = {
-                        if (vm.pinnedListings[result.card] == result.url) vm.pinnedListings.remove(result.card)
-                        else vm.pinnedListings[result.card] = result.url
-                    },
+                    onTogglePin = if (detailResultAllowPin) {
+                        {
+                            if (vm.pinnedListings[result.card] == result.url) vm.pinnedListings.remove(result.card)
+                            else vm.pinnedListings[result.card] = result.url
+                        }
+                    } else null,
                     onOpenUrl = platformActions::openUrl,
                     onDismiss = { detailResult = null },
                 )

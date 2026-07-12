@@ -299,14 +299,19 @@ private fun WindowScope.TitleBar(vm: SearchViewModel, windowState: WindowState, 
                         }
                     }
                     // Low-friction, always-visible entry point to (re)connect/sync -- distinct from
-                    // the same actions buried in the Settings menu. Hidden once actually synced;
-                    // the SyncStatusFooter already covers that "just synced" feedback.
-                    if (vm.syncStatus != SyncStatus.SYNCED) {
-                        GhostIconButton(Icons.Default.CloudSync, "Sync now", tint = OnSurfaceVariant, iconSize = 14.dp) {
+                    // the same actions buried in the Settings menu. Always rendered (toggling its
+                    // visibility on syncStatus caused a visible pop-in/out flicker); just dimmed
+                    // and inert while a sync is already in flight instead.
+                    GhostIconButton(
+                        Icons.Default.CloudSync, "Sync now",
+                        tint = if (vm.syncStatus == SyncStatus.SYNCING) OnSurfaceVariant.copy(alpha = 0.35f) else OnSurfaceVariant,
+                        iconSize = 14.dp,
+                    ) {
+                        if (vm.syncStatus != SyncStatus.SYNCING) {
                             if (vm.syncStatus == SyncStatus.DISCONNECTED) vm.connectGoogleDrive {} else vm.syncNow()
                         }
-                        Spacer(Modifier.width(2.dp))
                     }
+                    Spacer(Modifier.width(2.dp))
                     SettingsMenu(vm)
                     Spacer(Modifier.width(2.dp))
                     Box(Modifier.width(1.dp).height(12.dp).background(OutlineVariant.copy(alpha = 0.5f)))

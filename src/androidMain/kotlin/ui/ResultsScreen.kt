@@ -46,15 +46,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -62,7 +59,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.SearchResult
 import data.preferExactMatches
-import kotlinx.coroutines.launch
 import ui.theme.ErrorColor
 import ui.theme.HeaderBg
 import ui.theme.Mono
@@ -480,70 +476,8 @@ fun CardSection(
     }
 }
 
-@Composable
-fun ResultsScreen(
-    vm: SearchViewModel,
-    scrollState: androidx.compose.foundation.ScrollState,
-    scrollRootY: Int,
-    summaryExpanded: Boolean,
-    onSummaryExpandedChange: (Boolean) -> Unit,
-    summaryFilter: String,
-    onSummaryFilterChange: (String) -> Unit,
-    onOpenUrl: (String) -> Unit,
-    onImageTap: (String) -> Unit,
-    onCardTap: (SearchResult) -> Unit,
-) {
-    val summaryCards = vm.searchedCards.ifEmpty { vm.results.map { it.card }.distinct() }
-    val hasResults = vm.results.map { it.card }.toSet()
-    val resultCards = summaryCards.filter { it in hasResults || vm.refreshingCards.containsKey(it) }
-    val scope = rememberCoroutineScope()
-    val sectionPositions = remember { mutableMapOf<String, Int>() }
-
-    Column {
-        if (summaryCards.size > 1) {
-            CardSummaryPanel(
-                cards = summaryCards,
-                results = vm.results.toList(),
-                images = vm.images,
-                isSearching = vm.isSearching,
-                onCardClick = { card ->
-                    sectionPositions[card]?.let { y ->
-                        val target = (scrollState.value + (y - scrollRootY)).coerceAtLeast(0)
-                        scope.launch { scrollState.animateScrollTo(target) }
-                    }
-                },
-                onImageTap = onImageTap,
-                includePartialMatches = vm.includePartialMatches,
-                expanded = summaryExpanded,
-                onExpandedChange = onSummaryExpandedChange,
-                filter = summaryFilter,
-                onFilterChange = onSummaryFilterChange,
-            )
-            Spacer(Modifier.height(10.dp))
-        }
-        resultCards.forEach { card ->
-            Box(
-                Modifier.onGloballyPositioned { coords ->
-                    sectionPositions[card] = coords.positionInRoot().y.toInt()
-                },
-            ) {
-                CardSection(
-                    card = card,
-                    results = vm.results.filter { it.card == card },
-                    images = vm.images,
-                    isSearching = vm.isSearching,
-                    isRefreshing = card in vm.refreshingCards,
-                    pinnedUrl = vm.pinnedListings[card],
-                    onTogglePin = { url -> if (vm.pinnedListings[card] == url) vm.pinnedListings.remove(card) else vm.pinnedListings[card] = url },
-                    includePartialMatches = vm.includePartialMatches,
-                    excludedFromOrder = vm.excludedCards.containsKey(card),
-                    onToggleExcludeFromOrder = { if (vm.excludedCards.containsKey(card)) vm.excludedCards.remove(card) else vm.excludedCards[card] = Unit },
-                    onRefresh = { vm.refreshCard(card) },
-                    onOpenUrl = onOpenUrl,
-                    onCardTap = onCardTap,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-        }
-    }
-}
+// The old ResultsScreen() wrapper (plain Column + verticalScroll) was removed in favor of a
+// LazyColumn built directly in AndroidApp.kt -- see RESULTS_CARD_ITEMS_START_INDEX there. A saved
+// result with many searched cards was composing/laying out every card's entire results section
+// simultaneously with zero recycling, which was extremely laggy. CardSummaryPanel/CardSection
+// below are now called directly as LazyColumn items instead.
