@@ -83,6 +83,7 @@ kotlin {
                 implementation(libs.sqldelight.android.driver)
                 implementation(libs.androidx.webkit)
                 implementation(libs.androidx.splashscreen)
+                implementation(libs.androidx.browser)
             }
         }
     }
@@ -104,6 +105,12 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    // BuildConfig.APPLICATION_ID / .DEBUG let shared androidMain code (the Google OAuth flow) tell
+    // debug and release apart at runtime without any Android-specific plumbing in jvmCommonMain.
+    buildFeatures {
+        buildConfig = true
     }
 
     // Distinct applicationId (and therefore a separate data directory/database) from the release
