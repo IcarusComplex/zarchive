@@ -305,12 +305,17 @@ bundles a JRE so end users install nothing.
 ### CI / GitHub Actions (`.github/workflows/release.yml`)
 
 - Triggers on `v*` tag push to `main`.
-- Builds Windows on `windows-latest` and macOS on `macos-latest` in parallel.
+- Builds Windows on `windows-latest`, macOS on `macos-latest`, and Android on `ubuntu-latest` — all
+  three in parallel.
 - Windows job zips `ZArchive/` (the full app folder including `README.txt`) → uploads as
   `ZArchive-windows-x64-<version>.zip`.
 - macOS job zips `ZArchive/ZArchive.app` + `README-mac.txt` → uploads as
   `ZArchive-macos-arm64-<version>.zip`.
-- Both assets are attached to the GitHub release created by the workflow.
+- Android job runs `./gradlew assembleRelease` (signed via the `ANDROID_KEYSTORE_BASE64` /
+  `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` secrets — the release
+  keystore noted below) → uploads a universal APK as `ZArchive-android-<version>.apk`.
+- A fourth `release` job (`needs: [build-windows, build-macos, build-android]`) waits for all three,
+  downloads their artifacts, and attaches all three assets to the GitHub release it creates.
 - **No tokens or PATs are bundled in the artifacts** — the GitHub API is hit unauthenticated for
   update checks; only public release metadata and asset download URLs are needed.
 
