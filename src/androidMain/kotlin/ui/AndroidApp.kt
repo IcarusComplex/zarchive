@@ -45,12 +45,17 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -129,6 +134,19 @@ fun AndroidApp(
     // "last checked"/status on every app start (this ViewModel instance otherwise has no live view
     // into checks a background Worker ran while the app wasn't open).
     LaunchedEffect(Unit) { vm.refreshMonitorStatusFromSettings() }
+    // A warm resume (app backgrounded then brought back, same process/Activity/composition -- no
+    // fresh LaunchedEffect(Unit) run) previously never re-synced, so a check MonitorWorker ran while
+    // the app was merely backgrounded stayed invisible until the process was fully killed and
+    // relaunched. This is the likely cause of "last checked doesn't update reliably".
+    val refreshMonitorStatus = rememberUpdatedState { vm.refreshMonitorStatusFromSettings() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) refreshMonitorStatus.value()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     LaunchedEffect(vm.updateCheckState) {
         if (vm.updateCheckState == UpdateCheckState.UP_TO_DATE ||
             vm.updateCheckState == UpdateCheckState.UPDATE_FOUND ||

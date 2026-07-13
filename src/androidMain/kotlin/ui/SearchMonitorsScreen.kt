@@ -25,8 +25,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -63,7 +65,9 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { /* no-op either way -- see comment above */ }
+    var showHistory by remember { mutableStateOf(false) }
 
+    Box(Modifier.fillMaxSize()) {
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -82,6 +86,12 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
                     fontSize = 12.sp,
                     color = OnSurfaceVariant,
                 )
+            }
+            // Opens the last ~10 checks (timestamp/status/hit count, success or failure) --
+            // MonitorWorker runs headless on Android, so this is the only way to confirm it's
+            // actually firing on schedule instead of guessing from a single "last checked" line.
+            IconButton(onClick = { vm.refreshMonitorHistory(); showHistory = true }) {
+                Icon(Icons.Default.History, "Search history", tint = OnSurfaceVariant)
             }
             Switch(
                 checked = vm.monitorEnabled,
@@ -190,5 +200,11 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+    if (showHistory) {
+        ModalScrim(onDismiss = { showHistory = false }) {
+            MonitorHistoryModal(history = vm.monitorHistory, onDismiss = { showHistory = false })
+        }
+    }
     }
 }

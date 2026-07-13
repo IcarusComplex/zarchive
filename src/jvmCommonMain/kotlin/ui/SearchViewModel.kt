@@ -232,6 +232,17 @@ class SearchViewModel(
     fun refreshMonitorStatusFromSettings() {
         monitorLastCheckedAt = SettingsStore.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L
         monitorStatusText = SettingsStore.getSetting("monitorLastCheckStatus", "")
+        refreshMonitorHistory()
+    }
+
+    // Trail of the last ~10 completed checks (success and failure), newest first -- see
+    // monitor/MonitorHistory.kt. Lets a user who can't tell whether background checks are actually
+    // happening (Android especially, since MonitorWorker runs out-of-process) see exactly when each
+    // one ran and what it found, instead of only ever seeing the single latest status line.
+    val monitorHistory = mutableStateListOf<monitor.MonitorCheckEntry>().apply { addAll(monitor.loadMonitorHistory()) }
+    fun refreshMonitorHistory() {
+        monitorHistory.clear()
+        monitorHistory.addAll(monitor.loadMonitorHistory())
     }
 
     // Dedup keys ("store|title|price") for listings already alerted on — persisted so a
@@ -309,6 +320,11 @@ class SearchViewModel(
         val requestedTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
         val imageJobs = java.util.concurrent.CopyOnWriteArrayList<Job>()
         var foundCount = 0
+        // A check that throws (network blip, browser hiccup, etc.) must still land a status/history
+        // entry -- previously an uncaught exception here skipped straight past the
+        // monitorLastCheckedAt/monitorStatusText writes below, was swallowed by startMonitorLoop's
+        // runCatching, and left no trace that the run ever happened.
+        var failure: Throwable? = null
         try {
             // Card-name fallback art (mirrors search()) — resolved up front so a listing whose own
             // messy title fails to resolve still has the plain card's art to fall back to.
@@ -339,19 +355,27 @@ class SearchViewModel(
             )
             if (foundCount > 0) saveMonitorSeenKeys()
             imageJobs.joinAll()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failure = e
         } finally {
             imageService.close()
         }
         val now = System.currentTimeMillis()
+        monitorStatusText = when {
+            failure != null -> "Check failed: ${failure.message ?: failure::class.simpleName}"
+            foundCount == 0 -> "No new listings found"
+            else -> "$foundCount new listing${if (foundCount == 1) "" else "s"} found"
+        }
         SettingsStore.setSetting("monitorLastCheckedAt", now.toString())
         monitorLastCheckedAt = now
-        monitorStatusText =
-            if (foundCount == 0) "No new listings found"
-            else "$foundCount new listing${if (foundCount == 1) "" else "s"} found"
         // Persisted alongside monitorLastCheckedAt so refreshMonitorStatusFromSettings() (Android's
         // app-start resync, since MonitorWorker runs out-of-process) has a real status to show, not
         // just a timestamp.
         SettingsStore.setSetting("monitorLastCheckStatus", monitorStatusText)
+        monitor.recordMonitorCheck(now, monitorStatusText, foundCount, failure == null)
+        refreshMonitorHistory()
     }
 
     init {
