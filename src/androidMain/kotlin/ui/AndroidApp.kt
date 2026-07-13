@@ -51,7 +51,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -131,22 +130,26 @@ fun AndroidApp(
     LaunchedEffect(Unit) { vm.restoreSessionIfAny() }
     LaunchedEffect(Unit) { vm.checkForUpdates() }
     LaunchedEffect(Unit) { vm.syncOnLaunch() }
-    // MonitorWorker runs out-of-process and writes straight to SettingsStore -- this ViewModel
-    // instance otherwise has no live view into checks a background Worker ran while the app wasn't
-    // open. Also ensures the periodic job is still scheduled (WorkManager `KEEP` policy -- a no-op
-    // if it already is) and, if a check is actually overdue, fires one immediately -- a safety net
-    // for e.g. Doze delaying WorkManager's own schedule. Deliberately does NOT unconditionally
-    // reschedule+checkNow the way explicit user actions (switch/interval/query edit, handled where
-    // they happen) do: Android can recreate the Activity -- and re-run every LaunchedEffect(Unit) --
-    // far more often than the app is genuinely (re)launched (screen rotation, memory pressure,
-    // simply backgrounding and foregrounding). Doing an unconditional restartAnchor=true reschedule
-    // + checkNow here was resetting the periodic timer's anchor on every one of those events, so the
-    // monitor could go a full day without ever completing one real interval if the app was opened
-    // more often than that -- visible in the history trail as checks seconds/minutes apart instead
-    // of the configured interval. Also re-run on every ON_RESUME (warm resume -- same
-    // process/Activity, so LaunchedEffect(Unit) itself doesn't refire) so a check that ran while the
-    // app was merely backgrounded is picked up without needing a full process restart.
-    val syncMonitorOnForeground = rememberUpdatedState {
+    // Gates the interval/query-edit effects below so their initial firing (every LaunchedEffect
+    // fires once on first composition, same as Unit-keyed ones) is a no-op instead of an extra
+    // redundant reschedule; the cold-start sync below already covers that first firing. Flips true
+    // synchronously (no suspension before it) within the same composition pass that declares the
+    // effects below, so it's already true by the time their bodies run.
+    var monitorEffectsArmed by remember { mutableStateOf(false) }
+    // Cold-start-only: MonitorWorker runs out-of-process and writes straight to SettingsStore, so
+    // this ViewModel instance otherwise has no live view into checks a background Worker ran while
+    // the app was closed. Also ensures the periodic job is still scheduled (WorkManager `KEEP`
+    // policy -- a no-op if it already is) and, if a check is actually overdue, fires one immediately
+    // -- a safety net for e.g. Doze delaying WorkManager's own schedule. Deliberately does NOT
+    // unconditionally reschedule+checkNow the way explicit user actions (switch/interval/query edit,
+    // handled where they happen) do: Android can recreate the Activity -- and re-run this whole
+    // LaunchedEffect(Unit) -- far more often than the app is genuinely (re)launched (screen
+    // rotation, memory pressure, simply backgrounding and foregrounding). Doing an unconditional
+    // restartAnchor=true reschedule+checkNow here was resetting the periodic timer's anchor on every
+    // one of those events, so the monitor could go a full day without ever completing one real
+    // interval if the app was opened more often than that -- visible in the history trail as checks
+    // seconds/minutes apart instead of the configured interval.
+    LaunchedEffect(Unit) {
         vm.refreshMonitorStatusFromSettings()
         if (vm.monitorEnabled) {
             MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours, restartAnchor = false)
@@ -155,21 +158,21 @@ fun AndroidApp(
                 System.currentTimeMillis() - vm.monitorLastCheckedAt >= intervalMs
             if (overdue) MonitorScheduler.checkNow(context)
         }
-    }
-    // Gates the interval/query-edit effects below so their initial firing (every LaunchedEffect
-    // fires once on first composition, same as Unit-keyed ones -- see the long comment above) is a
-    // no-op instead of an extra redundant reschedule; syncMonitorOnForeground already covers that
-    // first firing. Flips true synchronously (no suspension before it) within the same composition
-    // pass that declares the effects below, so it's already true by the time their bodies run.
-    var monitorEffectsArmed by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        syncMonitorOnForeground.value()
         monitorEffectsArmed = true
     }
+    // Warm resume (ON_RESUME -- same process/Activity, so LaunchedEffect(Unit) above doesn't refire)
+    // only re-syncs status/history from SettingsStore, deliberately NOT repeating the cold-start
+    // overdue-check logic above. Firing a check here too raced against one the switch itself had
+    // just kicked off: vm.monitorLastCheckedAt still held the *old* stale timestamp until that
+    // in-flight check completed, so anything that triggered ON_RESUME in that window (e.g. the
+    // notification-permission dialog opening/closing right after flipping the switch on) saw a
+    // falsely-"overdue" timestamp and fired a redundant duplicate check. A check completing
+    // elsewhere while the app is open is already picked up live via MonitorCheckBus below, so no
+    // check-triggering logic belongs here at all.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) syncMonitorOnForeground.value()
+            if (event == Lifecycle.Event.ON_RESUME) vm.refreshMonitorStatusFromSettings()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }

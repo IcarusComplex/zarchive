@@ -37,6 +37,9 @@ object MonitorScheduler {
         val workManager = WorkManager.getInstance(context)
         if (!enabled) {
             workManager.cancelUniqueWork(UNIQUE_WORK_NAME)
+            // Also drop any in-flight/queued immediate check -- otherwise a check kicked off just
+            // before the user turned the monitor off can still land a history entry afterward.
+            workManager.cancelUniqueWork(UNIQUE_CHECK_NOW_WORK_NAME)
             return
         }
         val constraints = Constraints.Builder()
