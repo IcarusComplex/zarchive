@@ -1,7 +1,12 @@
 package ui
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -26,6 +31,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
 import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,6 +41,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,11 +50,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import ui.theme.ErrorColor
 import ui.theme.Mono
+import ui.theme.OnPrimary
 import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
@@ -66,7 +80,35 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
         ActivityResultContracts.RequestPermission(),
     ) { /* no-op either way -- see comment above */ }
     var showHistory by remember { mutableStateOf(false) }
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
+
+    // WorkManager's periodic job is a prime target for OEM battery managers (Samsung's "Sleeping
+    // apps" especially) to kill outright while the app is fully closed for a while -- confirmed on
+    // a real device: zero periodic runs over a 5+ hour closed window, resuming instantly on
+    // relaunch. Exempting the app from battery optimization is the standard mitigation; it's not
+    // automatic even after granting, so re-check on ON_RESUME (returning from the system dialog, or
+    // having granted it via general Settings) since PowerManager has no reactive/observable API for
+    // this -- batteryOptTick is a manual poke to force the remember(...) below to re-read it.
+    var batteryOptTick by remember { mutableStateOf(0) }
+    val isIgnoringBatteryOptimizations = remember(batteryOptTick) {
+        (context.getSystemService(Context.POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(context.packageName)
+    }
+    val batteryOptLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) { batteryOptTick++ }
+    fun requestIgnoreBatteryOptimizations() {
+        batteryOptLauncher.launch(
+            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")),
+        )
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) batteryOptTick++
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -105,9 +147,34 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
                     if (enabled && Build.VERSION.SDK_INT >= 33) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
+                    if (enabled && !isIgnoringBatteryOptimizations) requestIgnoreBatteryOptimizations()
                 },
                 colors = SwitchDefaults.colors(checkedThumbColor = Primary, checkedTrackColor = Primary.copy(alpha = 0.4f)),
             )
+        }
+        if (vm.monitorEnabled && !isIgnoringBatteryOptimizations) {
+            Surface(shape = RoundedCornerShape(6.dp), color = SurfaceContainerHigh, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "Background checks may be unreliable on this device",
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium, color = ErrorColor,
+                    )
+                    Text(
+                        "Some phones (Samsung and others especially) can kill scheduled checks while " +
+                            "the app is closed for a while unless it's excluded from battery " +
+                            "optimization. You may also need to exclude ZArchive from any " +
+                            "device-specific \"sleeping apps\"/battery saver list separately -- that " +
+                            "part can't be requested from here.",
+                        fontSize = 11.sp, color = OnSurfaceVariant,
+                    )
+                    Button(
+                        onClick = { requestIgnoreBatteryOptimizations() },
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) {
+                        Text("Allow background activity")
+                    }
+                }
+            }
         }
         HorizontalDivider(color = OutlineVariant)
 
