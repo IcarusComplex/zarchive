@@ -8,6 +8,8 @@ import data.SearchResult
 import data.SettingsStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -15,6 +17,17 @@ import kotlinx.serialization.json.Json
 import network.AndroidWarrenSearcher
 
 private val workerJson = Json { ignoreUnknownKeys = true }
+
+// Below this gap since the last completed check, a new run is treated as a near-duplicate trigger
+// and skipped outright (no search, no history entry) rather than run. Far below the 1-hour minimum
+// interval, so it never interferes with real scheduled checks -- it only absorbs bursts of
+// near-simultaneous triggers. Needed because `search_monitor` (periodic) and
+// `search_monitor_check_now` (one-time) are *separate* WorkManager unique-work queues -- nothing
+// stops a genuinely-due periodic run and an explicit checkNow() landing within moments of each
+// other, and a REPLACE-cancelled worker can still slip through and finish writing a history entry
+// if the cancellation arrives after its last suspend point (browserSearcher.close() in finally;
+// everything after that is synchronous DB writes with no further cancellation checkpoint).
+private const val MIN_CHECK_GAP_MS = 30_000L
 
 /**
  * Android's sole monitor execution path (see monitor/MonitorPlatform.android.kt --
@@ -24,7 +37,23 @@ private val workerJson = Json { ignoreUnknownKeys = true }
  * state stays consistent regardless of which UI screen last touched it.
  */
 class MonitorWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result {
+    companion object {
+        // Serializes actual check execution across concurrent MonitorWorker instances (periodic +
+        // one-time can both be running in this same process at once -- see MIN_CHECK_GAP_MS above).
+        // The freshness check is re-evaluated *after* acquiring the lock so a trigger that arrived
+        // while another check was already running also gets skipped once that check's
+        // monitorLastCheckedAt write becomes visible, not just triggers that arrived before it.
+        private val runLock = Mutex()
+    }
+
+    override suspend fun doWork(): Result = runLock.withLock { doWorkLocked() }
+
+    private suspend fun doWorkLocked(): Result {
+        val lastCheckedAt = SettingsStore.getSetting("monitorLastCheckedAt", "0").toLongOrNull() ?: 0L
+        if (lastCheckedAt != 0L && System.currentTimeMillis() - lastCheckedAt < MIN_CHECK_GAP_MS) {
+            return Result.success()
+        }
+
         val query = SettingsStore.getSetting("monitorCardQuery", "")
         val ignoreBasicLands = SettingsStore.getSettingBoolean("ignoreBasicLands", true)
         val disabledStores = SettingsStore.getSetting("monitorDisabledStores", "")
