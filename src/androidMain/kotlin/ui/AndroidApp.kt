@@ -70,6 +70,7 @@ import co.za.zarchive.R
 import data.BuildInfo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import monitor.MonitorCheckBus
 import monitor.MonitorHitBus
 import monitor.MonitorScheduler
 import monitor.PendingMonitorNav
@@ -130,19 +131,45 @@ fun AndroidApp(
     LaunchedEffect(Unit) { vm.restoreSessionIfAny() }
     LaunchedEffect(Unit) { vm.checkForUpdates() }
     LaunchedEffect(Unit) { vm.syncOnLaunch() }
-    // MonitorWorker runs out-of-process and writes straight to SettingsStore -- pick up its latest
-    // "last checked"/status on every app start (this ViewModel instance otherwise has no live view
-    // into checks a background Worker ran while the app wasn't open).
-    LaunchedEffect(Unit) { vm.refreshMonitorStatusFromSettings() }
-    // A warm resume (app backgrounded then brought back, same process/Activity/composition -- no
-    // fresh LaunchedEffect(Unit) run) previously never re-synced, so a check MonitorWorker ran while
-    // the app was merely backgrounded stayed invisible until the process was fully killed and
-    // relaunched. This is the likely cause of "last checked doesn't update reliably".
-    val refreshMonitorStatus = rememberUpdatedState { vm.refreshMonitorStatusFromSettings() }
+    // MonitorWorker runs out-of-process and writes straight to SettingsStore -- this ViewModel
+    // instance otherwise has no live view into checks a background Worker ran while the app wasn't
+    // open. Also ensures the periodic job is still scheduled (WorkManager `KEEP` policy -- a no-op
+    // if it already is) and, if a check is actually overdue, fires one immediately -- a safety net
+    // for e.g. Doze delaying WorkManager's own schedule. Deliberately does NOT unconditionally
+    // reschedule+checkNow the way explicit user actions (switch/interval/query edit, handled where
+    // they happen) do: Android can recreate the Activity -- and re-run every LaunchedEffect(Unit) --
+    // far more often than the app is genuinely (re)launched (screen rotation, memory pressure,
+    // simply backgrounding and foregrounding). Doing an unconditional restartAnchor=true reschedule
+    // + checkNow here was resetting the periodic timer's anchor on every one of those events, so the
+    // monitor could go a full day without ever completing one real interval if the app was opened
+    // more often than that -- visible in the history trail as checks seconds/minutes apart instead
+    // of the configured interval. Also re-run on every ON_RESUME (warm resume -- same
+    // process/Activity, so LaunchedEffect(Unit) itself doesn't refire) so a check that ran while the
+    // app was merely backgrounded is picked up without needing a full process restart.
+    val syncMonitorOnForeground = rememberUpdatedState {
+        vm.refreshMonitorStatusFromSettings()
+        if (vm.monitorEnabled) {
+            MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours, restartAnchor = false)
+            val intervalMs = vm.monitorIntervalHours.coerceAtLeast(1) * 3_600_000L
+            val overdue = vm.monitorLastCheckedAt == 0L ||
+                System.currentTimeMillis() - vm.monitorLastCheckedAt >= intervalMs
+            if (overdue) MonitorScheduler.checkNow(context)
+        }
+    }
+    // Gates the interval/query-edit effects below so their initial firing (every LaunchedEffect
+    // fires once on first composition, same as Unit-keyed ones -- see the long comment above) is a
+    // no-op instead of an extra redundant reschedule; syncMonitorOnForeground already covers that
+    // first firing. Flips true synchronously (no suspension before it) within the same composition
+    // pass that declares the effects below, so it's already true by the time their bodies run.
+    var monitorEffectsArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        syncMonitorOnForeground.value()
+        monitorEffectsArmed = true
+    }
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) refreshMonitorStatus.value()
+            if (event == Lifecycle.Event.ON_RESUME) syncMonitorOnForeground.value()
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -163,28 +190,19 @@ fun AndroidApp(
         }
     }
     // Android's sole monitor execution path is MonitorWorker (see monitor/MonitorPlatform.android.kt).
-    // reschedule() restarts the periodic job's schedule anchor (CANCEL_AND_REENQUEUE) whenever
-    // called, so the "check every N hours" countdown always runs from whichever of these two
-    // triggers happened most recently, not from whenever the monitor was first ever enabled.
-    //
-    // Mirrors desktop's startMonitorLoop(), which always runs an immediate check the moment the
-    // loop (re)starts, then sleeps for the interval:
-    //  - turning the monitor on (or opening the app with it already on) checks immediately.
-    LaunchedEffect(vm.monitorEnabled) {
-        if (vm.monitorEnabled) {
-            MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
-            MonitorScheduler.checkNow(context)
-        } else {
-            MonitorScheduler.reschedule(context, false, vm.monitorIntervalHours)
-        }
-    }
+    // Turning the monitor on/off is handled directly in SearchMonitorsScreen's Switch callback (an
+    // explicit user action, not something to react to via LaunchedEffect -- see
+    // syncMonitorOnForeground above for why). These two remain LaunchedEffects since debouncing
+    // (query) and "only reschedule if it actually changed" (interval) both need to reactively watch
+    // a value over the composable's lifetime, but are gated on monitorEffectsArmed so their guaranteed
+    // first-composition firing doesn't also perform a redundant reschedule.
     LaunchedEffect(vm.monitorIntervalHours) {
-        if (vm.monitorEnabled) MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
+        if (monitorEffectsArmed && vm.monitorEnabled) MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
     }
     //  - editing the card list debounces 10s (same as desktop), then checks immediately and
     //    restarts the periodic countdown from that point.
     LaunchedEffect(vm.monitorQuery) {
-        if (vm.monitorEnabled) {
+        if (monitorEffectsArmed && vm.monitorEnabled) {
             delay(10_000)
             MonitorScheduler.reschedule(context, true, vm.monitorIntervalHours)
             MonitorScheduler.checkNow(context)
@@ -199,6 +217,13 @@ fun AndroidApp(
             vm.monitorAlerts.addAll(hits)
             vm.resolveImagesForMonitorHits(hits)
         }
+    }
+    // Keeps the "last checked" status line (and history trail) live while the app sits open in the
+    // foreground for a whole check interval -- syncMonitorOnForeground only re-syncs at launch/
+    // resume, so without this a check that completed with the app already open and never
+    // backgrounded left the status line stuck on stale data indefinitely.
+    LaunchedEffect(Unit) {
+        MonitorCheckBus.checked.collect { vm.refreshMonitorStatusFromSettings() }
     }
     // A tapped notification's payload -- single hit opens its detail modal directly, a multi-hit
     // batch just relies on monitorAlerts (already populated via MonitorHitBus above, or about to be

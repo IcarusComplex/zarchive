@@ -66,6 +66,7 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
         ActivityResultContracts.RequestPermission(),
     ) { /* no-op either way -- see comment above */ }
     var showHistory by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Box(Modifier.fillMaxSize()) {
     Column(
@@ -97,6 +98,10 @@ fun SearchMonitorsScreen(vm: SearchViewModel) {
                 checked = vm.monitorEnabled,
                 onCheckedChange = { enabled ->
                     vm.monitorEnabled = enabled
+                    // Explicit user action -- always restart the periodic timer's anchor from now
+                    // (unlike AndroidApp's passive launch/resume sync, which deliberately doesn't).
+                    monitor.MonitorScheduler.reschedule(context, enabled, vm.monitorIntervalHours)
+                    if (enabled) monitor.MonitorScheduler.checkNow(context)
                     if (enabled && Build.VERSION.SDK_INT >= 33) {
                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }

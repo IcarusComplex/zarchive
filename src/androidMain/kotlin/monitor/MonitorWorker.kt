@@ -73,6 +73,10 @@ class MonitorWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         SettingsStore.setSetting("monitorLastCheckedAt", now.toString())
         SettingsStore.setSetting("monitorLastCheckStatus", statusText)
         recordMonitorCheck(now, statusText, newHits.size, failure == null)
+        // Every run, not just ones with hits -- see MonitorCheckBus's doc comment. Without this, a
+        // foregrounded app's "last checked" status line only ever caught up on the next launch or
+        // resume, even though the history trail (recordMonitorCheck above) had already moved on.
+        MonitorCheckBus.notifyChecked()
 
         if (newHits.isNotEmpty()) {
             postMonitorHitNotification(applicationContext, newHits)
