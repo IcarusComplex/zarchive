@@ -49,15 +49,19 @@ class MonitorForegroundService : Service() {
     override fun onCreate() {
         super.onCreate()
         ensureChannel()
-        val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(SERVICE_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(SERVICE_NOTIFICATION_ID, notification)
-        }
+        postForegroundNotification()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // A low-importance FGS notification is user-dismissible (Android 13+, by design -- see
+        // this service's doc comment). Dismissing it does NOT stop the service, since a foreground
+        // service survives being swiped away in Recents by design -- so the already-running
+        // instance just keeps going with no visible notification. onCreate() only fires once per
+        // instance, so re-posting here on every start() call (cold app launch, toggle, interval/
+        // query change -- every path already routes through MonitorScheduler.reschedule()) is what
+        // actually recovers a dismissed notification; calling startForeground() again with the
+        // same ID is a cheap no-op re-show/update when it's already visible.
+        postForegroundNotification()
         // Guards against onStartCommand firing again (e.g. a redundant start() call, or
         // START_STICKY recreating the service) while a loop is already running -- restarting it
         // would reset the interval countdown from now, same haywire class of bug as the
@@ -68,10 +72,22 @@ class MonitorForegroundService : Service() {
         return START_STICKY
     }
 
+    private fun postForegroundNotification() {
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(SERVICE_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(SERVICE_NOTIFICATION_ID, notification)
+        }
+    }
+
     private suspend fun runLoop() {
         while (true) {
             val intervalHours = SettingsStore.getSetting("monitorIntervalHours", "1").toIntOrNull()?.coerceAtLeast(1) ?: 1
             delay(intervalHours * 3_600_000L)
+            // Also self-heals a dismissed notification without needing an app relaunch/toggle --
+            // at most one interval's worth of "invisible" time between a swipe-dismiss and this.
+            postForegroundNotification()
             MonitorScheduler.checkNow(applicationContext)
         }
     }
