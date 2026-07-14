@@ -20,8 +20,6 @@
          service with a persistent notification is the stronger, OEM-agnostic fallback. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- Restarts MonitorForegroundService after a reboot; the service itself does not survive one. -->
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name="androidapp.ZArchiveApplication"
@@ -61,17 +59,16 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!-- No boot-completed receiver: RECEIVE_BOOT_COMPLETED plus an auto-restarting foreground
+             service is a heavily-weighted combination in Play Protect's malware heuristics, and a
+             sideloaded/unsigned APK has no publisher reputation to offset it; confirmed on a
+             real device (install-time "harmful app" scan flag). Traded off deliberately: after a
+             reboot, monitoring simply resumes next time the app is opened rather than
+             automatically, which is a minor gap since reboots are rare relative to normal
+             backgrounding. -->
         <service
             android:name="monitor.MonitorForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
-
-        <receiver
-            android:name="monitor.MonitorBootReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-            </intent-filter>
-        </receiver>
     </application>
 </manifest>

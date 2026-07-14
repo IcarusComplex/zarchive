@@ -88,7 +88,14 @@ class MonitorForegroundService : Service() {
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         if (manager.getNotificationChannel(SERVICE_CHANNEL_ID) == null) {
             manager.createNotificationChannel(
-                NotificationChannel(SERVICE_CHANNEL_ID, "Monitor active", NotificationManager.IMPORTANCE_MIN).apply {
+                // IMPORTANCE_LOW, not MIN -- a foreground service notification is required to be
+                // visible in the status bar precisely so the user always knows something is
+                // running in the background. MIN hides the icon entirely, which reads as the
+                // service trying to stay invisible -- exactly the pattern Play Protect's on-device
+                // scanner flags foreground-service abuse on (worse combined with
+                // FOREGROUND_SERVICE_DATA_SYNC + a boot receiver, since an unsigned sideloaded APK
+                // has no publisher reputation to offset it).
+                NotificationChannel(SERVICE_CHANNEL_ID, "Monitor active", NotificationManager.IMPORTANCE_LOW).apply {
                     description = "Shows while the background search monitor is running"
                     setShowBadge(false)
                 },
@@ -104,14 +111,15 @@ class MonitorForegroundService : Service() {
             this, 0, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+        // No .setPriority()/.setSilent() -- minSdk 26 means the channel's importance above is
+        // always authoritative; setting a redundant/conflicting priority here was leftover
+        // pre-channel-era API that only muddies intent.
         return NotificationCompat.Builder(this, SERVICE_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("ZArchive monitor active")
             .setContentText("Watching for new listings in the background")
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setSilent(true)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
             .build()
     }
 
