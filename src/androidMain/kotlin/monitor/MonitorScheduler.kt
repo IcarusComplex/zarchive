@@ -40,6 +40,7 @@ object MonitorScheduler {
             // Also drop any in-flight/queued immediate check -- otherwise a check kicked off just
             // before the user turned the monitor off can still land a history entry afterward.
             workManager.cancelUniqueWork(UNIQUE_CHECK_NOW_WORK_NAME)
+            MonitorForegroundService.stop(context)
             return
         }
         val constraints = Constraints.Builder()
@@ -50,6 +51,13 @@ object MonitorScheduler {
         ).setConstraints(constraints).build()
         val policy = if (restartAnchor) ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE else ExistingPeriodicWorkPolicy.KEEP
         workManager.enqueueUniquePeriodicWork(UNIQUE_WORK_NAME, policy, request)
+        // Kept as a redundant backup to WorkManager's periodic job above, which real-device
+        // testing showed OEM battery managers can kill outright while the app is fully closed --
+        // see MonitorForegroundService's doc comment. Safe to call every time reschedule() runs
+        // (Activity recreation churn included): starting an already-running service is a no-op
+        // beyond re-delivering onStartCommand, which the service's own loopJob check absorbs
+        // without resetting its interval countdown.
+        MonitorForegroundService.start(context)
     }
 
     // Runs a single check immediately (subject to the same network constraint) -- mirrors the

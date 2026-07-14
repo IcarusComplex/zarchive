@@ -14,6 +14,14 @@
          sideloaded background-scheduling app (not distributed via Play Store, so Play's abuse
          policy around this permission doesn't apply). -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- MonitorForegroundService: the battery-optimization exemption above turned out not to be
+         enough by itself (confirmed on a real device: still zero checks over a closed-app window
+         with the exemption granted, and no further per-app toggle available to try). A foreground
+         service with a persistent notification is the stronger, OEM-agnostic fallback. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Restarts MonitorForegroundService after a reboot; the service itself does not survive one. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:name="androidapp.ZArchiveApplication"
@@ -52,5 +60,18 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <service
+            android:name="monitor.MonitorForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <receiver
+            android:name="monitor.MonitorBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
