@@ -1,0 +1,14 @@
+-- Migration from schema version 2 to 3: adds the collection_rows table (see data/CollectionRepo.kt
+-- in commonMain). Editing CREATE TABLE alone in ZArchiveDatabase.sq only affects brand-new
+-- databases; an already-installed device's existing zarchive.db needs this CREATE TABLE path,
+-- applied automatically by AndroidSqliteDriver based on the bumped schema version -- without it,
+-- upgrading devices crash on startup with "no such table: collection_rows" (SearchViewModel's
+-- constructor synchronously queries it via AndroidCollectionRepo's init block).
+
+CREATE TABLE collection_rows (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    group_name TEXT NOT NULL,
+    group_type TEXT NOT NULL,
+    card_name TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
