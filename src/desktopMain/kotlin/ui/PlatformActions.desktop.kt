@@ -25,6 +25,15 @@ actual class PlatformActions actual constructor() {
         }
     }
 
+    actual fun pickCsvFile(): File? = runCatching {
+        val dialog = java.awt.FileDialog(null as java.awt.Frame?, "Choose a collection CSV", java.awt.FileDialog.LOAD)
+        dialog.setFilenameFilter { _, name -> name.endsWith(".csv", ignoreCase = true) }
+        dialog.isVisible = true
+        val dir = dialog.directory
+        val name = dialog.file
+        if (dir != null && name != null) File(dir, name) else null
+    }.getOrNull()
+
     actual val crashLogFile: File
         get() = PlatformPaths.debugDumpDir.resolve("crash.log")
 

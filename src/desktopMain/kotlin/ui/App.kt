@@ -137,6 +137,7 @@ fun WindowScope.App(
         SearchViewModel(
             searchListRepo = data.DesktopSearchListRepo(),
             searchResultRepo = data.DesktopSearchResultRepo(),
+            collectionRepo = data.DesktopCollectionRepo(),
             platformActions = PlatformActions(),
             warrenSearcher = network.BrowserSearcher(2),
         )
@@ -1222,6 +1223,7 @@ private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 @Composable
 private fun SettingsMenu(vm: SearchViewModel) {
     var expanded by remember { mutableStateOf(false) }
+    var showCollectionDialog by remember { mutableStateOf(false) }
     Box {
         GhostIconButton(Icons.Default.Settings, "Settings", tint = OnSurfaceVariant, iconSize = 16.dp) {
             expanded = !expanded
@@ -1284,6 +1286,14 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             )
                         }
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        val ownedCount by vm.ownedCardNames.collectAsState()
+                        SettingsActionItem(
+                            label = "Collection Import",
+                            sublabel = if (ownedCount.isEmpty()) "Not set up" else "${ownedCount.size} cards imported",
+                            icon = Icons.Default.Inventory2,
+                            onClick = { showCollectionDialog = true; expanded = false },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsActionItem(
                             label = "Report a bug",
                             sublabel = "Open a GitHub issue",
@@ -1302,6 +1312,9 @@ private fun SettingsMenu(vm: SearchViewModel) {
                     }
                 }
             }
+        }
+        if (showCollectionDialog) {
+            CollectionImportDialog(vm) { showCollectionDialog = false }
         }
     }
 }
@@ -2529,6 +2542,7 @@ private fun SearchResultsTab(
     onSummaryFilterChange: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
+    val ownedCards by vm.ownedCardNames.collectAsState()
 
     // Summary tracks the full searched list from the moment search() fires.
     // Results list shows cards that have received at least one response, or are
@@ -2555,6 +2569,7 @@ private fun SearchResultsTab(
                 onFilterChange = onSummaryFilterChange,
                 showCardOnHover = vm.showCardOnHover,
                 onShowCardOnHoverChange = { vm.showCardOnHover = it },
+                ownedCards = ownedCards,
             )
         }
         if (resultCards.isNotEmpty()) {
@@ -2585,6 +2600,7 @@ private fun SearchResultsTab(
                             else vm.excludedCards[card] = Unit
                         },
                         onRefresh = { vm.refreshCard(card) },
+                        owned = ownedCards.ownsCard(card),
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -2724,6 +2740,184 @@ private fun SearchOptionsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun CollectionImportDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
+    val platformActions = remember { PlatformActions() }
+    val groups by vm.collectionGroups.collectAsState()
+    val ownedCount by vm.ownedCardNames.collectAsState()
+    val connected = vm.syncStatus != SyncStatus.DISCONNECTED
+
+    BasicAlertDialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainer,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(560.dp),
+        ) {
+            Column {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(HeaderBg)
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                ) {
+                    Icon(Icons.Default.Inventory2, null, tint = Primary, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Collection Import",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = OnSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Icon(
+                        Icons.Default.Close, "Close", tint = OnSurfaceVariant,
+                        modifier = Modifier.size(16.dp).clickable { onDismiss() },
+                    )
+                }
+                HorizontalDivider(color = OutlineVariant)
+
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    OptionsSectionHeader("Source")
+                    Text(
+                        "${vm.collectionFormatLabel} — export your collection as a CSV, then use " +
+                            "\"Import from file\" below. That both imports it here and uploads it to the " +
+                            "\"ZArchive\" Google Drive folder as \"${vm.collectionDriveFileName}\", so " +
+                            "\"Import from Google Drive\" can find it on your other devices afterward. " +
+                            "Google's restricted Drive access means a file you drag into that folder " +
+                            "yourself (via Drive's website) won't be visible here — it has to go through " +
+                            "\"Import from file\" at least once.",
+                        fontSize = 11.sp, color = OnSurfaceVariant, lineHeight = 15.sp,
+                    )
+
+                    OptionsSectionHeader("Import")
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TooltipArea(
+                            tooltip = {
+                                if (!connected) {
+                                    Surface(
+                                        color = SurfaceContainerHighest,
+                                        shape = RoundedCornerShape(4.dp),
+                                        border = BorderStroke(1.dp, OutlineVariant),
+                                    ) {
+                                        Text("Connect Google Drive first", modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                            fontSize = 11.sp, color = OnSurface)
+                                    }
+                                }
+                            },
+                        ) {
+                            DialogActionButton(
+                                label = "Import from Google Drive",
+                                icon = Icons.Default.CloudDownload,
+                                enabled = connected && vm.collectionImportStatus != CollectionImportStatus.IMPORTING,
+                                onClick = { vm.importCollectionFromDrive() },
+                            )
+                        }
+                        DialogActionButton(
+                            label = "Import from file…",
+                            icon = Icons.Default.FileOpen,
+                            enabled = vm.collectionImportStatus != CollectionImportStatus.IMPORTING,
+                            onClick = {
+                                platformActions.pickCsvFile()?.let { vm.importCollectionFromFile(it) }
+                            },
+                        )
+                    }
+
+                    when (vm.collectionImportStatus) {
+                        CollectionImportStatus.IMPORTING -> Text("Importing…", fontSize = 11.sp, color = OnSurfaceVariant)
+                        CollectionImportStatus.ERROR -> Text(
+                            vm.collectionImportError ?: "Import failed", fontSize = 11.sp, color = ErrorColor,
+                        )
+                        CollectionImportStatus.IDLE -> {
+                            val lastImportedAt = vm.collectionLastImportedAt
+                            Text(
+                                if (lastImportedAt == null) "Never imported" else
+                                    "Last imported ${java.text.SimpleDateFormat("d MMM yyyy, HH:mm").format(java.util.Date(lastImportedAt))} — ${ownedCount.size} cards owned",
+                                fontSize = 11.sp, color = OnSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+
+                    OptionsSectionHeader("Which groups count as owned")
+                    if (groups.isEmpty()) {
+                        Text(
+                            "Import a collection above to choose which binders/lists count as owned. " +
+                                "Everything is included by default -- nothing is auto-excluded.",
+                            fontSize = 11.sp, color = OnSurfaceVariant,
+                        )
+                    } else {
+                        val listGroups = groups.filter { it.type.equals("list", ignoreCase = true) }
+                        val binderGroups = groups.filter { it.type.equals("binder", ignoreCase = true) }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (listGroups.isNotEmpty()) {
+                                val allListsIncluded = listGroups.all { it.included }
+                                DialogActionButton(
+                                    label = if (allListsIncluded) "Exclude lists" else "Include lists",
+                                    icon = if (allListsIncluded) Icons.Default.RemoveDone else Icons.Default.DoneAll,
+                                    enabled = true,
+                                    onClick = { vm.setCollectionGroupsOfTypeIncluded("list", !allListsIncluded) },
+                                )
+                            }
+                            if (binderGroups.isNotEmpty()) {
+                                val allBindersIncluded = binderGroups.all { it.included }
+                                DialogActionButton(
+                                    label = if (allBindersIncluded) "Exclude binders" else "Include binders",
+                                    icon = if (allBindersIncluded) Icons.Default.RemoveDone else Icons.Default.DoneAll,
+                                    enabled = true,
+                                    onClick = { vm.setCollectionGroupsOfTypeIncluded("binder", !allBindersIncluded) },
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Column(
+                            Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()),
+                            verticalArrangement = Arrangement.spacedBy(2.dp),
+                        ) {
+                            groups.forEach { group ->
+                                OptionToggle(
+                                    checked = group.included,
+                                    label = "${group.name}  ·  ${group.type}",
+                                    sublabel = "${group.cardCount} distinct card${if (group.cardCount == 1) "" else "s"}",
+                                    onChange = { vm.setCollectionGroupIncluded(group.name, it) },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DialogActionButton(label: String, icon: ImageVector, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .height(28.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+            .clickable(enabled = enabled) { onClick() }
+            .padding(horizontal = 10.dp),
+    ) {
+        Icon(icon, null, tint = if (enabled) OnSurfaceVariant else OnSurfaceVariant.copy(alpha = 0.4f), modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(label, fontSize = 12.sp, color = if (enabled) OnSurfaceVariant else OnSurfaceVariant.copy(alpha = 0.4f))
+    }
+}
+
 @Composable
 private fun OptionsSectionHeader(title: String) {
     Text(
@@ -2815,6 +3009,7 @@ private fun CardSection(
     excludedFromOrder: Boolean = false,
     onToggleExcludeFromOrder: () -> Unit = {},
     onRefresh: () -> Unit = {},
+    owned: Boolean = false,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -2853,6 +3048,10 @@ private fun CardSection(
                 buildString { append("Matches: \""); append(card); append('"') },
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
             )
+            if (owned) {
+                Spacer(Modifier.width(6.dp))
+                IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 14.dp)
+            }
             Spacer(Modifier.width(8.dp))
             CountBadge("${allListings.size}")
             if (isSearching || isRefreshing) {
@@ -3062,6 +3261,10 @@ private fun HeaderCell(text: String, modifier: Modifier, alignEnd: Boolean = fal
             color = OnSurfaceVariant, letterSpacing = 0.8.sp)
     }
 }
+
+// Exact-match (case-insensitive/trim-normalised only, never fuzzy) lookup against the imported
+// collection's card names -- see collection.CollectionImportEngine.ownedCardNames.
+private fun Set<String>.ownsCard(card: String): Boolean = card.trim().lowercase() in this
 
 // Standard icon button with a tooltip on hover. All interactive icons in the UI should use
 // this so their purpose is always discoverable. Pass onClick = null for display-only icons.
@@ -3358,6 +3561,7 @@ private fun CardSummaryPanel(
     onFilterChange: (String) -> Unit,
     showCardOnHover: Boolean = false,
     onShowCardOnHoverChange: (Boolean) -> Unit = {},
+    ownedCards: Set<String> = emptySet(),
 ) {
     val summaryFilter = filter
     val filterQ = summaryFilter.trim().lowercase()
@@ -3475,6 +3679,7 @@ private fun CardSummaryPanel(
                                         onClick = { onCardClick(card) },
                                         includePartialMatches = includePartialMatches,
                                         showCardOnHover = showCardOnHover,
+                                        owned = ownedCards.ownsCard(card),
                                     )
                                 }
                                 if (pair.size == 1) Spacer(Modifier.weight(1f))
@@ -3497,6 +3702,7 @@ private fun CardSummaryEntry(
     onClick: () -> Unit,
     includePartialMatches: Boolean = false,
     showCardOnHover: Boolean = false,
+    owned: Boolean = false,
 ) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
@@ -3547,6 +3753,10 @@ private fun CardSummaryEntry(
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (owned) {
+                Spacer(Modifier.width(4.dp))
+                IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 12.dp)
+            }
             Spacer(Modifier.width(6.dp))
             Text(
                 statusText.uppercase(),
@@ -3611,10 +3821,14 @@ private fun OrderListsPane(vm: SearchViewModel) {
     val priceMax = vm.orderPriceFilter.toDoubleOrNull()
     val orderListState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val ownedCards by vm.ownedCardNames.collectAsState()
 
-    // Recomputed automatically whenever results stream in (reads the observable list).
-    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
-    val fewest   by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    // Recomputed automatically whenever results stream in, or the owned-card set / exclude-owned
+    // toggle changes (all read as Compose state directly inside the block, same as vm.searchedCards/
+    // vm.results below, so derivedStateOf's dependency tracking picks them up).
+    fun cardsForPlan() = if (vm.excludeOwnedFromOrders) vm.searchedCards.filterNot { ownedCards.ownsCard(it) } else vm.searchedCards
+    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    val fewest   by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
@@ -3689,6 +3903,29 @@ private fun OrderListsPane(vm: SearchViewModel) {
                 )
             }
             Spacer(Modifier.weight(1f))
+            // Exclude-owned filter
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        vm.excludeOwnedFromOrders = !vm.excludeOwnedFromOrders
+                    }
+                    .padding(horizontal = 4.dp),
+            ) {
+                Text(
+                    "Exclude owned",
+                    fontSize = 10.sp,
+                    color = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
+                )
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    if (vm.excludeOwnedFromOrders) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                    contentDescription = null,
+                    tint = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(14.dp))
             // Price filter
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -3730,10 +3967,10 @@ private fun OrderListsPane(vm: SearchViewModel) {
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             items(plan.storeOrders, key = { it.store }) { so ->
-                StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, vm.hoverOnThumbnailOnly)
+                StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, vm.hoverOnThumbnailOnly, ownedCards)
             }
             if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
-                item { UncoveredCard(plan.uncoveredCards) }
+                item { UncoveredCard(plan.uncoveredCards, ownedCards) }
             }
             item { Spacer(Modifier.height(8.dp)) }
         }
@@ -3762,7 +3999,7 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 }
 
 @Composable
-private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, excludedCards: MutableMap<String, Unit>, priceMax: Double? = null, hoverOnThumbnailOnly: Boolean = false) {
+private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, excludedCards: MutableMap<String, Unit>, priceMax: Double? = null, hoverOnThumbnailOnly: Boolean = false, ownedCards: Set<String> = emptySet()) {
     val activeLines  = order.lines
         .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
         .distinctBy { it.listing.variantId ?: it.listing.url }
@@ -3955,6 +4192,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                         }
                     },
                     hoverOnThumbnailOnly = hoverOnThumbnailOnly,
+                    owned = ownedCards.ownsCard(line.card),
                 )
             }
         }
@@ -3962,7 +4200,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
 }
 
 @Composable
-private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Boolean, onToggle: (Boolean) -> Unit, hoverOnThumbnailOnly: Boolean = false) {
+private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Boolean, onToggle: (Boolean) -> Unit, hoverOnThumbnailOnly: Boolean = false, owned: Boolean = false) {
     val density = LocalDensity.current
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -3999,8 +4237,14 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
             // Content dims when unchecked
             Box(Modifier.width(COL_THUMB).alpha(contentAlpha).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) { CardThumbnail(imagePath, dimmed = false) }
             Column(Modifier.weight(1f).padding(end = 12.dp).alpha(contentAlpha)) {
-                Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (owned) {
+                        Spacer(Modifier.width(6.dp))
+                        IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 13.dp)
+                    }
+                }
                 line.listing.title?.takeIf { it != line.card }?.let {
                     Text(it, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -4045,8 +4289,9 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UncoveredCard(cards: List<String>) {
+private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySet()) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -4061,7 +4306,20 @@ private fun UncoveredCard(cards: List<String>) {
                     fontWeight = FontWeight.SemiBold, color = ErrorColor)
             }
             Spacer(Modifier.height(6.dp))
-            Text(cards.joinToString(", "), fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                cards.forEachIndexed { i, card ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (i < cards.lastIndex) "$card," else card,
+                            fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f),
+                        )
+                        if (ownedCards.ownsCard(card)) {
+                            Spacer(Modifier.width(3.dp))
+                            IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 12.dp)
+                        }
+                    }
+                }
+            }
         }
     }
 }

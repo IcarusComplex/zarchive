@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowRight
@@ -45,6 +46,11 @@ import ui.theme.SurfaceContainerHighest
 import ui.theme.SurfaceContainerLow
 import ui.theme.Tertiary
 
+// Exact-match (case-insensitive/trim-normalised only, never fuzzy) lookup against the imported
+// collection's card names -- see collection.CollectionImportEngine.ownedCardNames. Not private:
+// reused from ResultsScreen.kt and OrderListsScreen.kt.
+fun Set<String>.ownsCard(card: String): Boolean = card.trim().lowercase() in this
+
 // Ported from ui/App.kt's CardSummaryPanel/CardSummaryEntry (desktop) — the hover-preview
 // "showCardOnHover" toggle doesn't apply to touch, so it's dropped; instead each entry gets a small
 // tappable thumbnail chip (which desktop's row-only-on-hover design didn't need) wired to
@@ -62,6 +68,7 @@ fun CardSummaryPanel(
     onExpandedChange: (Boolean) -> Unit,
     filter: String,
     onFilterChange: (String) -> Unit,
+    ownedCards: Set<String> = emptySet(),
 ) {
     val filterQ = filter.trim().lowercase()
     val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
@@ -137,6 +144,7 @@ fun CardSummaryPanel(
                                 onClick = { onCardClick(card) },
                                 onImageTap = onImageTap,
                                 includePartialMatches = includePartialMatches,
+                                owned = ownedCards.ownsCard(card),
                             )
                         }
                     }
@@ -155,6 +163,7 @@ private fun CardSummaryEntry(
     onClick: () -> Unit,
     onImageTap: (String) -> Unit,
     includePartialMatches: Boolean,
+    owned: Boolean = false,
 ) {
     val listings = preferExactMatches(card, results.filter { it.title != null }, exactOnly = !includePartialMatches)
     val hasInStock = listings.any { it.available != false }
@@ -189,6 +198,10 @@ private fun CardSummaryEntry(
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
+        if (owned) {
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(12.dp))
+        }
         Spacer(Modifier.width(6.dp))
         Text(
             statusText.uppercase(),

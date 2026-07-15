@@ -76,18 +76,18 @@ suspend fun downloadDriveFile(accessToken: String, fileId: String): String? {
     }.also { client.close() }.getOrNull()
 }
 
-/** Creates a new JSON file with [content] inside folder [folderId]. */
-suspend fun createDriveFile(accessToken: String, folderId: String, name: String, content: String): DriveFileMeta? {
+/** Creates a new file with [content] inside folder [folderId]. Defaults to JSON; pass [mimeType] for other content (e.g. CSV). */
+suspend fun createDriveFile(accessToken: String, folderId: String, name: String, content: String, mimeType: String = "application/json"): DriveFileMeta? {
     val client = HttpClient(OkHttp)
     return runCatching {
         val boundary = "zarchive_${System.nanoTime()}"
-        val metadata = """{"name":"${escapeJson(name)}","parents":["$folderId"],"mimeType":"application/json"}"""
+        val metadata = """{"name":"${escapeJson(name)}","parents":["$folderId"],"mimeType":"$mimeType"}"""
         val body = buildString {
             append("--").append(boundary).append("\r\n")
             append("Content-Type: application/json; charset=UTF-8\r\n\r\n")
             append(metadata)
             append("\r\n--").append(boundary).append("\r\n")
-            append("Content-Type: application/json; charset=UTF-8\r\n\r\n")
+            append("Content-Type: $mimeType; charset=UTF-8\r\n\r\n")
             append(content)
             append("\r\n--").append(boundary).append("--")
         }
@@ -102,12 +102,12 @@ suspend fun createDriveFile(accessToken: String, folderId: String, name: String,
 }
 
 /** Overwrites [fileId]'s content in place (metadata/parents untouched). Returns the new modifiedTime. */
-suspend fun updateDriveFile(accessToken: String, fileId: String, content: String): DriveFileMeta? {
+suspend fun updateDriveFile(accessToken: String, fileId: String, content: String, mimeType: String = "application/json"): DriveFileMeta? {
     val client = HttpClient(OkHttp)
     return runCatching {
         val resp = client.patch("$UPLOAD_URL/$fileId?uploadType=media") {
             bearerAuth(accessToken)
-            contentType(ContentType.Application.Json)
+            contentType(ContentType.parse(mimeType))
             setBody(content)
         }
         if (!resp.status.isSuccess()) return@runCatching null

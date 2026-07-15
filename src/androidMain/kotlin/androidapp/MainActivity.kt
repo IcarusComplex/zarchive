@@ -58,6 +58,7 @@ class MainActivity : ComponentActivity() {
                 SearchViewModel(
                     searchListRepo = AndroidSearchListRepo(),
                     searchResultRepo = AndroidSearchResultRepo(),
+                    collectionRepo = data.AndroidCollectionRepo(),
                     platformActions = PlatformActions(),
                     // Phase 11: a persistent, application-scoped WebView-based searcher for The
                     // Warren, replacing desktop's Playwright-driven BrowserSearcher.

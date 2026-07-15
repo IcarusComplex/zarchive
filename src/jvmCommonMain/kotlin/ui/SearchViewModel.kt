@@ -1,6 +1,9 @@
 package ui
 
 import androidx.compose.runtime.*
+import collection.CollectionImportEngine
+import data.CollectionGroupSummary
+import data.CollectionRepo
 import data.SearchListRepo
 import data.SearchResult
 import data.SearchResultRepo
@@ -8,6 +11,7 @@ import data.STORES
 import data.SettingsStore
 import data.luckshackSearchUrl
 import engine.runSearch
+import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
@@ -24,12 +28,14 @@ import sync.SyncEngine
 enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND, CHECK_FAILED }
 enum class SyncStatus { DISCONNECTED, IDLE, SYNCING, SYNCED, ERROR }
+enum class CollectionImportStatus { IDLE, IMPORTING, ERROR }
 
 private const val SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000L
 
 class SearchViewModel(
     private val searchListRepo: SearchListRepo,
     private val searchResultRepo: SearchResultRepo,
+    private val collectionRepo: CollectionRepo,
     private val platformActions: PlatformActions,
     // Long-lived browser-backed searcher for The Warren (Playwright on desktop, WebView on
     // Android from Phase 11) so its session survives between search clicks. Null skips
@@ -77,6 +83,13 @@ class SearchViewModel(
     var includePartialMatches: Boolean
         get() = includePartialMatchesState
         set(value) { includePartialMatchesState = value; SettingsStore.setSettingBoolean("includePartialMatches", value) }
+
+    // Order-list filter: skip cards already in the imported collection when building a buying
+    // plan, since there's no need to order what you already own.
+    private var excludeOwnedFromOrdersState by mutableStateOf(SettingsStore.getSettingBoolean("orders.excludeOwned", false))
+    var excludeOwnedFromOrders: Boolean
+        get() = excludeOwnedFromOrdersState
+        set(value) { excludeOwnedFromOrdersState = value; SettingsStore.setSettingBoolean("orders.excludeOwned", value) }
 
     val results = mutableStateListOf<SearchResult>()
 
@@ -550,6 +563,56 @@ class SearchViewModel(
         if (syncStatus != SyncStatus.SYNCING) {
             syncStatus = if (syncEngine.isConnected) SyncStatus.IDLE else SyncStatus.DISCONNECTED
         }
+    }
+
+    // ── Collection import ───────────────────────────────────────────────────────
+    // Separate, explicitly-triggered feature (Settings -> Collection Import) -- never runs as
+    // part of runSync() above. See collection.CollectionImportEngine's class doc for why.
+    private val collectionImportEngine = CollectionImportEngine(collectionRepo, syncEngine)
+
+    val ownedCardNames: StateFlow<Set<String>> get() = collectionImportEngine.ownedCardNames
+    val collectionGroups: StateFlow<List<CollectionGroupSummary>> get() = collectionImportEngine.groups
+    val collectionFormatLabel: String get() = collectionImportEngine.format.label
+    val collectionDriveFileName: String get() = collectionImportEngine.driveFileName
+    val collectionLastImportedAt: Long? get() = collectionImportEngine.lastImportedAt
+
+    var collectionImportStatus by mutableStateOf(CollectionImportStatus.IDLE)
+        private set
+    var collectionImportError by mutableStateOf<String?>(null)
+        private set
+
+    fun importCollectionFromDrive() {
+        if (!syncEngine.isConnected) return
+        collectionImportStatus = CollectionImportStatus.IMPORTING
+        collectionImportError = null
+        scope.launch(Dispatchers.IO) {
+            val result = collectionImportEngine.importFromDrive()
+            withContext(Dispatchers.Main) {
+                result.onSuccess { collectionImportStatus = CollectionImportStatus.IDLE }
+                    .onFailure { e -> collectionImportStatus = CollectionImportStatus.ERROR; collectionImportError = e.message }
+            }
+        }
+    }
+
+    fun importCollectionFromFile(file: File) {
+        collectionImportStatus = CollectionImportStatus.IMPORTING
+        collectionImportError = null
+        scope.launch(Dispatchers.IO) {
+            val result = runCatching { file.readText() }
+                .fold(onSuccess = { collectionImportEngine.importFromText(it, alsoUploadToDrive = true) }, onFailure = { Result.failure(it) })
+            withContext(Dispatchers.Main) {
+                result.onSuccess { collectionImportStatus = CollectionImportStatus.IDLE }
+                    .onFailure { e -> collectionImportStatus = CollectionImportStatus.ERROR; collectionImportError = e.message }
+            }
+        }
+    }
+
+    fun setCollectionGroupIncluded(groupName: String, included: Boolean) {
+        collectionImportEngine.setGroupIncluded(groupName, included)
+    }
+
+    fun setCollectionGroupsOfTypeIncluded(groupType: String, included: Boolean) {
+        collectionImportEngine.setGroupsOfTypeIncluded(groupType, included)
     }
 
     // One-time nudge shown the first time ever a user saves a list, if they haven't already

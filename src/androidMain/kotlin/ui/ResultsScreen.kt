@@ -25,6 +25,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -71,6 +72,7 @@ import ui.theme.SurfaceContainer
 import ui.theme.SurfaceContainerHighest
 import ui.theme.SurfaceContainerLow
 import ui.theme.SurfaceContainerLowest
+import ui.theme.Tertiary
 
 // Ported from ui/App.kt's SearchResultsTab -> CardSection -> ListingTable/ListingRow chain
 // (desktop). Desktop's wide 7-column table (thumb/name/store/status/price/pin/link, sized for a
@@ -331,6 +333,7 @@ fun CardSection(
     onRefresh: () -> Unit,
     onOpenUrl: (String) -> Unit,
     onCardTap: (SearchResult) -> Unit,
+    owned: Boolean = false,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -369,6 +372,10 @@ fun CardSection(
                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
                 )
+                if (owned) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(14.dp))
+                }
                 Spacer(Modifier.width(8.dp))
                 CountBadge("${allListings.size}")
                 if (isSearching || isRefreshing) {

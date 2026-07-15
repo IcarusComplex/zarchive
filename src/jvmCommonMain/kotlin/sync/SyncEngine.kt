@@ -65,7 +65,16 @@ class SyncEngine(
         SettingsStore.setSetting(KEY_FOLDER_ID, "")
     }
 
-    suspend fun syncNow(): Result<Unit> {
+    /** A resolved, ready-to-use (access token, shared "ZArchive" Drive folder id) pair. */
+    data class DriveAccess(val accessToken: String, val folderId: String)
+
+    /**
+     * Refreshes the access token and resolves the shared "ZArchive" Drive folder, caching the
+     * folder id in settings. Reused by [syncNow] and by `collection.CollectionImportEngine` (a
+     * separate, explicitly-triggered feature -- see its own class doc) so collection import rides
+     * on the same connected Google account without a second OAuth flow.
+     */
+    suspend fun resolveAccess(): Result<DriveAccess> {
         val refreshToken = SettingsStore.getSetting(KEY_REFRESH_TOKEN, "").ifBlank { null }
             ?: return Result.failure(Exception("Not connected"))
         val tokens = refreshGoogleAccessToken(oauthFlow.refreshClientId, oauthFlow.refreshClientSecret, refreshToken)
@@ -77,6 +86,14 @@ class SyncEngine(
                 SettingsStore.setSetting(KEY_FOLDER_ID, it)
             }
             ?: return Result.failure(Exception("Couldn't access the Drive folder"))
+
+        return Result.success(DriveAccess(accessToken, folderId))
+    }
+
+    suspend fun syncNow(): Result<Unit> {
+        val access = resolveAccess().getOrElse { return Result.failure(it) }
+        val accessToken = access.accessToken
+        val folderId = access.folderId
 
         // Bounded retries against the rare case where the blob changes on Drive between our
         // download and our upload (two devices syncing within the same few-hundred-ms window).

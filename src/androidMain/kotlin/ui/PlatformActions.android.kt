@@ -31,6 +31,9 @@ actual class PlatformActions actual constructor() {
     actual val crashLogFile: File
         get() = PlatformPaths.debugDumpDir.resolve("crash.log")
 
+    // No local-file-picker UI on Android for collection import -- Drive is the only source there.
+    actual fun pickCsvFile(): File? = null
+
     // Android's package installer handles the replace-over-existing-install flow itself once
     // handed a same-signature APK -- a real simplification versus desktop's swap scripts. The
     // system also handles the "allow installs from this source" permission prompt when needed.

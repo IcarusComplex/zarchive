@@ -153,3 +153,22 @@ VALUES (?, ?, ?, ?, ?, ?);
 updateThrottleRule:
 UPDATE cf_throttle_rules SET tier = ?, tier_large = ?, last_hit_at = ?, last_hit_cards = ?
 WHERE base_url = ?;
+
+-- A full replace on every collection import (see data/CollectionRepo.kt in commonMain) -- no
+-- sync_id/deleted, this never round-trips through Google Drive's list/result merge.
+CREATE TABLE collection_rows (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    group_name TEXT NOT NULL,
+    group_type TEXT NOT NULL,
+    card_name TEXT NOT NULL,
+    quantity INTEGER NOT NULL
+);
+
+selectAllCollectionRows:
+SELECT * FROM collection_rows;
+
+clearCollectionRows:
+DELETE FROM collection_rows;
+
+insertCollectionRow:
+INSERT INTO collection_rows(group_name, group_type, card_name, quantity) VALUES (?, ?, ?, ?);

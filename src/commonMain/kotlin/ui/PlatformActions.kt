@@ -16,6 +16,12 @@ expect class PlatformActions() {
     fun copyToClipboard(text: String)
     val crashLogFile: File
 
+    /**
+     * Opens a native file picker filtered to `.csv`, for local collection-import (desktop only --
+     * Android has no equivalent UI affordance for this and returns null unconditionally).
+     */
+    fun pickCsvFile(): File?
+
     fun canInstallUpdate(): Boolean
 
     /**

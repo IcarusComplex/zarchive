@@ -46,6 +46,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -121,6 +122,7 @@ fun AndroidApp(
     var showListsDialog by remember { mutableStateOf(false) }
     var showResultsDialog by remember { mutableStateOf(false) }
     var showSearchOptionsDialog by remember { mutableStateOf(false) }
+    val ownedCards by vm.ownedCardNames.collectAsState()
     var showCrashDialog by remember { mutableStateOf(pendingCrash != null) }
     val platformActions = remember { PlatformActions() }
     val resultsListState = rememberLazyListState()
@@ -371,6 +373,7 @@ fun AndroidApp(
                                         onExpandedChange = { summaryExpanded = it },
                                         filter = summaryFilter,
                                         onFilterChange = { summaryFilter = it },
+                                        ownedCards = ownedCards,
                                     )
                                     Spacer(Modifier.height(10.dp))
                                 }
@@ -390,6 +393,7 @@ fun AndroidApp(
                                     onRefresh = { vm.refreshCard(card) },
                                     onOpenUrl = platformActions::openUrl,
                                     onCardTap = { detailResultAllowPin = true; detailResult = it },
+                                    owned = ownedCards.ownsCard(card),
                                 )
                                 Spacer(Modifier.height(12.dp))
                             }

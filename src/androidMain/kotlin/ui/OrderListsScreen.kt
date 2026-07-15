@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,6 +20,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.CheckBoxOutlineBlank
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterList
@@ -31,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -61,6 +67,7 @@ import ui.theme.Primary
 import ui.theme.Secondary
 import ui.theme.SurfaceContainerLow
 import ui.theme.SurfaceContainerLowest
+import ui.theme.Tertiary
 
 // Ported from ui/App.kt's OrderListsPane/PlanStat/StoreOrderCard/OrderLineRow/UncoveredCard
 // (desktop), built on the already-common data/OrderOptimizer.kt (Phase 2). Desktop's sequential
@@ -82,9 +89,14 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
     val unchecked = vm.uncheckedOrderLines
     val excludedCards = vm.excludedCards
     val priceMax = vm.orderPriceFilter.toDoubleOrNull()
+    val ownedCards by vm.ownedCardNames.collectAsState()
 
-    val cheapest by remember { derivedStateOf { cheapestPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
-    val fewest by remember { derivedStateOf { fewestStoresPlan(vm.searchedCards, vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    // cardsForPlan() reads vm.excludeOwnedFromOrders/ownedCards/vm.searchedCards as Compose state
+    // directly inside the derivedStateOf block below, same as vm.results, so toggling "exclude
+    // owned" or a fresh collection import both trigger a recompute.
+    fun cardsForPlan() = if (vm.excludeOwnedFromOrders) vm.searchedCards.filterNot { ownedCards.ownsCard(it) } else vm.searchedCards
+    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    val fewest by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
     val anyInStock = cheapest.storeOrders.isNotEmpty()
 
@@ -145,6 +157,26 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
+                .clickable { vm.excludeOwnedFromOrders = !vm.excludeOwnedFromOrders }
+                .padding(vertical = 4.dp),
+        ) {
+            Text(
+                "Exclude owned",
+                fontSize = 11.sp,
+                color = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (vm.excludeOwnedFromOrders) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                tint = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(4.dp))
                 .background(SurfaceContainerLow)
@@ -176,11 +208,11 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
         Spacer(Modifier.height(12.dp))
 
         plan.storeOrders.forEach { so ->
-            StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, onOpenUrl, onImageTap, onCardTap)
+            StoreOrderCard(so, vm.images, unchecked, excludedCards, priceMax, onOpenUrl, onImageTap, onCardTap, ownedCards)
             Spacer(Modifier.height(12.dp))
         }
         if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
-            UncoveredCard(plan.uncoveredCards)
+            UncoveredCard(plan.uncoveredCards, ownedCards)
         }
     }
 }
@@ -204,6 +236,7 @@ private fun StoreOrderCard(
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
     onCardTap: (SearchResult) -> Unit,
+    ownedCards: Set<String> = emptySet(),
 ) {
     val activeLines = order.lines
         .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
@@ -267,6 +300,7 @@ private fun StoreOrderCard(
                     onOpenUrl = onOpenUrl,
                     onImageTap = onImageTap,
                     onCardTap = onCardTap,
+                    owned = ownedCards.ownsCard(line.card),
                 )
             }
         }
@@ -282,6 +316,7 @@ private fun OrderLineRow(
     onOpenUrl: (String) -> Unit,
     onImageTap: (String) -> Unit,
     onCardTap: (SearchResult) -> Unit,
+    owned: Boolean = false,
 ) {
     val contentAlpha = if (checked) 1f else 0.4f
     Row(
@@ -303,7 +338,13 @@ private fun OrderLineRow(
         }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f).alpha(contentAlpha)) {
-            Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (owned) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(13.dp))
+                }
+            }
             line.listing.title?.takeIf { it != line.card }?.let {
                 Text(it, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
@@ -320,8 +361,9 @@ private fun OrderLineRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UncoveredCard(cards: List<String>) {
+private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySet()) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -335,7 +377,20 @@ private fun UncoveredCard(cards: List<String>) {
                 Text("Not available anywhere (${cards.size})", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
             }
             Spacer(Modifier.height(6.dp))
-            Text(cards.joinToString(", "), fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                cards.forEachIndexed { i, card ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            if (i < cards.lastIndex) "$card," else card,
+                            fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f),
+                        )
+                        if (ownedCards.ownsCard(card)) {
+                            Spacer(Modifier.width(3.dp))
+                            Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(12.dp))
+                        }
+                    }
+                }
+            }
         }
     }
 }

@@ -72,6 +72,17 @@ object CfThrottleRules : Table("cf_throttle_rules") {
 // engine.SearchEngine, which moved to jvmCommonMain in Phase 3) — same `data` package, no import
 // needed here.
 
+// A full replace on every collection import (see data/CollectionRepo.kt) — no sync_id/deleted,
+// this never round-trips through Google Drive's list/result merge.
+object CollectionRows : Table("collection_rows") {
+    val id        = integer("id").autoIncrement()
+    val groupName = text("group_name")
+    val groupType = text("group_type")
+    val cardName  = text("card_name")
+    val quantity  = integer("quantity")
+    override val primaryKey = PrimaryKey(id)
+}
+
 // ── Singleton ──────────────────────────────────────────────────────────────────
 
 object AppDatabase {
@@ -85,7 +96,7 @@ object AppDatabase {
         )
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
-                Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots,
+                Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots, CollectionRows,
             )
         }
         migrateCfThresholdV2()
