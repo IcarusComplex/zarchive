@@ -48,6 +48,17 @@ class CardImageService : AutoCloseable {
     // Loaded lazily and cached at ~/.zarchive/sets.json (refreshed every 7 days).
     private val setIndex = ScryfallSetIndex()
 
+    // Caps + lightly retries concurrent Scryfall API calls across this instance. resolveImages()
+    // is invoked once per store's result batch as they stream in (SearchViewModel.launchCardSearch
+    // launches a fresh coroutine per onResults call), so without this, ~19 stores returning results
+    // in a short window can fire many simultaneous requests and trip Scryfall's rate limiting; a
+    // bare `runCatching { ... }.getOrNull()` with no retry then permanently drops that card's art
+    // for the rest of the search -- reported as "sometimes images don't load".
+    private val apiSemaphore = Semaphore(3)
+    private suspend fun <T> scryfallCall(block: suspend () -> T): T? = apiSemaphore.withPermit {
+        runCatching { block() }.getOrNull() ?: run { delay(500); runCatching { block() }.getOrNull() }
+    }
+
     // Treatment keyword regex → Scryfall search filter
     private val TREATMENT_FILTERS = listOf(
         Regex("""(?i)\bshowcase\b""")                         to "frame:showcase",
@@ -233,12 +244,12 @@ class CardImageService : AutoCloseable {
                 })
             }.toString()
 
-            val resp = runCatching {
+            val resp = scryfallCall {
                 client.post("https://api.scryfall.com/cards/collection") {
                     contentType(ContentType.Application.Json)
                     setBody(requestBody)
                 }.bodyAsText()
-            }.getOrNull()
+            }
 
             val byNameSet = mutableMapOf<Pair<String, String?>, String>()
             if (resp != null) {
@@ -285,12 +296,12 @@ class CardImageService : AutoCloseable {
                             }
                         })
                     }.toString()
-                    val childResp = runCatching {
+                    val childResp = scryfallCall {
                         client.post("https://api.scryfall.com/cards/collection") {
                             contentType(ContentType.Application.Json)
                             setBody(childBody)
                         }.bodyAsText()
-                    }.getOrNull()
+                    }
                     if (childResp != null) {
                         runCatching { Json.parseToJsonElement(childResp).jsonObject["data"]?.jsonArray }
                             .getOrNull()?.forEach { entry ->
@@ -353,7 +364,7 @@ class CardImageService : AutoCloseable {
             append(" "); append(scryfallFilter)
         }
         val url = "https://api.scryfall.com/cards/search?q=${URLEncoder.encode(q, "UTF-8")}&unique=art"
-        val resp = runCatching { client.get(url).bodyAsText() }.getOrNull() ?: return null
+        val resp = scryfallCall { client.get(url).bodyAsText() } ?: return null
         val obj  = runCatching { Json.parseToJsonElement(resp).jsonObject }.getOrNull() ?: return null
         if (obj["object"]?.jsonPrimitive?.contentOrNull == "error") return null
         return obj["data"]?.jsonArray?.firstOrNull()?.jsonObject?.let { imageUrlOf(it) }
@@ -367,7 +378,7 @@ class CardImageService : AutoCloseable {
         else
             "!\"$name\" e:\"$setName\""
         val url = "https://api.scryfall.com/cards/search?q=${URLEncoder.encode(q, "UTF-8")}"
-        val resp = runCatching { client.get(url).bodyAsText() }.getOrNull() ?: return null
+        val resp = scryfallCall { client.get(url).bodyAsText() } ?: return null
         val obj  = runCatching { Json.parseToJsonElement(resp).jsonObject }.getOrNull() ?: return null
         if (obj["object"]?.jsonPrimitive?.contentOrNull == "error") return null
         return obj["data"]?.jsonArray?.firstOrNull()?.jsonObject?.let { imageUrlOf(it) }
@@ -375,7 +386,7 @@ class CardImageService : AutoCloseable {
 
     private suspend fun fuzzyResolve(name: String): String? {
         val url  = "https://api.scryfall.com/cards/named?fuzzy=" + URLEncoder.encode(name, "UTF-8")
-        val resp = runCatching { client.get(url).bodyAsText() }.getOrNull() ?: return null
+        val resp = scryfallCall { client.get(url).bodyAsText() } ?: return null
         val obj  = runCatching { Json.parseToJsonElement(resp).jsonObject }.getOrNull() ?: return null
         if (obj["object"]?.jsonPrimitive?.contentOrNull == "error") return null
         return imageUrlOf(obj)

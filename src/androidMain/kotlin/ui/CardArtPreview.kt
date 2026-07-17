@@ -11,6 +11,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -126,29 +127,42 @@ fun CardThumbnail(
 
 @Composable
 fun ShimmerOverlay() {
-    val transition = rememberInfiniteTransition(label = "shimmer")
-    val progress by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 800, easing = LinearEasing)),
-        label = "shimmerProgress",
-    )
-    val sweep = progress * 900f
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(
-                        Color.White.copy(alpha = 0f),
-                        Color.White.copy(alpha = 0.06f),
-                        Color.White.copy(alpha = 0f),
+    // Sized to the placeholder's actual pixel dimensions (BoxWithConstraints), not a fixed 900px
+    // sweep -- that hard-coded distance assumed a ~260x364 card and only traversed part of any
+    // smaller thumbnail before the infinite-repeat restart snapped it back, reading as a jump
+    // rather than a clean loop.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val widthPx = constraints.maxWidth.toFloat()
+        val heightPx = constraints.maxHeight.toFloat()
+        val bandWidth = widthPx * 0.5f
+        // Total x-travel so the band starts fully off the top-left corner and ends fully off the
+        // bottom-right corner -- it's invisible (TileMode.Clamp's transparent edge colors) at both
+        // ends of the loop, so the instant restart never has anything visible to jump.
+        val travel = widthPx + 2f * bandWidth
+        val transition = rememberInfiniteTransition(label = "shimmer")
+        val progress by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(animation = tween(durationMillis = 900, easing = LinearEasing)),
+            label = "shimmerProgress",
+        )
+        val sweepX = progress * travel - bandWidth
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.linearGradient(
+                        colors = listOf(
+                            Color.White.copy(alpha = 0f),
+                            Color.White.copy(alpha = 0.06f),
+                            Color.White.copy(alpha = 0f),
+                        ),
+                        start = Offset(sweepX - bandWidth, 0f),
+                        end = Offset(sweepX, heightPx),
                     ),
-                    start = Offset(sweep - 250f, 0f),
-                    end = Offset(sweep, 400f),
                 ),
-            ),
-    )
+        )
+    }
 }
 
 // MTG card aspect ratio (2.5in : 3.5in = 5:7), matching the original fixed 260x364 size.
