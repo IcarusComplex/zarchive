@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
@@ -39,7 +40,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -51,11 +55,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import data.KNOWN_PLATFORMS
 import data.OrderLine
+import data.Platform
 import data.SearchResult
 import data.StoreOrder
 import data.cheapestPlan
 import data.fewestStoresPlan
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import ui.theme.ErrorColor
 import ui.theme.HeaderBg
 import ui.theme.Mono
@@ -70,10 +78,10 @@ import ui.theme.SurfaceContainerLowest
 import ui.theme.Tertiary
 
 // Ported from ui/App.kt's OrderListsPane/PlanStat/StoreOrderCard/OrderLineRow/UncoveredCard
-// (desktop), built on the already-common data/OrderOptimizer.kt (Phase 2). Desktop's sequential
-// "add all to cart" browser automation (Shopify/WooCommerce/BigCommerce/PrestaShop-specific,
-// showCart/cartOnClick in StoreOrderCard) is explicitly NOT ported per the user's decision --
-// Android core parity only offers opening a single listing or a single store at a time.
+// (desktop), built on the already-common data/OrderOptimizer.kt (Phase 2). StoreOrderCard's
+// showCart/cartOnClick automation (Shopify/WooCommerce/BigCommerce/PrestaShop) mirrors desktop's
+// logic exactly (same data.Platform/data.KNOWN_PLATFORMS lookups), gated behind the same
+// confirm-before-acting dialog added on both platforms -- see ConfirmDialog usage below.
 
 private fun formatZar(v: Double): String {
     val totalCents = Math.round(v * 100)
@@ -132,28 +140,10 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
         Text(strategy.blurb, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
         Spacer(Modifier.height(10.dp))
 
-        if (!anyInStock) {
-            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    if (vm.isSearching) "No in-stock cards yet — building the list as results arrive…"
-                    else "No in-stock listings to build an order from.",
-                    color = OnSurfaceVariant, fontSize = 13.sp,
-                )
-            }
-            return
-        }
-
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
-            PlanStat("$activeStores", if (activeStores == 1) "store" else "stores")
-            Spacer(Modifier.width(16.dp))
-            PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
-            Spacer(Modifier.width(16.dp))
-            PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
-            if (vm.isSearching) {
-                Spacer(Modifier.weight(1f))
-                CircularProgressIndicator(Modifier.size(12.dp), color = Primary, strokeWidth = 1.5.dp)
-            }
-        }
+        // Exclude-owned filter -- deliberately rendered here, *before* the anyInStock early-return
+        // below. Excluding owned cards can itself empty the plan (e.g. every searched card is
+        // already owned), and if this toggle were only reachable further down (past that return),
+        // there'd be no way to switch it back off once it hid everything.
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -173,7 +163,33 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
                 modifier = Modifier.size(16.dp),
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
+
+        if (!anyInStock) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    when {
+                        vm.isSearching -> "No in-stock cards yet — building the list as results arrive…"
+                        vm.excludeOwnedFromOrders -> "No in-stock listings to build an order from (everything may be excluded as owned)."
+                        else -> "No in-stock listings to build an order from."
+                    },
+                    color = OnSurfaceVariant, fontSize = 13.sp,
+                )
+            }
+            return
+        }
+
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+            PlanStat("$activeStores", if (activeStores == 1) "store" else "stores")
+            Spacer(Modifier.width(16.dp))
+            PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
+            Spacer(Modifier.width(16.dp))
+            PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
+            if (vm.isSearching) {
+                Spacer(Modifier.weight(1f))
+                CircularProgressIndicator(Modifier.size(12.dp), color = Primary, strokeWidth = 1.5.dp)
+            }
+        }
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -245,6 +261,44 @@ private fun StoreOrderCard(
     val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
     val isWarren = order.store == "The Warren"
 
+    val allHaveIds = activeLines.isNotEmpty() && activeLines.all { it.listing.variantId != null }
+    val platform = KNOWN_PLATFORMS[order.storeUrl]
+    // WC_STORE_API (The Hidden Realm) is also WooCommerce under the hood -- variation IDs are
+    // resolved at search time from the product page, so the same ?add-to-cart= URL works.
+    // BigCommerce uses GET /cart.php?action=add&product_id=X -- same browser-session pattern.
+    // PrestaShop uses GET /cart?add=1&id_product=X&qty=1&token=STATIC_TOKEN&action=update.
+    val isWooCart = platform == Platform.WOOCOMMERCE || platform == Platform.WC_STORE_API
+    val isBigCommerceCart = platform == Platform.BIGCOMMERCE
+    val isPrestaCart = platform == Platform.PRESTASHOP &&
+        activeLines.isNotEmpty() && activeLines.first().listing.cartToken != null
+    val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart || isBigCommerceCart || isPrestaCart) && !isWarren
+
+    var wooCartLoading by remember { mutableStateOf(false) }
+    var pendingCartConfirm by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    // Shown before cartOnClick actually runs (ConfirmDialog below) -- explains what's about to
+    // happen since this drives real browser navigation the user didn't directly tap through to.
+    // "opens your browser N times" rather than "N tabs": a mobile browser may reuse one tab across
+    // sequential opens instead of stacking distinct tabs like desktop does -- functionally the same
+    // (each URL still gets visited in order), just not literally "tabs" here.
+    val cartConfirmMessage = when {
+        isWooCart -> "WooCommerce doesn't support adding several cards through one link, so ZArchive will open " +
+            "your browser ${activeLines.size} times in a row -- one per card -- then open your cart automatically. " +
+            "This can take a minute or two; feel free to ignore your phone until the cart opens, just don't close " +
+            "the browser while it's running.\n\nOnce your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        isBigCommerceCart -> "BigCommerce doesn't support adding several cards through one link, so ZArchive will open " +
+            "your browser ${activeLines.size} times in a row -- one per card -- then open your cart automatically. " +
+            "Feel free to ignore your phone until the cart opens, just don't close the browser while it's running.\n\n" +
+            "Once your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        isPrestaCart -> "PrestaShop doesn't support adding several cards through one link, so ZArchive will open " +
+            "your browser ${activeLines.size} times in a row -- one per card -- then open your cart automatically. " +
+            "Feel free to ignore your phone until the cart opens, just don't close the browser while it's running.\n\n" +
+            "Once your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        else -> "This opens your cart in the browser with all ${activeLines.size} card(s) already added.\n\n" +
+            "Please double-check they all made it in once it opens -- items can occasionally be missed."
+    }
+
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -262,12 +316,90 @@ private fun StoreOrderCard(
             ) {
                 Icon(Icons.Default.Storefront, null, tint = Secondary, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text(order.store, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSecondaryContainer, modifier = Modifier.weight(1f, fill = false))
+                Text(
+                    order.store, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSecondaryContainer,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
+                )
                 Spacer(Modifier.width(8.dp))
                 CountBadge("$displayCount")
                 Spacer(Modifier.weight(1f))
                 Text(formatZar(displayTotal), fontFamily = Mono, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Primary)
                 Spacer(Modifier.width(10.dp))
+                if (showCart) {
+                    val base = order.storeUrl.trimEnd('/')
+                    if (wooCartLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Primary, strokeWidth = 2.dp)
+                    } else {
+                        val wooCartUrl = if (platform == Platform.WC_STORE_API) "$base/basket/" else "$base/cart/"
+                        val cartOnClick: () -> Unit = when {
+                            isWooCart -> {
+                                {
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(6000)
+                                            onOpenUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                                        }
+                                        delay(6000)
+                                        onOpenUrl(wooCartUrl)
+                                        wooCartLoading = false
+                                    }
+                                }
+                            }
+                            isBigCommerceCart -> {
+                                {
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(2000)
+                                            onOpenUrl("$base/cart.php?action=add&product_id=${line.listing.variantId}")
+                                        }
+                                        delay(3000)
+                                        onOpenUrl("$base/cart.php")
+                                        wooCartLoading = false
+                                    }
+                                }
+                            }
+                            isPrestaCart -> {
+                                {
+                                    val token = activeLines.first().listing.cartToken!!
+                                    wooCartLoading = true
+                                    scope.launch {
+                                        activeLines.forEachIndexed { idx, line ->
+                                            if (idx > 0) delay(2000)
+                                            onOpenUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=1&token=$token&action=update")
+                                        }
+                                        delay(3000)
+                                        onOpenUrl("$base/cart")
+                                        wooCartLoading = false
+                                    }
+                                }
+                            }
+                            else -> {
+                                {
+                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
+                                    onOpenUrl(url)
+                                }
+                            }
+                        }
+                        Icon(
+                            Icons.Default.ShoppingCart,
+                            contentDescription = "Add all to cart",
+                            tint = Primary,
+                            modifier = Modifier.size(16.dp).clickable { pendingCartConfirm = true },
+                        )
+                        if (pendingCartConfirm) {
+                            ConfirmDialog(
+                                title = "Add ${activeLines.size} card${if (activeLines.size == 1) "" else "s"} to cart?",
+                                message = cartConfirmMessage,
+                                confirmLabel = "Continue",
+                                onConfirm = { pendingCartConfirm = false; cartOnClick() },
+                                onDismiss = { pendingCartConfirm = false },
+                            )
+                        }
+                    }
+                    Spacer(Modifier.width(10.dp))
+                }
                 Icon(Icons.Default.OpenInNew, "Open store", tint = OnSurfaceVariant, modifier = Modifier.size(16.dp))
             }
             HorizontalDivider(color = OutlineVariant)

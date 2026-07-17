@@ -2106,21 +2106,44 @@ private fun ResultsPane(vm: SearchViewModel, tab: ResultsTab) {
     var summaryFilter   by remember { mutableStateOf("") }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                    vm.hoverOnThumbnailOnly = !vm.hoverOnThumbnailOnly
-                },
-        ) {
-            Text("Preview card art on thumbnail hover only", fontSize = 12.sp, color = OnSurfaceVariant)
-            Spacer(Modifier.width(6.dp))
-            Icon(
-                if (vm.hoverOnThumbnailOnly) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                contentDescription = null,
-                tint = if (vm.hoverOnThumbnailOnly) Primary else OutlineVariant,
-                modifier = Modifier.size(16.dp),
-            )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        vm.hoverOnThumbnailOnly = !vm.hoverOnThumbnailOnly
+                    },
+            ) {
+                Text("Preview card art on thumbnail hover only", fontSize = 12.sp, color = OnSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    if (vm.hoverOnThumbnailOnly) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                    contentDescription = null,
+                    tint = if (vm.hoverOnThumbnailOnly) Primary else OutlineVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+            Spacer(Modifier.width(20.dp))
+            // Exclude-owned filter -- lives here (persistent, above both tabs) rather than inside
+            // OrderListsPane so it's never hidden by that pane's own empty-state early-return (it
+            // used to live there, which meant toggling it on could make the whole plan -- including
+            // the toggle itself -- disappear with no way to switch it back off).
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        vm.excludeOwnedFromOrders = !vm.excludeOwnedFromOrders
+                    },
+            ) {
+                Text("Exclude owned (Order Lists)", fontSize = 12.sp, color = OnSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    if (vm.excludeOwnedFromOrders) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                    contentDescription = null,
+                    tint = if (vm.excludeOwnedFromOrders) Primary else OutlineVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
         }
         Spacer(Modifier.height(6.dp))
         when (tab) {
@@ -3877,11 +3900,16 @@ private fun OrderListsPane(vm: SearchViewModel) {
         Text(strategy.blurb, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
         Spacer(Modifier.height(10.dp))
 
+        // "Exclude owned" itself now lives in ResultsPane's shared header (above both tabs, so it's
+        // never hidden by this pane's empty-state return below) -- see ResultsPane.
         if (!anyInStock) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    if (vm.isSearching) "No in-stock cards yet — building the list as results arrive…"
-                    else "No in-stock listings to build an order from.",
+                    when {
+                        vm.isSearching -> "No in-stock cards yet — building the list as results arrive…"
+                        vm.excludeOwnedFromOrders -> "No in-stock listings to build an order from (everything may be excluded as owned)."
+                        else -> "No in-stock listings to build an order from."
+                    },
                     color = OnSurfaceVariant, fontSize = 13.sp,
                 )
             }
@@ -3903,29 +3931,6 @@ private fun OrderListsPane(vm: SearchViewModel) {
                 )
             }
             Spacer(Modifier.weight(1f))
-            // Exclude-owned filter
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
-                        vm.excludeOwnedFromOrders = !vm.excludeOwnedFromOrders
-                    }
-                    .padding(horizontal = 4.dp),
-            ) {
-                Text(
-                    "Exclude owned",
-                    fontSize = 10.sp,
-                    color = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
-                )
-                Spacer(Modifier.width(6.dp))
-                Icon(
-                    if (vm.excludeOwnedFromOrders) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                    contentDescription = null,
-                    tint = if (vm.excludeOwnedFromOrders) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
-                    modifier = Modifier.size(16.dp),
-                )
-            }
-            Spacer(Modifier.width(14.dp))
             // Price filter
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -4020,6 +4025,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
     val showCart = allHaveIds && (platform == Platform.SHOPIFY || isWooCart || isBigCommerceCart || isPrestaCart) && !isWarren
 
     var wooCartLoading by remember { mutableStateOf(false) }
+    var pendingCartConfirm by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     val cartTooltip = when {
@@ -4027,6 +4033,26 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
         isBigCommerceCart -> "Adds one card at a time (BigCommerce limitation).\nOpens your cart automatically after all cards are added."
         isPrestaCart -> "Adds one card at a time (PrestaShop limitation).\nOpens your cart automatically after all cards are added."
         else -> "Open cart with all items pre-added."
+    }
+
+    // Shown before cartOnClick actually runs (see the AlertDialog at the end of this composable) --
+    // explains what's about to happen so the user can back out, since this drives real browser
+    // navigation the user didn't directly click through to.
+    val cartConfirmMessage = when {
+        isWooCart -> "WooCommerce doesn't support adding several cards through one link, so ZArchive will open " +
+            "${activeLines.size} browser tabs in sequence -- one per card -- then open your cart automatically. " +
+            "This takes a minute or two; feel free to ignore this window while it runs, just don't close the tabs " +
+            "as they open.\n\nOnce your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        isBigCommerceCart -> "BigCommerce doesn't support adding several cards through one link, so ZArchive will open " +
+            "${activeLines.size} browser tabs in sequence -- one per card -- then open your cart automatically. " +
+            "Feel free to ignore this window while it runs, just don't close the tabs as they open.\n\n" +
+            "Once your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        isPrestaCart -> "PrestaShop doesn't support adding several cards through one link, so ZArchive will open " +
+            "${activeLines.size} browser tabs in sequence -- one per card -- then open your cart automatically. " +
+            "Feel free to ignore this window while it runs, just don't close the tabs as they open.\n\n" +
+            "Once your cart opens, please double-check all ${activeLines.size} card(s) made it in -- items can occasionally be missed."
+        else -> "This opens your cart in the browser with all ${activeLines.size} card(s) already added.\n\n" +
+            "Please double-check they all made it in once it opens -- items can occasionally be missed."
     }
 
     Surface(
@@ -4137,7 +4163,22 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                 Icons.Default.ShoppingCart,
                                 contentDescription = "Add all to cart",
                                 tint = Primary,
-                                modifier = Modifier.size(16.dp).clickable(onClick = cartOnClick),
+                                modifier = Modifier.size(16.dp).clickable { pendingCartConfirm = true },
+                            )
+                        }
+                        if (pendingCartConfirm) {
+                            AlertDialog(
+                                onDismissRequest = { pendingCartConfirm = false },
+                                title = { Text("Add ${activeLines.size} card${if (activeLines.size == 1) "" else "s"} to cart?", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+                                text = { Text(cartConfirmMessage, fontSize = 13.sp, color = OnSurfaceVariant) },
+                                confirmButton = {
+                                    TextButton(onClick = { pendingCartConfirm = false; cartOnClick() }) { Text("Continue", color = Primary) }
+                                },
+                                dismissButton = {
+                                    TextButton(onClick = { pendingCartConfirm = false }) { Text("Cancel", color = OnSurfaceVariant) }
+                                },
+                                containerColor    = SurfaceContainerLowest,
+                                titleContentColor = OnSurface,
                             )
                         }
                     }
