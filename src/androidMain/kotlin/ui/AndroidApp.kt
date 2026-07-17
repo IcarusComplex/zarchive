@@ -6,6 +6,10 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,11 +33,13 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.FormatListBulleted
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +51,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -77,6 +84,7 @@ import monitor.PendingMonitorNav
 import ui.theme.Cinzel
 import ui.theme.ErrorColor
 import ui.theme.HeaderBg
+import ui.theme.OnPrimary
 import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
@@ -321,8 +329,9 @@ fun AndroidApp(
             },
             containerColor = Surface,
         ) { padding ->
-            Column(Modifier.fillMaxSize().padding(padding)) {
-                when (tab) {
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                Column(Modifier.fillMaxSize()) {
+                    when (tab) {
                     ResultsTab.RESULTS -> {
                         // LazyColumn (Compose's built-in recycled/virtualized list -- the KMP
                         // equivalent of e.g. React Native's FlashList) instead of a plain Column +
@@ -410,6 +419,24 @@ fun AndroidApp(
                         )
                     }
                     ResultsTab.MONITORS -> SearchMonitorsScreen(vm)
+                }
+                }
+                val showScrollToTop by remember {
+                    derivedStateOf { tab == ResultsTab.RESULTS && resultsListState.canScrollBackward }
+                }
+                AnimatedVisibility(
+                    visible = showScrollToTop,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 32.dp),
+                    enter = fadeIn() + scaleIn(),
+                    exit = fadeOut() + scaleOut(),
+                ) {
+                    FloatingActionButton(
+                        onClick = { resultsScope.launch { resultsListState.animateScrollToItem(0) } },
+                        containerColor = Primary,
+                        contentColor = OnPrimary,
+                    ) {
+                        Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Scroll to top")
+                    }
                 }
             }
         }
