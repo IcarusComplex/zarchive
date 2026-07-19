@@ -2,6 +2,8 @@ package androidapp
 
 import android.app.Application
 import android.content.Context
+import android.os.Build
+import data.BuildInfo
 import data.PlatformPaths
 
 /**
@@ -25,6 +27,9 @@ class ZArchiveApplication : Application() {
         // of main(), and written to PlatformPaths.debugDumpDir (Android's app-private cache dir)
         // instead of ~/zarchive-debug/. PlatformActions.android.kt's crashLogFile points at the
         // same file.
+        private fun deviceInfoLine(): String =
+            "${Build.MANUFACTURER} ${Build.MODEL} - Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+
         private fun installCrashLogger() {
             val crashLog = PlatformPaths.debugDumpDir.resolve("crash.log")
             Thread.setDefaultUncaughtExceptionHandler { thread, e ->
@@ -32,7 +37,12 @@ class ZArchiveApplication : Application() {
                     crashLog.parentFile?.mkdirs()
                     val ts = java.time.LocalDateTime.now()
                         .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-                    crashLog.appendText("[$ts] Thread: ${thread.name}\n${e.stackTraceToString()}\n\n")
+                    crashLog.appendText(
+                        "[$ts] Thread: ${thread.name}\n" +
+                            "App: ZArchive ${BuildInfo.VERSION} (Android)\n" +
+                            "Device: ${deviceInfoLine()}\n" +
+                            "${e.stackTraceToString()}\n\n",
+                    )
                 }
             }
         }

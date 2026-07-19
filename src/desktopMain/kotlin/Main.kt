@@ -8,9 +8,29 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import data.AppDatabase
+import data.BuildInfo
 import ui.App
 
 private val crashLog = java.io.File(System.getProperty("user.home"), "zarchive-debug/crash.log")
+
+// "Mac OS X"/"Windows 11" from os.name -> a short platform tag matching the naming used
+// elsewhere (release asset filenames, README variants): "macOS"/"Windows".
+private fun platformLabel(): String {
+    val name = System.getProperty("os.name") ?: "Unknown OS"
+    return when {
+        name.startsWith("Mac") -> "macOS"
+        name.startsWith("Windows") -> "Windows"
+        else -> name
+    }
+}
+
+private fun deviceInfoLine(): String {
+    val osName = System.getProperty("os.name") ?: "Unknown OS"
+    val osVersion = System.getProperty("os.version") ?: "?"
+    val arch = System.getProperty("os.arch") ?: "?"
+    val javaVersion = System.getProperty("java.version") ?: "?"
+    return "$osName $osVersion ($arch), JRE $javaVersion"
+}
 
 private fun installCrashLogger() {
     Thread.setDefaultUncaughtExceptionHandler { thread, e ->
@@ -18,7 +38,12 @@ private fun installCrashLogger() {
             crashLog.parentFile.mkdirs()
             val ts = java.time.LocalDateTime.now()
                 .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
-            crashLog.appendText("[$ts] Thread: ${thread.name}\n${e.stackTraceToString()}\n\n")
+            crashLog.appendText(
+                "[$ts] Thread: ${thread.name}\n" +
+                    "App: ZArchive ${BuildInfo.VERSION} (${platformLabel()})\n" +
+                    "Device: ${deviceInfoLine()}\n" +
+                    "${e.stackTraceToString()}\n\n",
+            )
         }
     }
 }
