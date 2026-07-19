@@ -74,10 +74,21 @@ class MonitorForegroundService : Service() {
 
     private fun postForegroundNotification() {
         val notification = buildNotification()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(SERVICE_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(SERVICE_NOTIFICATION_ID, notification)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(SERVICE_NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(SERVICE_NOTIFICATION_ID, notification)
+            }
+        } catch (e: Exception) {
+            // Android 15+ enforces a rolling per-day runtime budget on dataSync FGS types; once
+            // exhausted, startForeground() throws ForegroundServiceStartNotAllowedException (only
+            // resolvable by the budget resetting, not by retrying). Letting this escape crashes
+            // whichever caller triggered it -- including app launch, since MonitorScheduler.reschedule()
+            // calls start() on every launch. WorkManager's periodic MonitorWorker job (kept as a
+            // documented redundant backup) still covers checks without the foreground service, so
+            // stopping self here is a safe degrade rather than a crash.
+            stopSelf()
         }
     }
 
@@ -96,6 +107,15 @@ class MonitorForegroundService : Service() {
         loopJob?.cancel()
         scope.cancel()
         super.onDestroy()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        // Android 14+ calls this as a warning shortly before force-killing a foreground service
+        // that's exceeded its type's runtime budget (dataSync: ~6h/day while backgrounded). Not
+        // overriding this is what produced ForegroundServiceDidNotStopInTimeException in the
+        // crash report -- the system kills the service anyway either way, but stopping ourselves
+        // here does it cleanly instead of via a thrown exception on the app process.
+        stopSelf(startId)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
