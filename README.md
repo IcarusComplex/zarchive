@@ -115,12 +115,21 @@ A collapsible **Card Summary** panel above the results shows at a glance which c
 
 ### Order Lists tab
 
-Switch to the **Order Lists** tab (appears after a search) to see two buying plans:
+Switch to the **Order Lists** tab to see two buying plans (populated once you've run a search):
 
 - **Cheapest total** — picks the cheapest in-stock listing for each card, grouped by store. Best when price is everything.
 - **Fewest packages** — covers your full list from the smallest number of stores. Best when you want to minimise shipping costs.
 
-Each plan shows the total cost and flags any cards not available anywhere. Click a store name to open its homepage; click a listing row to open the product page.
+Each plan shows the total cost and flags any cards not available anywhere. Click a store name to open its homepage; click a listing row to open the product page. An **Exclude owned** toggle above the tabs drops any card already in your [imported collection](#collection-import) from both plans.
+
+### Saved Lists & Results
+
+The left panel has a **Lists** / **Results** switcher for keeping track of searches you run often:
+
+- **Lists** — save your current card list under a name (the bookmark icon next to the switcher) so you can reload it later without retyping it.
+- **Results** — snapshot the current search results under a name + optional note, so you can come back and compare prices later without re-running the search.
+
+Both support editing, deleting, and (if you have more than a few) an overflow view listing everything you've saved. These are what [Google Drive sync](#sync-across-devices-google-drive) keeps in sync across your devices.
 
 ---
 
@@ -154,6 +163,38 @@ Each saved list/result gets a unique ID when first created. Two lists only merge
 
 ---
 
+## Search Monitors
+
+The **Search Monitors** tab (next to Search Results and Order Lists) watches a card list for you in the background and alerts you when something turns up — no need to keep the app open or re-run searches yourself.
+
+1. Open the **Search Monitors** tab and paste the card(s) you want watched (one per line, same format as the main search).
+2. Set **Check every** to how often it should run (in hours, minimum 1).
+3. Optionally narrow **Stores to monitor** — everything is selected by default.
+4. Flip the switch **On**.
+
+When a check finds a new listing, you're notified immediately:
+- **Desktop:** a popup lists what was found, with a link straight to each listing.
+- **Android:** a system notification appears for each hit.
+
+Every past check is kept in a **history trail** (visible from the tab) so you can see when it last ran and what it found, even if nothing new turned up.
+
+> **Android battery notice:** Android aggressively kills background apps, so the monitor runs as a low-priority foreground service (a permanent, silent notification while it's on — this is what keeps it alive) rather than relying only on Android's own scheduler. The system still enforces a daily runtime cap on this kind of background service; if it's ever hit, ZArchive stops the monitor cleanly rather than crashing, and it resumes on the next scheduled check or app launch.
+
+---
+
+## Collection Import
+
+If you track your real Magic collection in **ManaBox**, ZArchive can cross-reference it against your searches so you don't accidentally re-buy cards you already own.
+
+1. **Settings → Collection Import**.
+2. Export your collection from ManaBox as a CSV.
+3. Click **Import from file…** and pick the CSV (or **Import from Google Drive** on another device, once you've imported from a file at least once — this also uploads the file to your synced ZArchive Drive folder).
+4. Choose which binders/lists count as "owned" — everything is included by default. ManaBox lists (Wishlist, etc.) are usually reference-only and worth excluding; binders are usually the real collection.
+
+Once imported, cards you already own get a green **✓ In your collection** badge in search results and order lists, and an **Exclude owned** toggle on the Order Lists tab lets you drop them from both buying plans entirely.
+
+---
+
 ## Settings
 
 Settings are available in the left panel and the gear menu in the title bar. All settings persist between sessions.
@@ -173,7 +214,9 @@ Settings are available in the left panel and the gear menu in the title bar. All
 | **Early Access** | Opt in to pre-release builds. These may have new features or experimental fixes not yet in a stable release. |
 | **Check for updates** | Manually trigger an update check. Shows the current version. |
 | **Connect Google Drive** / **Sync now** / **Disconnect Google Drive** | Manage cross-device sync — see [Sync across devices](#sync-across-devices-google-drive) above. |
+| **Collection Import** | Import your ManaBox collection — see [Collection Import](#collection-import) above. |
 | **Report a bug** | Opens a GitHub issue in your browser with the `bug` label pre-applied. |
+| **Support ZArchive** | Opens the Ko-fi support page. |
 
 ### Luckshack links
 
@@ -202,14 +245,16 @@ ZArchive never writes into its own installation folder at runtime.
 | What | Where |
 |---|---|
 | Card image cache | `C:\Users\<you>\.zarchive\images\` |
-| Settings | Windows registry: `HKCU\Software\JavaSoft\Prefs\zarchive` |
+| Settings & saved lists/results | `C:\Users\<you>\.zarchive\zarchive.mv.db` (local embedded database) |
 
 ### macOS
 
 | What | Where |
 |---|---|
 | Card image cache | `~/.zarchive/images/` |
-| Settings | `~/Library/Preferences/co.za.zarchive.plist` (via Java Preferences API) |
+| Settings & saved lists/results | `~/.zarchive/zarchive.mv.db` (local embedded database) |
+
+> Older versions stored settings in the Windows registry (`HKCU\Software\JavaSoft\Prefs\zarchive`) or a macOS `.plist`. ZArchive migrates those into the database above automatically, once, the first time you launch a version that supports it — nothing to do on your end.
 
 ### Android
 
@@ -224,14 +269,12 @@ The image cache can be safely deleted at any time (Windows/macOS) — ZArchive w
 ### Windows
 
 1. Delete the `ZArchive` folder.
-2. Delete `C:\Users\<you>\.zarchive\` (image cache — optional).
-3. To remove settings: open **Registry Editor**, navigate to `HKCU\Software\JavaSoft\Prefs\zarchive`, and delete the key.
+2. Delete `C:\Users\<you>\.zarchive\` — this removes the image cache, settings, and saved lists/results (optional; skip it to keep your data around in case you reinstall later).
 
 ### macOS
 
 1. Delete `ZArchive.app`.
-2. Delete `~/.zarchive/` (image cache — optional).
-3. To remove settings: delete `~/Library/Preferences/co.za.zarchive.plist`.
+2. Delete `~/.zarchive/` — this removes the image cache, settings, and saved lists/results (optional; skip it to keep your data around in case you reinstall later).
 
 ### Android
 
@@ -259,8 +302,8 @@ Some stores use Cloudflare protection or rate-limiting. Try searching again late
 **"Card art is not loading"**
 Art is fetched from Scryfall and cached locally. Check your internet connection. If art was loading before but stopped, delete `~/.zarchive/images/` and search again.
 
-**"I can't see the Order Lists tab"**
-The tab only appears after you've run at least one search.
+**"The Order Lists tab is empty"**
+It populates once you've run at least one search — there's nothing to build a buying plan from before that.
 
 **"Prices look wrong"**
 ZArchive pulls prices directly from each store at search time. If a price looks off, click the row to open the store's own product page and verify.
@@ -270,6 +313,9 @@ The Warren is excluded by default because it uses a headless browser and is noti
 
 **"Google Drive sync says failed / won't connect"**
 Check your internet connection and try **Settings → Sync now** again. If it keeps failing, disconnect and reconnect from Settings — this re-runs the Google sign-in from scratch, which clears up most issues (e.g. a revoked or expired permission).
+
+**"Search Monitors stopped checking on Android"**
+Android limits how long a background service can run per day; if your monitor's been on for a long stretch it may pause until the next scheduled check or the next time you open the app. Making sure ZArchive's battery setting is "Unrestricted" (Android Settings → Apps → ZArchive → Battery) helps it survive longer between checks.
 
 ---
 

@@ -3,6 +3,15 @@
 Kotlin Compose Desktop app that searches South African MTG stores for card singles
 and shows official card art from Scryfall.
 
+## Keeping `README.md` current
+
+`README.md` is the end-user-facing doc (install steps, features, storage locations, troubleshooting)
+and drifts easily since nothing enforces it against the code. Whenever a change touches something
+`README.md` documents — a new user-facing feature, a changed settings/storage location, a renamed
+menu item, a changed tab/dialog behavior — update the relevant README section(s) in the same piece of
+work, not as an afterthought. If unsure whether something is README-worthy, err on the side of
+checking it against the current UI/code rather than assuming the existing wording still holds.
+
 ## Architecture
 
 - `data/` — models (`SearchResult`, `Platform`, `STORES`, `KNOWN_PLATFORMS`) + price/relevance helpers
