@@ -64,8 +64,6 @@ You only need to do this once.
 
 The app is signed consistently release-to-release, so future updates install cleanly over the previous version — no need to uninstall first.
 
-> **Debug vs. release:** if you also have a development/debug build installed (`ZArchive Debug`), it's a separate app with a separate package name — the two can coexist on the same device without conflicting.
-
 ---
 
 ## How to Use
