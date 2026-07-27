@@ -657,7 +657,12 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                         SavedListRow(list,
                             onLoad   = { vm.loadSearchList(list) },
                             onDelete = { vm.deleteSearchList(list.id) },
-                            onEdit   = { editingList = list })
+                            onEdit   = { editingList = list },
+                            onExport = {
+                                platformActions.pickJsonSaveFile("Export \"${list.name}\"", list.name)?.let { file ->
+                                    vm.exportList(list, file)
+                                }
+                            })
                     }
                     if (overflow > 0) {
                         val interaction = remember { MutableInteractionSource() }
@@ -692,7 +697,12 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     pinned.forEach { entry ->
                         SavedResultRow(entry,
                             onLoad   = { vm.loadSavedResult(entry) },
-                            onDelete = { vm.deleteSavedResult(entry.id) })
+                            onDelete = { vm.deleteSavedResult(entry.id) },
+                            onExport = {
+                                platformActions.pickJsonSaveFile("Export \"${entry.name}\"", entry.name)?.let { file ->
+                                    vm.exportResult(entry, file)
+                                }
+                            })
                     }
                     if (overflow > 0) {
                         val interaction = remember { MutableInteractionSource() }
@@ -917,6 +927,11 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                                 onLoad   = { vm.loadSearchList(list); showAllListsDialog = false },
                                 onDelete = { vm.deleteSearchList(list.id) },
                                 onEdit   = { modalEditTarget = list },
+                                onExport = {
+                                    platformActions.pickJsonSaveFile("Export \"${list.name}\"", list.name)?.let { file ->
+                                        vm.exportList(list, file)
+                                    }
+                                },
                             )
                             HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
                         }
@@ -970,6 +985,11 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                                 entry    = entry,
                                 onLoad   = { vm.loadSavedResult(entry); showAllResultsDialog = false },
                                 onDelete = { vm.deleteSavedResult(entry.id) },
+                                onExport = {
+                                    platformActions.pickJsonSaveFile("Export \"${entry.name}\"", entry.name)?.let { file ->
+                                        vm.exportResult(entry, file)
+                                    }
+                                },
                             )
                             HorizontalDivider(color = OutlineVariant.copy(alpha = 0.2f))
                         }
@@ -1172,9 +1192,11 @@ private fun SavedListRow(
     onLoad: () -> Unit,
     onDelete: () -> Unit,
     onEdit: (() -> Unit)? = null,
+    onExport: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    var showRowMenu by remember { mutableStateOf(false) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -1207,6 +1229,10 @@ private fun SavedListRow(
             )
             Spacer(Modifier.width(4.dp))
         }
+        if (onExport != null) {
+            RowMoreMenu(expanded = showRowMenu, onExpandedChange = { showRowMenu = it }, hovered = hovered, onExport = onExport)
+            Spacer(Modifier.width(4.dp))
+        }
         Icon(
             Icons.Default.Close, "Delete",
             tint = if (hovered) ErrorColor else Color.Transparent,
@@ -1220,9 +1246,11 @@ private fun SavedResultRow(
     entry: data.SavedResultEntry,
     onLoad: () -> Unit,
     onDelete: () -> Unit,
+    onExport: (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
+    var showRowMenu by remember { mutableStateOf(false) }
     val dateStr = remember(entry.savedAt) {
         java.text.SimpleDateFormat("d MMM ''yy, HH:mm").format(java.util.Date(entry.savedAt))
     }
@@ -1247,6 +1275,10 @@ private fun SavedResultRow(
             Text("${entry.cardCount}", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
                 fontFamily = Mono)
             Spacer(Modifier.width(4.dp))
+            if (onExport != null) {
+                RowMoreMenu(expanded = showRowMenu, onExpandedChange = { showRowMenu = it }, hovered = hovered, onExport = onExport)
+                Spacer(Modifier.width(4.dp))
+            }
             Icon(
                 Icons.Default.Close, "Delete",
                 tint = if (hovered) ErrorColor else Color.Transparent,
@@ -1263,6 +1295,42 @@ private fun SavedResultRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+            }
+        }
+    }
+}
+
+/** Small per-row "more" affordance for [SavedListRow]/[SavedResultRow] -- hover-revealed like the
+ *  adjacent Edit/Delete icons, opens a tiny menu with row-scoped actions (just Export for now). */
+@Composable
+private fun RowMoreMenu(expanded: Boolean, onExpandedChange: (Boolean) -> Unit, hovered: Boolean, onExport: () -> Unit) {
+    Box {
+        Icon(
+            Icons.Default.MoreVert, "More",
+            tint = if (hovered) OnSurfaceVariant else Color.Transparent,
+            modifier = Modifier.size(12.dp).clickable { onExpandedChange(true) },
+        )
+        if (expanded) {
+            Popup(
+                alignment = Alignment.BottomEnd,
+                offset = IntOffset(0, 4),
+                onDismissRequest = { onExpandedChange(false) },
+                properties = PopupProperties(focusable = true),
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = SurfaceContainerHigh,
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    modifier = Modifier.width(140.dp),
+                ) {
+                    Column(Modifier.padding(4.dp)) {
+                        SettingsActionItem(
+                            label = "Export",
+                            icon  = Icons.Default.FileDownload,
+                            onClick = { onExpandedChange(false); onExport() },
+                        )
+                    }
+                }
             }
         }
     }

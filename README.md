@@ -131,10 +131,10 @@ Both support editing, deleting, and (if you have more than a few) an overflow vi
 
 ### Import & export (desktop)
 
-The **⋮ menu** next to the Lists/Results switcher can save the current list/results (greyed out if there's nothing to save), export everything you've saved to a `.json` file, or import one back in:
+The **⋮ menu** next to the Lists/Results switcher can save the current list/results (greyed out if there's nothing to save), export everything you've saved to a `.json` file, or import one back in. Each saved list/result row also has its own small **⋮** with an **Export** option, for exporting just that one item — bulk export-all is there too, but optional.
 
-- **Export all lists** / **Export all results** — writes every saved list (or result) to a JSON file you choose, for backing up or sharing.
-- **Import from file…** — reads a previously-exported JSON file back in. Items ZArchive hasn't seen before are added automatically; if an item was already exported from this same install before (so it matches an existing saved list/result), you're asked whether to **merge** (combine the two card lists/results), **replace** (overwrite the existing one), or **copy** (keep both as separate saved items).
+- **Export** (per row) / **Export all lists** / **Export all results** — writes one saved list or result (or everything of that type) to a JSON file you choose, for backing up or sharing. File dialogs default to your **Documents** folder.
+- **Import from file…** — reads a previously-exported JSON file back in, applying whatever it contains (lists, results, or both). Items ZArchive hasn't seen before are added automatically; if an item was already exported from this same install before (so it matches an existing saved list/result), you're asked whether to **merge** (combine the two card lists/results), **replace** (overwrite the existing one), or **copy** (keep both as separate saved items).
 
 This is separate from Google Drive sync above — it's a manual, one-off file you control, rather than automatic background syncing. Android doesn't have this yet.
 
