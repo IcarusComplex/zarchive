@@ -485,6 +485,7 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     val lists        by vm.savedLists.collectAsState()
     val savedResults by vm.savedResults.collectAsState()
     var activeTab    by remember { mutableStateOf(SavedPanelTab.LISTS) }
+    val platformActions = remember { PlatformActions() }
 
     // Lists tab state
     var showSaveListDialog by remember { mutableStateOf(false) }
@@ -500,15 +501,99 @@ private fun SavedListsPanel(vm: SearchViewModel) {
     var saveResultDesc       by remember { mutableStateOf("") }
     var overwriteResultTarget by remember { mutableStateOf<data.SavedResultEntry?>(null) }
 
+    // Panel-level "more" menu: save current list/result, export-all, import.
+    var showPanelMenu by remember { mutableStateOf(false) }
+
     Column(Modifier.fillMaxWidth()) {
-        // Header: segmented tab control fills the full width (matching Search Options button);
-        // save icon is overlaid at the right edge so it doesn't narrow the control.
-        Box(
+        // Header: segmented tab control takes the remaining width next to the kebab menu button.
+        Row(
             modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box {
+                GhostIconButton(Icons.Default.MoreVert, "More", tint = OnSurfaceVariant, iconSize = 16.dp) {
+                    showPanelMenu = true
+                }
+                if (showPanelMenu) {
+                    Popup(
+                        alignment = Alignment.BottomStart,
+                        offset = IntOffset(0, 4),
+                        onDismissRequest = { showPanelMenu = false },
+                        properties = PopupProperties(focusable = true),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = SurfaceContainerHigh,
+                            border = BorderStroke(1.dp, OutlineVariant),
+                            modifier = Modifier.width(220.dp),
+                        ) {
+                            Column(Modifier.padding(6.dp)) {
+                                // Save current list/result -- always shown, regardless of the active
+                                // tab, greyed out when there's nothing to save (no current query for
+                                // a list, no current results for a result snapshot).
+                                SettingsActionItem(
+                                    label = "Save current list",
+                                    icon  = Icons.Default.BookmarkAdd,
+                                    enabled = vm.query.isNotBlank(),
+                                    onClick = {
+                                        saveListNameDraft = vm.lastLoadedListName ?: ""
+                                        showSaveListDialog = true
+                                        showPanelMenu = false
+                                    },
+                                )
+                                SettingsActionItem(
+                                    label = "Save current results",
+                                    icon  = Icons.Default.Archive,
+                                    enabled = vm.results.isNotEmpty(),
+                                    onClick = {
+                                        saveResultName = vm.lastLoadedResultName ?: ""
+                                        saveResultDesc = ""
+                                        showSaveResultDialog = true
+                                        showPanelMenu = false
+                                    },
+                                )
+                                HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                                SettingsActionItem(
+                                    label = "Export all lists",
+                                    icon  = Icons.Default.FileDownload,
+                                    enabled = lists.isNotEmpty(),
+                                    onClick = {
+                                        showPanelMenu = false
+                                        platformActions.pickJsonSaveFile("Export all lists", "zarchive-lists")?.let { file ->
+                                            vm.exportAllLists(file)
+                                        }
+                                    },
+                                )
+                                SettingsActionItem(
+                                    label = "Export all results",
+                                    icon  = Icons.Default.FileDownload,
+                                    enabled = savedResults.isNotEmpty(),
+                                    onClick = {
+                                        showPanelMenu = false
+                                        platformActions.pickJsonSaveFile("Export all results", "zarchive-results")?.let { file ->
+                                            vm.exportAllResults(file)
+                                        }
+                                    },
+                                )
+                                SettingsActionItem(
+                                    label = "Import from file…",
+                                    icon  = Icons.Default.FileUpload,
+                                    onClick = {
+                                        showPanelMenu = false
+                                        platformActions.pickJsonOpenFile("Import saved lists / results")?.let { file ->
+                                            vm.stageImport(file)
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.width(4.dp))
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
                     .height(28.dp)
                     .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
                     .clip(RoundedCornerShape(4.dp)),
@@ -537,42 +622,25 @@ private fun SavedListsPanel(vm: SearchViewModel) {
                     }
                 }
             }
-            // Save icon — floats at the right edge, overlaid on the control
-            @OptIn(ExperimentalFoundationApi::class)
-            when {
-                activeTab == SavedPanelTab.LISTS && vm.query.isNotBlank() ->
-                    TooltipArea(
-                        tooltip = {
-                            Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
-                                border = BorderStroke(1.dp, OutlineVariant)) {
-                                Text("Save current list", fontSize = 11.sp, color = OnSurface,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-                            }
-                        },
-                        delayMillis = 400,
-                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
-                    ) {
-                        Icon(Icons.Default.BookmarkAdd, "Save list", tint = Primary.copy(alpha = 0.8f),
-                            modifier = Modifier.size(14.dp)
-                                .clickable { saveListNameDraft = vm.lastLoadedListName ?: ""; showSaveListDialog = true })
-                    }
-                activeTab == SavedPanelTab.RESULTS && vm.results.isNotEmpty() ->
-                    TooltipArea(
-                        tooltip = {
-                            Surface(color = SurfaceContainerHighest, shape = RoundedCornerShape(4.dp),
-                                border = BorderStroke(1.dp, OutlineVariant)) {
-                                Text("Save current results", fontSize = 11.sp, color = OnSurface,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
-                            }
-                        },
-                        delayMillis = 400,
-                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 6.dp),
-                    ) {
-                        Icon(Icons.Default.Archive, "Save results", tint = Primary.copy(alpha = 0.8f),
-                            modifier = Modifier.size(14.dp).clickable {
-                                saveResultName = vm.lastLoadedResultName ?: ""; saveResultDesc = ""; showSaveResultDialog = true
-                            })
-                    }
+        }
+
+        // Transient import/export status, auto-dismissed by the LaunchedEffect below.
+        val importExportMessage = vm.importExportMessage
+        val importExportError   = vm.importExportError
+        if (importExportMessage != null || importExportError != null) {
+            Text(
+                importExportError ?: importExportMessage ?: "",
+                fontSize = 10.sp,
+                color = if (importExportError != null) ErrorColor else Primary.copy(alpha = 0.8f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
+            )
+        }
+        LaunchedEffect(importExportMessage, importExportError) {
+            if (importExportMessage != null || importExportError != null) {
+                delay(4_000)
+                vm.dismissImportExportMessage()
             }
         }
 
@@ -915,6 +983,110 @@ private fun SavedListsPanel(vm: SearchViewModel) {
             containerColor    = SurfaceContainerLowest,
             titleContentColor = OnSurface,
         )
+    }
+
+    // Import-conflict resolution: shown when an imported file has items whose syncId already
+    // matches a local list/result. Non-conflicting items are applied automatically (see
+    // SearchViewModel.stageImport) and never reach this dialog.
+    vm.pendingImportPlan?.let { plan ->
+        val listActions = remember(plan) {
+            mutableStateMapOf<String, data.ImportAction>().apply {
+                plan.listConflicts.forEach { put(it.incoming.syncId, data.ImportAction.MERGE) }
+            }
+        }
+        val resultActions = remember(plan) {
+            mutableStateMapOf<String, data.ImportAction>().apply {
+                plan.resultConflicts.forEach { put(it.incoming.syncId, data.ImportAction.MERGE) }
+            }
+        }
+        AlertDialog(
+            onDismissRequest = { vm.cancelImport() },
+            title = { Text("Resolve import conflicts", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface) },
+            text = {
+                Column {
+                    val newCount = plan.newLists.size + plan.newResults.size
+                    if (newCount > 0) {
+                        Text(
+                            "$newCount new item${if (newCount == 1) "" else "s"} will be added automatically.",
+                            fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            modifier = Modifier.padding(bottom = 8.dp),
+                        )
+                    }
+                    Text(
+                        "These already exist locally -- choose how to resolve each one:",
+                        fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    LazyColumn(
+                        modifier = Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        items(plan.listConflicts, key = { "list-${it.incoming.syncId}" }) { conflict ->
+                            ImportConflictRow(
+                                label    = "List \"${conflict.local.name}\"",
+                                selected = listActions[conflict.incoming.syncId] ?: data.ImportAction.MERGE,
+                                onSelect = { listActions[conflict.incoming.syncId] = it },
+                            )
+                        }
+                        items(plan.resultConflicts, key = { "result-${it.incoming.syncId}" }) { conflict ->
+                            ImportConflictRow(
+                                label    = "Result \"${conflict.local.name}\"",
+                                selected = resultActions[conflict.incoming.syncId] ?: data.ImportAction.MERGE,
+                                onSelect = { resultActions[conflict.incoming.syncId] = it },
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.confirmImport(listActions.toMap(), resultActions.toMap()) }) {
+                    Text("Import", color = Primary)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.cancelImport() }) { Text("Cancel", color = OnSurfaceVariant) }
+            },
+            containerColor    = SurfaceContainerLowest,
+            titleContentColor = OnSurface,
+        )
+    }
+}
+
+@Composable
+private fun ImportConflictRow(label: String, selected: data.ImportAction, onSelect: (data.ImportAction) -> Unit) {
+    Column {
+        Text(label, fontSize = 12.sp, color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Row(
+            modifier = Modifier
+                .padding(top = 4.dp)
+                .height(24.dp)
+                .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(4.dp)),
+        ) {
+            data.ImportAction.entries.forEachIndexed { i, action ->
+                if (i > 0) VerticalDivider(color = OutlineVariant, modifier = Modifier.fillMaxHeight())
+                val isActive = selected == action
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .background(if (isActive) SurfaceContainerHighest else Color.Transparent)
+                        .clickable { onSelect(action) },
+                ) {
+                    Text(
+                        when (action) {
+                            data.ImportAction.MERGE   -> "Merge"
+                            data.ImportAction.REPLACE -> "Replace"
+                            data.ImportAction.COPY    -> "Copy"
+                        },
+                        fontSize = 10.sp,
+                        fontWeight = if (isActive) FontWeight.SemiBold else FontWeight.Normal,
+                        color = if (isActive) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1386,9 +1558,16 @@ private fun SettingsLinkItem(label: String, sublabel: String? = null, url: Strin
 
 
 @Composable
-private fun SettingsActionItem(label: String, sublabel: String? = null, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+private fun SettingsActionItem(
+    label: String,
+    sublabel: String? = null,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
+    val hoveredRaw by interaction.collectIsHoveredAsState()
+    val hovered = hoveredRaw && enabled
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -1396,15 +1575,23 @@ private fun SettingsActionItem(label: String, sublabel: String? = null, icon: an
             .fillMaxWidth()
             .clip(RoundedCornerShape(4.dp))
             .background(if (hovered) SurfaceContainerHighest else Color.Transparent)
-            .hoverable(interaction)
-            .clickable { onClick() }
+            .hoverable(interaction, enabled = enabled)
+            .clickable(enabled = enabled) { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
-        Icon(icon, contentDescription = null, tint = if (hovered) Primary else OnSurfaceVariant.copy(alpha = 0.45f), modifier = Modifier.size(18.dp))
+        Icon(
+            icon, contentDescription = null,
+            tint = when {
+                !enabled -> OnSurfaceVariant.copy(alpha = 0.2f)
+                hovered  -> Primary
+                else     -> OnSurfaceVariant.copy(alpha = 0.45f)
+            },
+            modifier = Modifier.size(18.dp),
+        )
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-            Text(label, fontSize = 13.sp, color = if (hovered) Primary else OnSurface)
+            Text(label, fontSize = 13.sp, color = if (!enabled) OnSurfaceVariant.copy(alpha = 0.35f) else if (hovered) Primary else OnSurface)
             if (sublabel != null) {
-                Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+                Text(sublabel, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = if (!enabled) 0.3f else 0.6f))
             }
         }
     }

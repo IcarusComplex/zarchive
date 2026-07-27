@@ -34,6 +34,26 @@ actual class PlatformActions actual constructor() {
         if (dir != null && name != null) File(dir, name) else null
     }.getOrNull()
 
+    actual fun pickJsonOpenFile(title: String): File? = runCatching {
+        val dialog = java.awt.FileDialog(null as java.awt.Frame?, title, java.awt.FileDialog.LOAD)
+        dialog.setFilenameFilter { _, name -> name.endsWith(".json", ignoreCase = true) }
+        dialog.isVisible = true
+        val dir = dialog.directory
+        val name = dialog.file
+        if (dir != null && name != null) File(dir, name) else null
+    }.getOrNull()
+
+    actual fun pickJsonSaveFile(title: String, suggestedName: String): File? = runCatching {
+        val dialog = java.awt.FileDialog(null as java.awt.Frame?, title, java.awt.FileDialog.SAVE)
+        dialog.file = suggestedName.let { if (it.endsWith(".json", ignoreCase = true)) it else "$it.json" }
+        dialog.isVisible = true
+        val dir = dialog.directory
+        val name = dialog.file
+        if (dir != null && name != null) {
+            File(dir, if (name.endsWith(".json", ignoreCase = true)) name else "$name.json")
+        } else null
+    }.getOrNull()
+
     actual val crashLogFile: File
         get() = PlatformPaths.debugDumpDir.resolve("crash.log")
 

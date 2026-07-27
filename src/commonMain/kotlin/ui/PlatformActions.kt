@@ -22,6 +22,19 @@ expect class PlatformActions() {
      */
     fun pickCsvFile(): File?
 
+    /**
+     * Opens a native "open file" picker filtered to `.json`, for saved-list/saved-result import
+     * (desktop only, same rationale as [pickCsvFile] -- Android returns null unconditionally).
+     */
+    fun pickJsonOpenFile(title: String): File?
+
+    /**
+     * Opens a native "save file" picker filtered to `.json`, for saved-list/saved-result export
+     * (desktop only, same rationale as [pickCsvFile] -- Android returns null unconditionally).
+     * [suggestedName] should not include the `.json` extension; this appends it if missing.
+     */
+    fun pickJsonSaveFile(title: String, suggestedName: String): File?
+
     fun canInstallUpdate(): Boolean
 
     /**

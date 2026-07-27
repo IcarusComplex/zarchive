@@ -16,6 +16,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.debounce
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import network.BrowserBackedSearcher
@@ -29,6 +30,7 @@ enum class StoreStatus { PENDING, CHECKING, DONE }
 enum class UpdateCheckState { IDLE, CHECKING, UP_TO_DATE, UPDATE_FOUND, CHECK_FAILED }
 enum class SyncStatus { DISCONNECTED, IDLE, SYNCING, SYNCED, ERROR }
 enum class CollectionImportStatus { IDLE, IMPORTING, ERROR }
+enum class ImportExportStatus { IDLE, WORKING, ERROR }
 
 private const val SYNC_MIN_INTERVAL_MS = 5 * 60 * 1000L
 
@@ -792,6 +794,244 @@ class SearchViewModel(
     fun saveEditedList(id: Int, name: String, cards: List<String>) {
         scope.launch(Dispatchers.IO) { searchListRepo.update(id, name, cards) }
         markDirtyAndScheduleSync()
+    }
+
+    // ── Import / Export (desktop only -- see PlatformActions.pickJsonOpenFile/pickJsonSaveFile) ──
+    // File-based backup/sharing of saved lists and saved results. Distinct from the Google Drive
+    // sync above: sync is automatic and bidirectional between a user's own devices, this is an
+    // explicit "write me a file" / "read this file" action for sharing a list with someone else or
+    // keeping an offline backup. Reuses the syncId identity already assigned to every list/result
+    // (see data.buildImportPlan) so re-importing a file previously exported from this same install
+    // is recognised as "the same item" instead of always creating a duplicate.
+    private val importExportJson = Json { ignoreUnknownKeys = true; prettyPrint = true }
+
+    var importExportStatus by mutableStateOf(ImportExportStatus.IDLE)
+        private set
+    var importExportError by mutableStateOf<String?>(null)
+        private set
+    var importExportMessage by mutableStateOf<String?>(null)
+        private set
+
+    /** Non-null once a picked file has been parsed and matched against local state and it contains
+     *  at least one syncId collision -- the UI shows a merge/replace/copy dialog for each conflict.
+     *  Import plans with no conflicts are applied immediately by [stageImport] without going through
+     *  this field. */
+    var pendingImportPlan by mutableStateOf<data.ImportPlan?>(null)
+        private set
+
+    fun dismissImportExportMessage() {
+        importExportMessage = null
+        if (importExportStatus == ImportExportStatus.ERROR) { importExportStatus = ImportExportStatus.IDLE; importExportError = null }
+    }
+
+    private fun data.SavedSearchList.toExportedList() = data.ExportedList(
+        syncId    = syncId ?: java.util.UUID.randomUUID().toString(),
+        name      = name,
+        cards     = cards,
+        updatedAt = updatedAt,
+    )
+
+    private fun data.SyncedResultRecord.toExportedResult() = data.ExportedResult(
+        syncId         = syncId ?: java.util.UUID.randomUUID().toString(),
+        name           = name,
+        description    = description,
+        savedAt        = savedAt,
+        cards          = cards,
+        results        = results,
+        excludedCards  = excludedCards,
+        uncheckedLines = uncheckedLines,
+        pinnedListings = pinnedListings,
+    )
+
+    private fun entryAndSnapshotToExportedResult(entry: data.SavedResultEntry, loaded: data.LoadedResultSnapshot) = data.ExportedResult(
+        syncId         = entry.syncId ?: java.util.UUID.randomUUID().toString(),
+        name           = entry.name,
+        description    = entry.description,
+        savedAt        = entry.savedAt,
+        cards          = loaded.cards,
+        results        = loaded.results,
+        excludedCards  = loaded.excludedCards,
+        uncheckedLines = loaded.uncheckedLines,
+        pinnedListings = loaded.pinnedListings,
+    )
+
+    private fun writeBundleAndReport(file: File, bundle: data.ExportBundle) {
+        val result = runCatching { file.writeText(importExportJson.encodeToString(bundle)) }
+        result.onSuccess {
+            importExportStatus  = ImportExportStatus.IDLE
+            importExportMessage = "Exported to ${file.name}"
+            importExportError   = null
+        }.onFailure { e ->
+            importExportStatus = ImportExportStatus.ERROR
+            importExportError  = "Export failed: ${e.message}"
+        }
+    }
+
+    fun exportList(list: data.SavedSearchList, file: File) {
+        scope.launch(Dispatchers.IO) {
+            val bundle = data.ExportBundle(exportedAt = System.currentTimeMillis(), lists = listOf(list.toExportedList()))
+            withContext(Dispatchers.Main) { writeBundleAndReport(file, bundle) }
+        }
+    }
+
+    fun exportAllLists(file: File) {
+        val lists = savedLists.value
+        scope.launch(Dispatchers.IO) {
+            val bundle = data.ExportBundle(exportedAt = System.currentTimeMillis(), lists = lists.map { it.toExportedList() })
+            withContext(Dispatchers.Main) { writeBundleAndReport(file, bundle) }
+        }
+    }
+
+    fun exportResult(entry: data.SavedResultEntry, file: File) {
+        scope.launch(Dispatchers.IO) {
+            val loaded = searchResultRepo.load(entry.id)
+            withContext(Dispatchers.Main) {
+                if (loaded == null) {
+                    importExportStatus = ImportExportStatus.ERROR
+                    importExportError  = "Couldn't load \"${entry.name}\" to export"
+                } else {
+                    val bundle = data.ExportBundle(
+                        exportedAt = System.currentTimeMillis(),
+                        results    = listOf(entryAndSnapshotToExportedResult(entry, loaded)),
+                    )
+                    writeBundleAndReport(file, bundle)
+                }
+            }
+        }
+    }
+
+    fun exportAllResults(file: File) {
+        scope.launch(Dispatchers.IO) {
+            val records = searchResultRepo.allForSync().filter { !it.deleted }.map { it.toExportedResult() }
+            val bundle = data.ExportBundle(exportedAt = System.currentTimeMillis(), results = records)
+            withContext(Dispatchers.Main) { writeBundleAndReport(file, bundle) }
+        }
+    }
+
+    /** Reads and parses [file], matches it against local state, and either applies it immediately
+     *  (no conflicts) or stages it in [pendingImportPlan] for the user to resolve. */
+    fun stageImport(file: File) {
+        importExportStatus = ImportExportStatus.WORKING
+        importExportError  = null
+        scope.launch(Dispatchers.IO) {
+            val parsed = runCatching { importExportJson.decodeFromString<data.ExportBundle>(file.readText()) }
+            withContext(Dispatchers.Main) {
+                parsed.onSuccess { bundle ->
+                    val plan = data.buildImportPlan(bundle, savedLists.value, savedResults.value)
+                    when {
+                        plan.isEmpty -> {
+                            importExportStatus = ImportExportStatus.ERROR
+                            importExportError  = "That file has no saved lists or results to import"
+                        }
+                        plan.hasConflicts -> {
+                            importExportStatus = ImportExportStatus.IDLE
+                            pendingImportPlan  = plan
+                        }
+                        else -> {
+                            importExportStatus = ImportExportStatus.IDLE
+                            applyImportPlan(plan, emptyMap(), emptyMap())
+                        }
+                    }
+                }.onFailure { e ->
+                    importExportStatus = ImportExportStatus.ERROR
+                    importExportError  = "Couldn't read that file: ${e.message}"
+                }
+            }
+        }
+    }
+
+    fun cancelImport() {
+        pendingImportPlan = null
+    }
+
+    /** Applies [pendingImportPlan], resolving each conflict per [listActions]/[resultActions]
+     *  (keyed by the conflicting item's syncId), then clears it. Conflicts left unmentioned in the
+     *  maps default to [data.ImportAction.MERGE] (the least destructive choice). */
+    fun confirmImport(listActions: Map<String, data.ImportAction>, resultActions: Map<String, data.ImportAction>) {
+        val plan = pendingImportPlan ?: return
+        pendingImportPlan = null
+        applyImportPlan(plan, listActions, resultActions)
+    }
+
+    private fun applyImportPlan(
+        plan: data.ImportPlan,
+        listActions: Map<String, data.ImportAction>,
+        resultActions: Map<String, data.ImportAction>,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            plan.newLists.forEach { incoming ->
+                searchListRepo.applyRemote(data.SavedSearchList(
+                    id = 0, name = incoming.name, cards = incoming.cards,
+                    updatedAt = incoming.updatedAt, syncId = incoming.syncId,
+                ))
+            }
+            plan.listConflicts.forEach { conflict ->
+                when (listActions[conflict.incoming.syncId] ?: data.ImportAction.MERGE) {
+                    data.ImportAction.MERGE -> searchListRepo.update(
+                        conflict.local.id, conflict.local.name,
+                        data.mergeCardLists(conflict.local.cards, conflict.incoming.cards),
+                    )
+                    data.ImportAction.REPLACE -> searchListRepo.update(
+                        conflict.local.id, conflict.incoming.name, conflict.incoming.cards,
+                    )
+                    data.ImportAction.COPY -> searchListRepo.create(
+                        "${conflict.incoming.name} (imported)", conflict.incoming.cards,
+                    )
+                }
+            }
+
+            plan.newResults.forEach { incoming ->
+                searchResultRepo.applyRemote(data.SyncedResultRecord(
+                    id = 0, syncId = incoming.syncId, name = incoming.name, description = incoming.description,
+                    savedAt = incoming.savedAt, cards = incoming.cards, results = incoming.results,
+                    excludedCards = incoming.excludedCards, uncheckedLines = incoming.uncheckedLines,
+                    pinnedListings = incoming.pinnedListings,
+                ))
+            }
+            plan.resultConflicts.forEach { conflict ->
+                when (resultActions[conflict.incoming.syncId] ?: data.ImportAction.MERGE) {
+                    data.ImportAction.MERGE -> {
+                        val local = searchResultRepo.load(conflict.local.id)
+                        if (local == null) {
+                            searchResultRepo.overwrite(
+                                conflict.local.id, conflict.incoming.name, conflict.incoming.description,
+                                conflict.incoming.cards, conflict.incoming.results,
+                                conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                            )
+                        } else {
+                            val merged = data.mergeResultData(
+                                localCards = local.cards, incomingCards = conflict.incoming.cards,
+                                localResults = local.results, incomingResults = conflict.incoming.results,
+                                localExcluded = local.excludedCards, incomingExcluded = conflict.incoming.excludedCards,
+                                localUnchecked = local.uncheckedLines, incomingUnchecked = conflict.incoming.uncheckedLines,
+                                localPinned = local.pinnedListings, incomingPinned = conflict.incoming.pinnedListings,
+                            )
+                            searchResultRepo.overwrite(
+                                conflict.local.id, conflict.local.name, conflict.local.description,
+                                merged.cards, merged.results, merged.excludedCards, merged.uncheckedLines, merged.pinnedListings,
+                            )
+                        }
+                    }
+                    data.ImportAction.REPLACE -> searchResultRepo.overwrite(
+                        conflict.local.id, conflict.incoming.name, conflict.incoming.description,
+                        conflict.incoming.cards, conflict.incoming.results,
+                        conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                    )
+                    data.ImportAction.COPY -> searchResultRepo.save(
+                        "${conflict.incoming.name} (imported)", conflict.incoming.description,
+                        conflict.incoming.cards, conflict.incoming.results,
+                        conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                    )
+                }
+            }
+
+            val total = plan.newLists.size + plan.listConflicts.size + plan.newResults.size + plan.resultConflicts.size
+            withContext(Dispatchers.Main) {
+                importExportStatus  = ImportExportStatus.IDLE
+                importExportMessage = "Imported $total item${if (total == 1) "" else "s"}"
+            }
+            markDirtyAndScheduleSync()
+        }
     }
 
     var updateInfo by mutableStateOf<UpdateInfo?>(null)

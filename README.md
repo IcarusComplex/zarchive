@@ -129,6 +129,15 @@ The left panel has a **Lists** / **Results** switcher for keeping track of searc
 
 Both support editing, deleting, and (if you have more than a few) an overflow view listing everything you've saved. These are what [Google Drive sync](#sync-across-devices-google-drive) keeps in sync across your devices.
 
+### Import & export (desktop)
+
+The **⋮ menu** next to the Lists/Results switcher can save the current list/results (greyed out if there's nothing to save), export everything you've saved to a `.json` file, or import one back in:
+
+- **Export all lists** / **Export all results** — writes every saved list (or result) to a JSON file you choose, for backing up or sharing.
+- **Import from file…** — reads a previously-exported JSON file back in. Items ZArchive hasn't seen before are added automatically; if an item was already exported from this same install before (so it matches an existing saved list/result), you're asked whether to **merge** (combine the two card lists/results), **replace** (overwrite the existing one), or **copy** (keep both as separate saved items).
+
+This is separate from Google Drive sync above — it's a manual, one-off file you control, rather than automatic background syncing. Android doesn't have this yet.
+
 ---
 
 ## Sync across devices (Google Drive)

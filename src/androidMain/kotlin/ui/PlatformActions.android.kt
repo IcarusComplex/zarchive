@@ -34,6 +34,10 @@ actual class PlatformActions actual constructor() {
     // No local-file-picker UI on Android for collection import -- Drive is the only source there.
     actual fun pickCsvFile(): File? = null
 
+    // Saved-list/saved-result import/export is desktop-only for now -- see PlatformActions.kt.
+    actual fun pickJsonOpenFile(title: String): File? = null
+    actual fun pickJsonSaveFile(title: String, suggestedName: String): File? = null
+
     // Android's package installer handles the replace-over-existing-install flow itself once
     // handed a same-signature APK -- a real simplification versus desktop's swap scripts. The
     // system also handles the "allow installs from this source" permission prompt when needed.
