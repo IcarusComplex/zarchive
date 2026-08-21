@@ -218,7 +218,8 @@ class BrowserSearcher(private val parallelism: Int = 1) : BrowserBackedSearcher 
                 val title = obj["product_name"]?.jsonPrimitive?.contentOrNull?.trim()
                     ?: return@mapNotNull null
                 if (!isRelevant(card, title)) return@mapNotNull null
-                val available = (obj["stock_available"]?.jsonPrimitive?.intOrNull ?: 1) > 0
+                val stockAvailable = obj["stock_available"]?.jsonPrimitive?.intOrNull
+                val available = (stockAvailable ?: 1) > 0
                 // Prefer discount_price when set, fall back to actual_price (both are numeric ZAR)
                 val priceRaw = obj["discount_price"]?.jsonPrimitive?.doubleOrNull?.takeIf { it > 0 }
                     ?: obj["actual_price"]?.jsonPrimitive?.doubleOrNull
@@ -231,6 +232,7 @@ class BrowserSearcher(private val parallelism: Int = 1) : BrowserBackedSearcher 
                     url = "https://thewarren.co.za/mtg?id=$productId",
                     note = if (available) "In stock" else "Out of stock",
                     variantId = variantId,
+                    stockQty = stockAvailable?.takeIf { it > 0 },
                 )
             }
         } catch (e: Exception) {

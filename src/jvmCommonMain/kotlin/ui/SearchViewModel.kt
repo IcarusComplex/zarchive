@@ -50,6 +50,11 @@ class SearchViewModel(
     var statusText by mutableStateOf("")
     var completedStores by mutableStateOf(0)
     var searchedCards by mutableStateOf<List<String>>(emptyList())
+    // Requested quantity per card (from "4x Card Name" search-box syntax). Cards absent from
+    // this map default to 1 wherever it's consumed (OrderOptimizer). Not preserved across a
+    // saved-result reload (see loadSavedResult) -- only searchedCards is treated as the durable
+    // saved-result field there.
+    var cardQuantities by mutableStateOf<Map<String, Int>>(emptyMap())
     var totalStores by mutableStateOf(STORES.size)
     // Progress counters: every card-store completion increments completedCardChecks.
     var completedCardChecks by mutableStateOf(0)
@@ -93,6 +98,14 @@ class SearchViewModel(
     var excludeOwnedFromOrders: Boolean
         get() = excludeOwnedFromOrdersState
         set(value) { excludeOwnedFromOrdersState = value; SettingsStore.setSettingBoolean("orders.excludeOwned", value) }
+
+    // When a card is pinned to a specific listing but that listing can't cover the full
+    // requested quantity: off (default) leaves the remainder as a shortfall ("a pin means
+    // source here only"); on tops it up from other listings/stores.
+    private var topUpPinnedShortfallsState by mutableStateOf(SettingsStore.getSettingBoolean("orders.topUpPinnedShortfalls", false))
+    var topUpPinnedShortfalls: Boolean
+        get() = topUpPinnedShortfallsState
+        set(value) { topUpPinnedShortfallsState = value; SettingsStore.setSettingBoolean("orders.topUpPinnedShortfalls", value) }
 
     val results = mutableStateListOf<SearchResult>()
 
@@ -405,21 +418,26 @@ class SearchViewModel(
         // a kill mid-search still leaves a recoverable snapshot. Desktop writes this too (harmless,
         // cheap) but never reads it back -- its process only ever ends via an explicit user quit.
         scope.launch {
-            sessionSnapshotFlow().collect { (q, cards, res) -> persistSession(q, cards, res) }
+            sessionSnapshotFlow().collect { persistSession(it) }
         }
     }
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     private fun sessionSnapshotFlow() =
-        snapshotFlow { Triple(query, searchedCards.toList(), results.toList()) }.debounce(2_000)
+        snapshotFlow { SessionSnapshot(query, searchedCards.toList(), results.toList(), cardQuantities.toMap()) }.debounce(2_000)
 
     private val sessionJson = Json { ignoreUnknownKeys = true }
 
     @Serializable
-    private data class SessionSnapshot(val query: String, val searchedCards: List<String>, val results: List<SearchResult>)
+    private data class SessionSnapshot(
+        val query: String,
+        val searchedCards: List<String>,
+        val results: List<SearchResult>,
+        val cardQuantities: Map<String, Int> = emptyMap(),
+    )
 
-    private fun persistSession(q: String, cards: List<String>, res: List<SearchResult>) {
-        SettingsStore.setSetting("session.snapshot", sessionJson.encodeToString(SessionSnapshot(q, cards, res)))
+    private fun persistSession(snapshot: SessionSnapshot) {
+        SettingsStore.setSetting("session.snapshot", sessionJson.encodeToString(snapshot))
     }
 
     /**
@@ -435,6 +453,7 @@ class SearchViewModel(
 
         query = snapshot.query
         searchedCards = snapshot.searchedCards
+        cardQuantities = snapshot.cardQuantities
         results.addAll(snapshot.results)
         statusText = "Restored — ${snapshot.results.count { it.title != null }} listings"
 
@@ -661,12 +680,14 @@ class SearchViewModel(
         val current = results.toList()
         if (cards.isEmpty() || current.isEmpty()) return
         lastLoadedResultName = name
+        val quantities = cardQuantities.toMap()
         scope.launch(Dispatchers.IO) {
             searchResultRepo.save(
                 name, description, cards, current,
                 excludedCards    = excludedCards.keys.toSet(),
                 uncheckedLines   = uncheckedOrderLines.keys.toSet(),
                 pinnedListings   = pinnedListings.toMap(),
+                cardQuantities   = quantities,
             )
         }
         markDirtyAndScheduleSync()
@@ -679,12 +700,14 @@ class SearchViewModel(
         val current = results.toList()
         if (cards.isEmpty() || current.isEmpty()) return
         lastLoadedResultName = name
+        val quantities = cardQuantities.toMap()
         scope.launch(Dispatchers.IO) {
             searchResultRepo.overwrite(
                 id, name, description, cards, current,
                 excludedCards    = excludedCards.keys.toSet(),
                 uncheckedLines   = uncheckedOrderLines.keys.toSet(),
                 pinnedListings   = pinnedListings.toMap(),
+                cardQuantities   = quantities,
             )
         }
         markDirtyAndScheduleSync()
@@ -700,8 +723,12 @@ class SearchViewModel(
             val cards        = loaded.cards
             val loadedResults = loaded.results
             // Populate the VM synchronously on the Main thread before resolving images.
-            query         = cards.joinToString("\n")
+            query = cards.joinToString("\n") { c ->
+                val qty = loaded.cardQuantities[c] ?: 1
+                if (qty > 1) "${qty}x $c" else c
+            }
             searchedCards = cards
+            cardQuantities = loaded.cardQuantities
             results.clear()
             results.addAll(loadedResults)
             images.clear()
@@ -873,6 +900,7 @@ class SearchViewModel(
         excludedCards  = excludedCards,
         uncheckedLines = uncheckedLines,
         pinnedListings = pinnedListings,
+        cardQuantities = cardQuantities,
     )
 
     private fun entryAndSnapshotToExportedResult(entry: data.SavedResultEntry, loaded: data.LoadedResultSnapshot) = data.ExportedResult(
@@ -885,6 +913,7 @@ class SearchViewModel(
         excludedCards  = loaded.excludedCards,
         uncheckedLines = loaded.uncheckedLines,
         pinnedListings = loaded.pinnedListings,
+        cardQuantities = loaded.cardQuantities,
     )
 
     private fun writeBundleAndReport(file: File, bundle: data.ExportBundle) {
@@ -1017,7 +1046,7 @@ class SearchViewModel(
                     id = 0, syncId = incoming.syncId, name = incoming.name, description = incoming.description,
                     savedAt = incoming.savedAt, cards = incoming.cards, results = incoming.results,
                     excludedCards = incoming.excludedCards, uncheckedLines = incoming.uncheckedLines,
-                    pinnedListings = incoming.pinnedListings,
+                    pinnedListings = incoming.pinnedListings, cardQuantities = incoming.cardQuantities,
                 ))
             }
             plan.resultConflicts.forEach { conflict ->
@@ -1029,6 +1058,7 @@ class SearchViewModel(
                                 conflict.local.id, conflict.incoming.name, conflict.incoming.description,
                                 conflict.incoming.cards, conflict.incoming.results,
                                 conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                                conflict.incoming.cardQuantities,
                             )
                         } else {
                             val merged = data.mergeResultData(
@@ -1037,10 +1067,12 @@ class SearchViewModel(
                                 localExcluded = local.excludedCards, incomingExcluded = conflict.incoming.excludedCards,
                                 localUnchecked = local.uncheckedLines, incomingUnchecked = conflict.incoming.uncheckedLines,
                                 localPinned = local.pinnedListings, incomingPinned = conflict.incoming.pinnedListings,
+                                localCardQuantities = local.cardQuantities, incomingCardQuantities = conflict.incoming.cardQuantities,
                             )
                             searchResultRepo.overwrite(
                                 conflict.local.id, conflict.local.name, conflict.local.description,
                                 merged.cards, merged.results, merged.excludedCards, merged.uncheckedLines, merged.pinnedListings,
+                                merged.cardQuantities,
                             )
                         }
                     }
@@ -1048,11 +1080,13 @@ class SearchViewModel(
                         conflict.local.id, conflict.incoming.name, conflict.incoming.description,
                         conflict.incoming.cards, conflict.incoming.results,
                         conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                        conflict.incoming.cardQuantities,
                     )
                     data.ImportAction.COPY -> searchResultRepo.save(
                         "${conflict.incoming.name} (imported)", conflict.incoming.description,
                         conflict.incoming.cards, conflict.incoming.results,
                         conflict.incoming.excludedCards, conflict.incoming.uncheckedLines, conflict.incoming.pinnedListings,
+                        conflict.incoming.cardQuantities,
                     )
                 }
             }
@@ -1141,6 +1175,7 @@ class SearchViewModel(
         val storesToSearch = STORES.filterKeys { it in enabledStores }
 
         searchedCards = cards
+        cardQuantities = parseCardQuantities(query, ignoreBasicLands)
         searchJob?.cancel()
         results.clear()
         images.clear()
@@ -1239,24 +1274,39 @@ class SearchViewModel(
             "wastes", "snow-covered plains", "snow-covered island", "snow-covered swamp",
             "snow-covered mountain", "snow-covered forest")
 
+        private data class ParsedCard(val name: String, val qty: Int)
+
         // Parses plain "one card per line" format AND section-headed deck lists:
         //   [CREATURES]
         //   1 Shadowspear
         //   2x Lightning Bolt
-        fun parseCardList(input: String, ignoreBasicLands: Boolean): List<String> =
+        // Duplicate names (after quantity-prefix stripping) take the highest quantity mentioned,
+        // not a sum -- a card often appears twice by accident (a leftover bare mention alongside
+        // a deliberate "30x Card Name" line, e.g. from editing/pasting a list) and summing would
+        // silently inflate the requested quantity (1 + 30 = 31 instead of the intended 30).
+        // Taking the max also preserves the pre-quantity-feature behavior for two bare mentions
+        // of the same card (max(1, 1) = 1, i.e. still just one copy, not two).
+        private fun parseCardsInternal(input: String, ignoreBasicLands: Boolean): List<ParsedCard> =
             input.lines()
                 .map { it.trim() }
                 .filter { it.isNotEmpty() && !it.startsWith("#") && !it.startsWith("[") }
                 .mapNotNull { line ->
-                    // Strip leading quantity (e.g. "1 ", "2x ", "1x ")
-                    val name = line.removePrefix(Regex("""^\d+[xX]?\s+""")) ?: line
-                    name.trim().ifEmpty { null }
+                    // Strip leading quantity (e.g. "1 ", "2x ", "1x ") and capture it
+                    val m = Regex("""^(\d+)[xX]?\s+""").find(line)
+                    val qty = m?.groupValues?.get(1)?.toIntOrNull() ?: 1
+                    val name = if (m != null) line.substring(m.value.length) else line
+                    name.trim().ifEmpty { null }?.let { ParsedCard(it, qty) }
                 }
-                .filter { !ignoreBasicLands || it.lowercase() !in BASIC_LANDS }
-                .distinct()
+                .filter { !ignoreBasicLands || it.name.lowercase() !in BASIC_LANDS }
+                .groupBy { it.name }                                  // preserves first-seen order
+                .map { (name, group) -> ParsedCard(name, group.maxOf { it.qty }) }
 
-        private fun String.removePrefix(regex: Regex): String =
-            regex.find(this)?.let { substring(it.value.length) } ?: this
+        fun parseCardList(input: String, ignoreBasicLands: Boolean): List<String> =
+            parseCardsInternal(input, ignoreBasicLands).map { it.name }
+
+        /** Same card set as [parseCardList], but with the requested quantity per card. */
+        fun parseCardQuantities(input: String, ignoreBasicLands: Boolean): Map<String, Int> =
+            parseCardsInternal(input, ignoreBasicLands).associate { it.name to it.qty }
     }
 
     private fun openLuckshackSearches(cards: List<String>) {
@@ -1327,6 +1377,8 @@ class SearchViewModel(
 
         // Append new cards to the already-searched set; keep existing results and images.
         searchedCards = searchedCards + newCards
+        val freshQuantities = parseCardQuantities(query, ignoreBasicLands)
+        cardQuantities = cardQuantities + newCards.associateWith { freshQuantities[it] ?: 1 }
 
         completedStores = 0
         completedCardChecks = 0
@@ -1368,6 +1420,8 @@ class SearchViewModel(
         staleCounts.forEach { (store, n) -> storeCardCounts[store] = ((storeCardCounts[store] ?: 0) - n).coerceAtLeast(0) }
         results.removeAll { it.card in cardsToRefresh }
         if (cardsToAdd.isNotEmpty()) searchedCards = searchedCards + cardsToAdd
+        val freshQuantities = parseCardQuantities(query, ignoreBasicLands)
+        cardQuantities = cardQuantities + allCards.associateWith { freshQuantities[it] ?: cardQuantities[it] ?: 1 }
 
         completedStores = 0
         completedCardChecks = 0

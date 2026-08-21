@@ -67,4 +67,47 @@ class ParseCardListTest {
         assertEquals(listOf("Plains", "Lightning Bolt"), parse("Plains\nLightning Bolt", ignore = false))
     @Test fun `basic land case insensitive`() =
         assertEquals(emptyList<String>(), parse("PLAINS", ignore = true))
+
+    // ── parseCardQuantities ──────────────────────────────────────────────────
+
+    private fun quantities(input: String, ignore: Boolean = false) =
+        SearchViewModel.parseCardQuantities(input, ignore)
+
+    @Test fun `quantity prefix parsed`() =
+        assertEquals(mapOf("Lightning Bolt" to 4), quantities("4x Lightning Bolt"))
+
+    @Test fun `no prefix defaults to quantity 1`() =
+        assertEquals(mapOf("Lightning Bolt" to 1), quantities("Lightning Bolt"))
+
+    @Test fun `duplicate lines take the max quantity, not a sum`() =
+        assertEquals(mapOf("Lightning Bolt" to 4), quantities("4x Lightning Bolt\n2 Lightning Bolt"))
+
+    @Test fun `a bare mention alongside an explicit quantity does not inflate it`() =
+        // Regression: "Hare Apparent" + "30 Hare Apparent" must resolve to 30, not 31 --
+        // a leftover bare mention shouldn't count as "one more copy" on top of an explicit qty.
+        assertEquals(mapOf("Hare Apparent" to 30), quantities("Hare Apparent\n30 Hare Apparent"))
+
+    @Test fun `two bare duplicate lines still count as one`() =
+        assertEquals(mapOf("Lightning Bolt" to 1), quantities("Lightning Bolt\nLightning Bolt"))
+
+    @Test fun `basic land filtering applies before quantity aggregation`() =
+        assertEquals(mapOf("Lightning Bolt" to 1), quantities("4x Plains\nLightning Bolt", ignore = true))
+
+    @Test fun `section headers and comments ignored for quantities too`() =
+        assertEquals(mapOf("Bolt" to 1, "Spear" to 2), quantities("[Creatures]\n1 Bolt\n# note\n2x Spear"))
+
+    @Test fun `parseCardList and parseCardQuantities never drift apart`() {
+        val fixtures = listOf(
+            "Lightning Bolt",
+            "4x Lightning Bolt\n2 Lightning Bolt",
+            "[Creatures]\n1 Bolt\n# note\n2x Spear",
+            "Plains\nIsland\nSwamp\nMountain\nForest\nLightning Bolt",
+            "",
+        )
+        for (input in fixtures) {
+            for (ignore in listOf(false, true)) {
+                assertEquals(parse(input, ignore).toSet(), quantities(input, ignore).keys, "mismatch for: $input (ignore=$ignore)")
+            }
+        }
+    }
 }

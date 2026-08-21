@@ -29,6 +29,7 @@ data class ExportedResult(
     val excludedCards: Set<String> = emptySet(),
     val uncheckedLines: Set<String> = emptySet(),
     val pinnedListings: Map<String, String> = emptyMap(),
+    val cardQuantities: Map<String, Int> = emptyMap(),
 )
 
 /** The single JSON file written by an export and read back by an import. */
@@ -100,6 +101,7 @@ data class MergedResultData(
     val excludedCards: Set<String>,
     val uncheckedLines: Set<String>,
     val pinnedListings: Map<String, String>,
+    val cardQuantities: Map<String, Int> = emptyMap(),
 )
 
 /** Combines a local saved-result snapshot with an incoming imported one into a single merged snapshot. */
@@ -114,6 +116,8 @@ fun mergeResultData(
     incomingUnchecked: Set<String>,
     localPinned: Map<String, String>,
     incomingPinned: Map<String, String>,
+    localCardQuantities: Map<String, Int> = emptyMap(),
+    incomingCardQuantities: Map<String, Int> = emptyMap(),
 ): MergedResultData {
     val mergedResults = LinkedHashMap<String, SearchResult>()
     (localResults + incomingResults).forEach { r -> mergedResults.putIfAbsent(r.url, r) }
@@ -123,5 +127,6 @@ fun mergeResultData(
         excludedCards  = localExcluded + incomingExcluded,
         uncheckedLines = localUnchecked + incomingUnchecked,
         pinnedListings = localPinned + incomingPinned,
+        cardQuantities = localCardQuantities + incomingCardQuantities,
     )
 }

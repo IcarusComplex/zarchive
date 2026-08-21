@@ -4133,8 +4133,8 @@ private fun OrderListsPane(vm: SearchViewModel) {
     // toggle changes (all read as Compose state directly inside the block, same as vm.searchedCards/
     // vm.results below, so derivedStateOf's dependency tracking picks them up).
     fun cardsForPlan() = if (vm.excludeOwnedFromOrders) vm.searchedCards.filterNot { ownedCards.ownsCard(it) } else vm.searchedCards
-    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
-    val fewest   by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
+    val fewest   by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
@@ -4146,8 +4146,8 @@ private fun OrderListsPane(vm: SearchViewModel) {
         (priceMax == null || (line.listing.priceZar ?: 0.0) <= priceMax)
     }
     val activeStores = plan.storeOrders.count { so -> so.lines.any { isLineActive(it) } }
-    val activeItems  = plan.storeOrders.sumOf { so -> so.lines.count { isLineActive(it) } }
-    val activeTotal  = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { it.listing.priceZar ?: 0.0 } }
+    val activeItems  = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { it.qty } }
+    val activeTotal  = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { (it.listing.priceZar ?: 0.0) * it.qty } }
 
     Column(Modifier.fillMaxSize()) {
         // Strategy switcher
@@ -4177,6 +4177,26 @@ private fun OrderListsPane(vm: SearchViewModel) {
                     Spacer(Modifier.width(6.dp))
                     Text("updating live…", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
                 }
+            }
+            Spacer(Modifier.weight(1f))
+            // Only relevant once a card is pinned to a specific listing; shown always so its
+            // state isn't hidden/forgotten, same reasoning as "Exclude owned" living in the
+            // shared header above both tabs.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .clickable(indication = null, interactionSource = remember { MutableInteractionSource() }) {
+                        vm.topUpPinnedShortfalls = !vm.topUpPinnedShortfalls
+                    },
+            ) {
+                Text("Top up pinned shortfalls elsewhere", fontSize = 12.sp, color = OnSurfaceVariant)
+                Spacer(Modifier.width(6.dp))
+                Icon(
+                    if (vm.topUpPinnedShortfalls) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                    contentDescription = null,
+                    tint = if (vm.topUpPinnedShortfalls) Primary else OutlineVariant,
+                    modifier = Modifier.size(16.dp),
+                )
             }
         }
         Spacer(Modifier.height(6.dp))
@@ -4290,9 +4310,10 @@ private fun PlanStat(value: String, label: String, valueColor: Color = OnSurface
 private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unchecked: MutableMap<String, Unit>, excludedCards: MutableMap<String, Unit>, priceMax: Double? = null, hoverOnThumbnailOnly: Boolean = false, ownedCards: Set<String> = emptySet()) {
     val activeLines  = order.lines
         .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
-        .distinctBy { it.listing.variantId ?: it.listing.url }
-    val displayCount = activeLines.size
-    val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
+        .groupBy { it.card to (it.listing.variantId ?: it.listing.url) }
+        .map { (_, group) -> group.first().copy(qty = group.sumOf { it.qty }) }
+    val displayCount = activeLines.sumOf { it.qty }
+    val displayTotal = activeLines.sumOf { (it.listing.priceZar ?: 0.0) * it.qty }
 
     val allHaveIds = activeLines.isNotEmpty() && activeLines.all { it.listing.variantId != null }
     val platform = KNOWN_PLATFORMS[order.storeUrl]
@@ -4380,7 +4401,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
                                             if (idx > 0) delay(6000)
-                                            openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                                            openUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=${line.qty}")
                                         }
                                         delay(6000)
                                         openUrl(wooCartUrl)
@@ -4409,7 +4430,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
                                             if (idx > 0) delay(2000)
-                                            openUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=1&token=$token&action=update")
+                                            openUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=${line.qty}&token=$token&action=update")
                                         }
                                         delay(3000)
                                         openUrl("$base/cart")
@@ -4419,7 +4440,7 @@ private fun StoreOrderCard(order: StoreOrder, images: Map<String, String>, unche
                             }
                             else -> {
                                 {
-                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
+                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:${it.qty}" }
                                     openUrl(url)
                                 }
                             }
@@ -4564,6 +4585,10 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
                         maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (line.qty > 1) {
+                        Spacer(Modifier.width(6.dp))
+                        Text("×${line.qty}", fontSize = 11.sp, fontFamily = Mono, fontWeight = FontWeight.SemiBold, color = Primary)
+                    }
                     if (owned) {
                         Spacer(Modifier.width(6.dp))
                         IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 13.dp)
@@ -4575,10 +4600,15 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
                 }
             }
             Box(Modifier.width(COL_PRICE).alpha(contentAlpha), contentAlignment = Alignment.CenterEnd) {
-                Text(line.listing.priceZar?.let { formatZar(it) } ?: "N/A", fontFamily = Mono,
-                    fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = if (line.listing.priceZar == null) OnSurfaceVariant.copy(alpha = 0.6f) else Primary)
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(line.listing.priceZar?.let { formatZar(it * line.qty) } ?: "N/A", fontFamily = Mono,
+                        fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (line.listing.priceZar == null) OnSurfaceVariant.copy(alpha = 0.6f) else Primary)
+                    if (line.qty > 1 && line.listing.priceZar != null) {
+                        Text("${formatZar(line.listing.priceZar)} ea", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+                    }
+                }
             }
             Box(Modifier.width(COL_ACTION), contentAlignment = Alignment.Center) {
                 Icon(Icons.Default.OpenInNew, "Open listing",
@@ -4615,7 +4645,7 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySet()) {
+private fun UncoveredCard(shortfalls: List<data.OrderShortfall>, ownedCards: Set<String> = emptySet()) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -4626,18 +4656,22 @@ private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySe
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.ErrorOutline, null, tint = ErrorColor, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Not available anywhere (${cards.size})", fontSize = 13.sp,
+                Text("Not fully available (${shortfalls.size})", fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold, color = ErrorColor)
             }
             Spacer(Modifier.height(6.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                cards.forEachIndexed { i, card ->
+                shortfalls.forEachIndexed { i, shortfall ->
+                    // Fully unavailable cards (found == 0) render as plain names, like before
+                    // quantity existed; partially-covered cards get a "(2 of 4 found)"
+                    // qualifier so it's clear the plan already includes a partial buy.
+                    val label = if (shortfall.found > 0) "${shortfall.card} (${shortfall.found} of ${shortfall.needed} found)" else shortfall.card
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (i < cards.lastIndex) "$card," else card,
+                            if (i < shortfalls.lastIndex) "$label," else label,
                             fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f),
                         )
-                        if (ownedCards.ownsCard(card)) {
+                        if (ownedCards.ownsCard(shortfall.card)) {
                             Spacer(Modifier.width(3.dp))
                             IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 12.dp)
                         }

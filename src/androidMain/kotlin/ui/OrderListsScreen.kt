@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.KNOWN_PLATFORMS
 import data.OrderLine
+import data.OrderShortfall
 import data.Platform
 import data.SearchResult
 import data.StoreOrder
@@ -103,8 +104,8 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
     // directly inside the derivedStateOf block below, same as vm.results, so toggling "exclude
     // owned" or a fresh collection import both trigger a recompute.
     fun cardsForPlan() = if (vm.excludeOwnedFromOrders) vm.searchedCards.filterNot { ownedCards.ownsCard(it) } else vm.searchedCards
-    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
-    val fewest by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches) } }
+    val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
+    val fewest by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
     val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
     val anyInStock = cheapest.storeOrders.isNotEmpty()
 
@@ -114,8 +115,8 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
             (priceMax == null || (line.listing.priceZar ?: 0.0) <= priceMax)
     }
     val activeStores = plan.storeOrders.count { so -> so.lines.any { isLineActive(it) } }
-    val activeItems = plan.storeOrders.sumOf { so -> so.lines.count { isLineActive(it) } }
-    val activeTotal = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { it.listing.priceZar ?: 0.0 } }
+    val activeItems = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { it.qty } }
+    val activeTotal = plan.storeOrders.sumOf { so -> so.lines.filter { isLineActive(it) }.sumOf { (it.listing.priceZar ?: 0.0) * it.qty } }
 
     Column(Modifier.fillMaxSize()) {
         Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -163,6 +164,28 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
                 modifier = Modifier.size(16.dp),
             )
         }
+        Spacer(Modifier.height(4.dp))
+        // Only relevant once a card is pinned to a specific listing; shown always so its state
+        // isn't hidden/forgotten, same reasoning as "Exclude owned" above.
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clickable { vm.topUpPinnedShortfalls = !vm.topUpPinnedShortfalls }
+                .padding(vertical = 4.dp),
+        ) {
+            Text(
+                "Top up pinned shortfalls elsewhere",
+                fontSize = 11.sp,
+                color = if (vm.topUpPinnedShortfalls) Primary else OnSurfaceVariant.copy(alpha = 0.6f),
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                if (vm.topUpPinnedShortfalls) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                contentDescription = null,
+                tint = if (vm.topUpPinnedShortfalls) Primary else OnSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.size(16.dp),
+            )
+        }
         Spacer(Modifier.height(10.dp))
 
         if (!anyInStock) {
@@ -185,6 +208,10 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
             PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
             Spacer(Modifier.width(16.dp))
             PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
+            if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
+                Spacer(Modifier.width(16.dp))
+                PlanStat("${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor)
+            }
             if (vm.isSearching) {
                 Spacer(Modifier.weight(1f))
                 CircularProgressIndicator(Modifier.size(12.dp), color = Primary, strokeWidth = 1.5.dp)
@@ -256,9 +283,10 @@ private fun StoreOrderCard(
 ) {
     val activeLines = order.lines
         .filter { !unchecked.containsKey(it.listing.url) && !excludedCards.containsKey(it.card) && (priceMax == null || (it.listing.priceZar ?: 0.0) <= priceMax) }
-        .distinctBy { it.listing.variantId ?: it.listing.url }
-    val displayCount = activeLines.size
-    val displayTotal = activeLines.sumOf { it.listing.priceZar ?: 0.0 }
+        .groupBy { it.card to (it.listing.variantId ?: it.listing.url) }
+        .map { (_, group) -> group.first().copy(qty = group.sumOf { it.qty }) }
+    val displayCount = activeLines.sumOf { it.qty }
+    val displayTotal = activeLines.sumOf { (it.listing.priceZar ?: 0.0) * it.qty }
     val isWarren = order.store == "The Warren"
 
     val allHaveIds = activeLines.isNotEmpty() && activeLines.all { it.listing.variantId != null }
@@ -338,7 +366,7 @@ private fun StoreOrderCard(
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
                                             if (idx > 0) delay(6000)
-                                            onOpenUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=1")
+                                            onOpenUrl("$base/?add-to-cart=${line.listing.variantId}&quantity=${line.qty}")
                                         }
                                         delay(6000)
                                         onOpenUrl(wooCartUrl)
@@ -367,7 +395,7 @@ private fun StoreOrderCard(
                                     scope.launch {
                                         activeLines.forEachIndexed { idx, line ->
                                             if (idx > 0) delay(2000)
-                                            onOpenUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=1&token=$token&action=update")
+                                            onOpenUrl("$base/cart?add=1&id_product=${line.listing.variantId}&qty=${line.qty}&token=$token&action=update")
                                         }
                                         delay(3000)
                                         onOpenUrl("$base/cart")
@@ -377,7 +405,7 @@ private fun StoreOrderCard(
                             }
                             else -> {
                                 {
-                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:1" }
+                                    val url = "$base/cart/" + activeLines.joinToString(",") { "${it.listing.variantId}:${it.qty}" }
                                     onOpenUrl(url)
                                 }
                             }
@@ -472,6 +500,10 @@ private fun OrderLineRow(
         Column(Modifier.weight(1f).alpha(contentAlpha)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                if (line.qty > 1) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("×${line.qty}", fontSize = 11.sp, fontFamily = Mono, fontWeight = FontWeight.SemiBold, color = Primary)
+                }
                 if (owned) {
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(13.dp))
@@ -482,20 +514,24 @@ private fun OrderLineRow(
             }
         }
         Spacer(Modifier.width(8.dp))
-        Text(
-            line.listing.priceZar?.let { formatZar(it) } ?: "N/A",
-            fontFamily = Mono,
-            fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
-            fontWeight = FontWeight.Bold,
-            color = if (line.listing.priceZar == null) OnSurfaceVariant.copy(alpha = 0.6f) else Primary,
-            modifier = Modifier.alpha(contentAlpha),
-        )
+        Column(horizontalAlignment = Alignment.End, modifier = Modifier.alpha(contentAlpha)) {
+            Text(
+                line.listing.priceZar?.let { formatZar(it * line.qty) } ?: "N/A",
+                fontFamily = Mono,
+                fontSize = if (line.listing.priceZar != null) 15.sp else 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (line.listing.priceZar == null) OnSurfaceVariant.copy(alpha = 0.6f) else Primary,
+            )
+            if (line.qty > 1 && line.listing.priceZar != null) {
+                Text("${formatZar(line.listing.priceZar)} ea", fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+            }
+        }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySet()) {
+private fun UncoveredCard(shortfalls: List<OrderShortfall>, ownedCards: Set<String> = emptySet()) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = SurfaceContainerLowest,
@@ -506,17 +542,18 @@ private fun UncoveredCard(cards: List<String>, ownedCards: Set<String> = emptySe
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.ErrorOutline, null, tint = ErrorColor, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(8.dp))
-                Text("Not available anywhere (${cards.size})", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
+                Text("Not fully available (${shortfalls.size})", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ErrorColor)
             }
             Spacer(Modifier.height(6.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                cards.forEachIndexed { i, card ->
+                shortfalls.forEachIndexed { i, shortfall ->
+                    val label = if (shortfall.found > 0) "${shortfall.card} (${shortfall.found} of ${shortfall.needed} found)" else shortfall.card
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (i < cards.lastIndex) "$card," else card,
+                            if (i < shortfalls.lastIndex) "$label," else label,
                             fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.8f),
                         )
-                        if (ownedCards.ownsCard(card)) {
+                        if (ownedCards.ownsCard(shortfall.card)) {
                             Spacer(Modifier.width(3.dp))
                             Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(12.dp))
                         }

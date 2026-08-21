@@ -10,14 +10,17 @@ class OrderOptimizerTest {
         price: Double?,
         title: String = card,
         available: Boolean? = true,
+        stockQty: Int? = null,
+        url: String = "https://example.com/$store",
     ) = SearchResult(
         store = store,
         card = card,
         title = title,
         priceZar = price,
         available = available,
-        url = "https://example.com/$store",
+        url = url,
         note = "",
+        stockQty = stockQty,
     )
 
     // ── cheapestPlan ─────────────────────────────────────────────────────────
@@ -64,13 +67,16 @@ class OrderOptimizerTest {
         )
         val plan = cheapestPlan(listOf("Bolt"), results)
         assertTrue(plan.storeOrders.isEmpty())
-        assertEquals(listOf("Bolt"), plan.uncoveredCards)
+        assertEquals(listOf(OrderShortfall("Bolt", needed = 1, found = 0)), plan.uncoveredCards)
     }
 
     @Test fun `cheapest puts card with no listings in uncovered`() {
         val plan = cheapestPlan(listOf("Bolt", "Spear"), emptyList())
         assertTrue(plan.storeOrders.isEmpty())
-        assertEquals(listOf("Bolt", "Spear"), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Bolt", needed = 1, found = 0), OrderShortfall("Spear", needed = 1, found = 0)),
+            plan.uncoveredCards,
+        )
     }
 
     @Test fun `cheapest skips null-title placeholder rows`() {
@@ -132,7 +138,7 @@ class OrderOptimizerTest {
             result("Spear", "StoreA", 10.0, available = false),
         )
         val plan = fewestStoresPlan(listOf("Bolt", "Spear"), results)
-        assertEquals(listOf("Spear"), plan.uncoveredCards)
+        assertEquals(listOf(OrderShortfall("Spear", needed = 1, found = 0)), plan.uncoveredCards)
         assertEquals(1, plan.storeOrders[0].itemCount)
     }
 
@@ -161,5 +167,95 @@ class OrderOptimizerTest {
         )
         val plan = cheapestPlan(listOf("Bolt", "Spear", "Counterspell"), results)
         assertEquals(3, plan.itemCount)
+    }
+
+    // ── quantity-aware cheapestPlan ──────────────────────────────────────────
+
+    @Test fun `cheapest splits quantity across listings when one is insufficient`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 2),
+            result("Bolt", "StoreB", 8.0, stockQty = null),
+        )
+        val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 4))
+        assertTrue(plan.uncoveredCards.isEmpty())
+        val lines = plan.storeOrders.flatMap { it.lines }
+        assertEquals(2, lines.size)
+        assertEquals(4, lines.sumOf { it.qty })
+        assertEquals(2, lines.first { it.listing.store == "StoreA" }.qty)
+        assertEquals(2, lines.first { it.listing.store == "StoreB" }.qty)
+    }
+
+    @Test fun `cheapest reports shortfall when total stock is insufficient`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 2),
+            result("Bolt", "StoreB", 8.0, stockQty = 2),
+        )
+        val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 5))
+        assertEquals(listOf(OrderShortfall("Bolt", needed = 5, found = 4)), plan.uncoveredCards)
+        val lines = plan.storeOrders.flatMap { it.lines }
+        assertEquals(4, lines.sumOf { it.qty })
+    }
+
+    // ── quantity-aware fewestStoresPlan ──────────────────────────────────────
+
+    @Test fun `fewest prefers single store that covers full quantity`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 5),
+            result("Bolt", "StoreB", 3.0, stockQty = 1),
+        )
+        val plan = fewestStoresPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 4))
+        assertEquals(1, plan.storeCount)
+        assertEquals("StoreA", plan.storeOrders[0].store)
+        assertEquals(4, plan.storeOrders[0].itemCount)
+        assertTrue(plan.uncoveredCards.isEmpty())
+    }
+
+    @Test fun `fewest splits across stores when none alone covers the quantity`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 2),
+            result("Bolt", "StoreB", 8.0, stockQty = 2),
+        )
+        val plan = fewestStoresPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 4))
+        assertEquals(2, plan.storeCount)
+        assertEquals(4, plan.itemCount)
+        assertTrue(plan.uncoveredCards.isEmpty())
+    }
+
+    // ── pinned listings + topUpPinnedShortfalls ──────────────────────────────
+
+    @Test fun `pinned listing without top-up leaves shortfall when insufficient`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 2, url = "https://example.com/pin"),
+            result("Bolt", "StoreB", 8.0, stockQty = null),
+        )
+        val plan = cheapestPlan(
+            listOf("Bolt"), results,
+            pinnedListings = mapOf("Bolt" to "https://example.com/pin"),
+            quantities = mapOf("Bolt" to 4),
+            topUpPinnedShortfalls = false,
+        )
+        assertEquals(listOf(OrderShortfall("Bolt", needed = 4, found = 2)), plan.uncoveredCards)
+        val lines = plan.storeOrders.flatMap { it.lines }
+        assertEquals(1, lines.size)
+        assertEquals("StoreA", lines[0].listing.store)
+        assertEquals(2, lines[0].qty)
+    }
+
+    @Test fun `pinned listing with top-up sources the remainder elsewhere`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = 2, url = "https://example.com/pin"),
+            result("Bolt", "StoreB", 8.0, stockQty = null),
+        )
+        val plan = cheapestPlan(
+            listOf("Bolt"), results,
+            pinnedListings = mapOf("Bolt" to "https://example.com/pin"),
+            quantities = mapOf("Bolt" to 4),
+            topUpPinnedShortfalls = true,
+        )
+        assertTrue(plan.uncoveredCards.isEmpty())
+        val lines = plan.storeOrders.flatMap { it.lines }
+        assertEquals(2, lines.size)
+        assertEquals(2, lines.first { it.listing.store == "StoreA" }.qty)
+        assertEquals(2, lines.first { it.listing.store == "StoreB" }.qty)
     }
 }

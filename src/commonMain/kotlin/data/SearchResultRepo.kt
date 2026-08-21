@@ -19,6 +19,7 @@ data class LoadedResultSnapshot(
     val excludedCards: Set<String>,
     val uncheckedLines: Set<String>,
     val pinnedListings: Map<String, String>,
+    val cardQuantities: Map<String, Int> = emptyMap(),
 )
 
 /**
@@ -39,6 +40,7 @@ data class SyncedResultRecord(
     val excludedCards: Set<String>,
     val uncheckedLines: Set<String>,
     val pinnedListings: Map<String, String>,
+    val cardQuantities: Map<String, Int> = emptyMap(),
     val deleted: Boolean = false,
     val deletedAt: Long? = null,
 )
@@ -58,6 +60,7 @@ interface SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int> = emptyMap(),
     )
 
     suspend fun overwrite(
@@ -69,6 +72,7 @@ interface SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int> = emptyMap(),
     )
 
     suspend fun load(id: Int): LoadedResultSnapshot?

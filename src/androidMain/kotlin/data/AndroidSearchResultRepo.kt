@@ -42,6 +42,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int>,
     ): Unit = withContext(Dispatchers.IO) {
         queries.insertSnapshot(
             name = name,
@@ -53,6 +54,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
             excluded_cards_json = json.encodeToString(excludedCards.toList()),
             unchecked_lines_json = json.encodeToString(uncheckedLines.toList()),
             pinned_listings_json = json.encodeToString(pinnedListings),
+            card_quantities_json = json.encodeToString(cardQuantities),
             sync_id = java.util.UUID.randomUUID().toString(),
         )
         refresh()
@@ -67,6 +69,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int>,
     ): Unit = withContext(Dispatchers.IO) {
         queries.updateSnapshot(
             name = name,
@@ -78,6 +81,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
             excluded_cards_json = json.encodeToString(excludedCards.toList()),
             unchecked_lines_json = json.encodeToString(uncheckedLines.toList()),
             pinned_listings_json = json.encodeToString(pinnedListings),
+            card_quantities_json = json.encodeToString(cardQuantities),
             id = id.toLong(),
         )
         refresh()
@@ -91,6 +95,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
             excludedCards = json.decodeFromString<List<String>>(row.excluded_cards_json ?: "[]").toSet(),
             uncheckedLines = json.decodeFromString<List<String>>(row.unchecked_lines_json ?: "[]").toSet(),
             pinnedListings = json.decodeFromString(row.pinned_listings_json ?: "{}"),
+            cardQuantities = json.decodeFromString(row.card_quantities_json ?: "{}"),
         )
     }
 
@@ -114,6 +119,7 @@ class AndroidSearchResultRepo : SearchResultRepo {
                 excludedCards = json.decodeFromString<List<String>>(row.excluded_cards_json ?: "[]").toSet(),
                 uncheckedLines = json.decodeFromString<List<String>>(row.unchecked_lines_json ?: "[]").toSet(),
                 pinnedListings = json.decodeFromString(row.pinned_listings_json ?: "{}"),
+                cardQuantities = json.decodeFromString(row.card_quantities_json ?: "{}"),
                 deleted = row.deleted != 0L,
                 deletedAt = row.deleted_at,
             )
@@ -128,16 +134,17 @@ class AndroidSearchResultRepo : SearchResultRepo {
         val excludedJson = json.encodeToString(record.excludedCards.toList())
         val uncheckedJson = json.encodeToString(record.uncheckedLines.toList())
         val pinnedJson = json.encodeToString(record.pinnedListings)
+        val quantitiesJson = json.encodeToString(record.cardQuantities)
         if (existing == null) {
             queries.insertSnapshotForSync(
                 record.name, record.description, record.savedAt, record.cards.size.toLong(),
-                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson,
+                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson, quantitiesJson,
                 sid, if (record.deleted) 1L else 0L, record.deletedAt,
             )
         } else {
             queries.updateSnapshotForSync(
                 record.name, record.description, record.savedAt, record.cards.size.toLong(),
-                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson,
+                cardsJson, resultsJson, excludedJson, uncheckedJson, pinnedJson, quantitiesJson,
                 if (record.deleted) 1L else 0L, record.deletedAt, existing.id,
             )
         }

@@ -21,6 +21,9 @@ import java.time.format.DateTimeFormatter
 private val IS_DEBUG = System.getProperty("mtg.debug") == "true"
 private val DEBUG_DIR by lazy { PlatformPaths.debugDumpDir }
 
+// Matches WooCommerce's core low-stock-threshold wording, e.g. "Only 2 left in stock".
+private val WOOCOMMERCE_STOCK_QTY_RE = Regex("""(?i)only\s+(\d+)\s+left""")
+
 class CloudflareBlockedException : Exception("Cloudflare challenge — store skipped")
 
 private suspend fun checkStatus(response: HttpResponse) {
@@ -178,13 +181,14 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
                     note = availabilityNote(available),
                     variantId = variant?.id,
                     setHint = variant?.setHint ?: c.setHint,
+                    stockQty = variant?.stockQty,
                 )
             }
         }
     }.awaitAll()
 }
 
-private data class ShopifyVariant(val price: Double, val id: Long?, val setHint: String? = null)
+private data class ShopifyVariant(val price: Double, val id: Long?, val setHint: String? = null, val stockQty: Int? = null)
 
 /**
  * Fetches /products/{handle}.js and returns the display price, the best cart variant ID,
@@ -225,13 +229,91 @@ private suspend fun shopifyFirstVariant(
         val setHint = setPosition?.let { pos ->
             display["option$pos"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
         }
-        ShopifyVariant(price, cartId, setHint)
+        val stockQty = cartId?.let { probeShopifyStock(client, base, it) }
+        ShopifyVariant(price, cartId, setHint, stockQty)
     } catch (_: Exception) {
         null
     }
 }
 
-suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): List<SearchResult> {
+// Shopify's public .js/.json product endpoints never expose real inventory counts (deliberate
+// anti-scraping policy) -- but the storefront's own /cart/add.js endpoint reveals it indirectly:
+// requesting more than what's in stock either succeeds and silently caps the added quantity, or
+// (observed live, Aug 2026) rejects with HTTP 422 whose message states the real capped amount,
+// e.g. "Only 3 items were added to your cart due to availability." A genuinely sold-out variant
+// instead returns "...is already sold out." with no number. This is documented Shopify behavior
+// (their own community forums describe it), not an exploit -- it just creates a harmless
+// anonymous, abandoned cart per check; this app's Ktor client doesn't persist cookies, so there's
+// no cross-request cart-state accumulation to worry about.
+private const val SHOPIFY_PROBE_QTY = 20
+private val SHOPIFY_CAPPED_QTY_RE = Regex("""(?i)only\s+(\d+)\s+items?\s+(?:was|were)\s+added""")
+private val SHOPIFY_SOLD_OUT_RE = Regex("""(?i)sold out""")
+
+private suspend fun probeShopifyStock(client: HttpClient, base: String, variantId: Long): Int? {
+    return try {
+        val resp = client.post("$base/cart/add.js") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"items":[{"id":$variantId,"quantity":$SHOPIFY_PROBE_QTY}]}""")
+        }
+        val body = resp.bodyAsText()
+        when (resp.status.value) {
+            200 -> {
+                val qty = Json.parseToJsonElement(body).jsonObject["items"]?.jsonArray
+                    ?.firstOrNull()?.jsonObject?.get("quantity")?.jsonPrimitive?.intOrNull
+                // Hitting our own probe ceiling exactly means we can't tell real stock from a
+                // backorder-allowed variant -- treat as unknown/unlimited, not a false "20".
+                qty?.takeIf { it < SHOPIFY_PROBE_QTY }
+            }
+            422 -> {
+                SHOPIFY_CAPPED_QTY_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: if (SHOPIFY_SOLD_OUT_RE.containsMatchIn(body)) 0 else null
+            }
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
+
+// WooCommerce's own add-to-cart AJAX endpoint (/?wc-ajax=add_to_cart, form-encoded product_id +
+// quantity) silently rejects a request once the quantity exceeds real stock -- but unlike
+// Shopify's /cart/add.js, the failure response is a bare {"error":true,...} with no number telling
+// us what the real cap is (confirmed live, Aug 2026: qty=3 succeeded, qty=4 failed, for a listing
+// whose real stock was exactly 3 -- the exact bug this fixes, where an unknown-stock listing was
+// treated as able to supply an entire 28-card request). A success response is a "fragments" JSON
+// object (mini-cart HTML), so `"error":true` absent is the success signal.
+//
+// Since failure carries no number, pinning down the exact cap needs a small binary search rather
+// than Shopify's one-shot read. To keep the common case (plentiful/untracked stock) cheap, a
+// single probe at WC_PROBE_CEILING is tried first -- only a listing that actually fails that
+// probe (i.e. is meaningfully limited) pays for the ~5 extra requests to locate the exact boundary.
+private const val WC_PROBE_CEILING = 20
+
+private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, productId: Long, qty: Int): Boolean {
+    return try {
+        val resp = client.post("$base/?wc-ajax=add_to_cart") {
+            contentType(ContentType.Application.FormUrlEncoded)
+            setBody("product_id=$productId&quantity=$qty")
+        }
+        resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
+    } catch (_: Exception) {
+        false
+    }
+}
+
+private suspend fun probeWooCommerceStock(client: HttpClient, base: String, productId: Long): Int? {
+    // Plentiful/untracked stock -- treat as unknown/unlimited, same convention as everywhere else.
+    if (wcAddToCartSucceeds(client, base, productId, WC_PROBE_CEILING)) return null
+    var lowSucceeds = 0
+    var highFails = WC_PROBE_CEILING
+    while (highFails - lowSucceeds > 1) {
+        val mid = (lowSucceeds + highFails) / 2
+        if (wcAddToCartSucceeds(client, base, productId, mid)) lowSucceeds = mid else highFails = mid
+    }
+    return lowSucceeds.takeIf { it > 0 }
+}
+
+suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/?s=$encoded&post_type=product"
     val resp = client.get(url)
@@ -246,8 +328,8 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
     // (Can't use li.product count: product detail pages also include a related-products list.)
     val canonicalUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: ""
     if ("/product/" in canonicalUrl) {
-        val title = soup.selectFirst("h1.product_title")?.text()?.trim() ?: return emptyList()
-        if (!isRelevant(card, title)) return emptyList()
+        val title = soup.selectFirst("h1.product_title")?.text()?.trim() ?: return@coroutineScope emptyList()
+        if (!isRelevant(card, title)) return@coroutineScope emptyList()
         val priceEl = soup.selectFirst(".price ins") ?: soup.selectFirst(".price")
         // Scope stock check to the main product summary — related-products lower on the page
         // also have .stock elements which would give a false out-of-stock reading.
@@ -257,13 +339,18 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
         val available = !outOfStock
         val productId = summaryEl.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
             ?: soup.selectFirst("[data-product_id]")?.attr("data-product_id")?.toLongOrNull()
+        // WooCommerce's core low-stock-threshold message renders as e.g. "Only 2 left in stock" in
+        // this same element -- free when present, but only shows up near the threshold. Otherwise
+        // (or if that text isn't there), fall back to the wc-ajax probe for a real number.
+        val stockQty = WOOCOMMERCE_STOCK_QTY_RE.find(stockEl?.text() ?: "")?.groupValues?.get(1)?.toIntOrNull()
+            ?: if (available && productId != null) probeWooCommerceStock(client, base, productId) else null
         val productUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: url
         // Some TCG-singles WC themes put "Rarity | #Number | Set Name" in the short description.
         val shortDesc = summaryEl.selectFirst(".woocommerce-product-details__short-description")?.text()?.trim()
         val setHint = if (shortDesc != null && shortDesc.count { it == '|' } >= 2)
             shortDesc.substringAfterLast("|").trim().takeIf { it.length >= 4 }
         else null
-        return listOf(SearchResult(
+        return@coroutineScope listOf(SearchResult(
             store = "",
             card = card,
             title = title,
@@ -273,10 +360,15 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
             note = availabilityNote(available),
             variantId = productId,
             setHint = setHint,
+            stockQty = stockQty,
         ))
     }
 
-    return soup.select("li.product").mapNotNull { li ->
+    data class Candidate(
+        val title: String, val price: Double?, val available: Boolean,
+        val url: String, val productId: Long?, val setHint: String?,
+    )
+    val candidates = soup.select("li.product").mapNotNull { li ->
         val a = li.selectFirst("a.woocommerce-LoopProduct-link, a")
         val titleEl = li.selectFirst(".woocommerce-loop-product__title, h2, h3")
         // Prefer the sale price (ins) over the full .price text which includes strikethrough original
@@ -298,18 +390,31 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
         val setHint = if (shortDesc != null && shortDesc.count { it == '|' } >= 2)
             shortDesc.substringAfterLast("|").trim().takeIf { it.length >= 4 }
         else null
-        SearchResult(
-            store = "",
-            card = card,
-            title = title,
-            priceZar = parsePrice(priceEl?.text() ?: ""),
-            available = available,
-            url = a?.attr("href")?.takeIf { it.isNotEmpty() } ?: url,
-            note = availabilityNote(available),
-            variantId = productId,
-            setHint = setHint,
-        )
+        Candidate(title, parsePrice(priceEl?.text() ?: ""), available, a?.attr("href")?.takeIf { it.isNotEmpty() } ?: url, productId, setHint)
     }
+
+    // The results-grid tiles have no stock element at all (confirmed live) -- the wc-ajax probe
+    // is the only source of a real number here, not just a low-stock-threshold bonus.
+    val sem = Semaphore(3)
+    candidates.map { c ->
+        async(Dispatchers.IO) {
+            sem.withPermit {
+                val stockQty = if (c.available && c.productId != null) probeWooCommerceStock(client, base, c.productId) else null
+                SearchResult(
+                    store = "",
+                    card = card,
+                    title = c.title,
+                    priceZar = c.price,
+                    available = c.available,
+                    url = c.url,
+                    note = availabilityNote(c.available),
+                    variantId = c.productId,
+                    setHint = c.setHint,
+                    stockQty = stockQty,
+                )
+            }
+        }
+    }.awaitAll()
 }
 
 // WooCommerce Blocks Store API — works on WC stores that have Gutenberg blocks enabled.
@@ -469,7 +574,7 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
     return emptyList()
 }
 
-suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): List<SearchResult> {
+suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
     // Quoting the query forces BigCommerce to match the exact phrase rather than individual
     // keywords — without quotes "Dark Ritual" returns 500+ unrelated results (cards from
     // "The Dark" set, cards with "Ritual" in the name, etc.) with the actual card buried.
@@ -482,7 +587,8 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
     // BigCommerce Stencil structure: ul.productGrid > li.product > article.card
     // Selecting both "li.product, article.card" would match each product twice since article
     // is nested inside li. Use li.product as the single outer container.
-    return soup.select("li.product").mapNotNull { el ->
+    data class Candidate(val title: String, val price: Double?, val available: Boolean, val productUrl: String, val productId: Long?)
+    val candidates = soup.select("li.product").mapNotNull { el ->
         val a = el.selectFirst(".card-title a, h4 a, h3 a") ?: return@mapNotNull null
         val title = a.text().trim()
         if (!isRelevant(card, title)) return@mapNotNull null
@@ -495,17 +601,47 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
         val cartHref = el.selectFirst("a[href*='action=add'][href*='product_id=']")?.attr("href") ?: ""
         val productId = Regex("product_id=(\\d+)").find(cartHref)?.groupValues?.get(1)?.toLongOrNull()
             ?: el.selectFirst("[data-product-id]")?.attr("data-product-id")?.toLongOrNull()
-        SearchResult(
-            store = "",
-            card = card,
-            title = title,
-            priceZar = parsePrice(priceEl?.text() ?: ""),
-            available = available,
-            url = a.attr("href").let { if (it.startsWith("http")) it else "$base$it" },
-            note = availabilityNote(available),
-            variantId = productId,
-        )
-    }.distinctBy { it.url }
+        val productUrl = a.attr("href").let { if (it.startsWith("http")) it else "$base$it" }
+        Candidate(title, parsePrice(priceEl?.text() ?: ""), available, productUrl, productId)
+    }.distinctBy { it.productUrl }
+
+    // The search grid has no stock count — fetch each in-stock candidate's product page for it.
+    val sem = Semaphore(3)
+    candidates.map { c ->
+        async(Dispatchers.IO) {
+            sem.withPermit {
+                val stockQty = if (c.available) resolveBigCommerceStock(client, c.productUrl) else null
+                SearchResult(
+                    store = "",
+                    card = card,
+                    title = c.title,
+                    priceZar = c.price,
+                    available = c.available,
+                    url = c.productUrl,
+                    note = availabilityNote(c.available),
+                    variantId = c.productId,
+                    stockQty = stockQty,
+                )
+            }
+        }
+    }.awaitAll()
+}
+
+// Matches the "available_to_sell" field in the product page's embedded BCData JS blob (the
+// count actually purchasable now — distinct from raw on-hand stock, which could include
+// held/reserved units). Falls back to the rendered "Current Stock:" HTML span if that JS blob
+// isn't present for some reason.
+private val BC_AVAILABLE_TO_SELL_RE = Regex(""""available_to_sell"\s*:\s*(\d+)""")
+private val BC_DATA_PRODUCT_STOCK_RE = Regex("""data-product-stock[^>]*>\s*(\d+)\s*<""")
+
+private suspend fun resolveBigCommerceStock(client: HttpClient, productUrl: String): Int? {
+    return try {
+        val body = client.get(productUrl).bodyAsText()
+        BC_AVAILABLE_TO_SELL_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
+            ?: BC_DATA_PRODUCT_STOCK_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
+    } catch (_: Exception) {
+        null
+    }
 }
 
 // PrestaShop has two types of products on AI Fest:
@@ -527,7 +663,7 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): Li
 
     data class Candidate(
         val title: String, val productUrl: String, val price: Double?,
-        val available: Boolean, val listingId: Long?,
+        val available: Boolean, val listingId: Long?, val stockQty: Int?,
     )
     val candidates = soup.select("article.product-miniature, .js-product-miniature").mapNotNull { el ->
         val a = el.selectFirst(".product-title a, h3 a, h2 a") ?: return@mapNotNull null
@@ -542,10 +678,11 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): Li
 
         val inStockDiv = el.selectFirst(".product-in-stock")
         val qtyEl = el.selectFirst(".product-qty b, .product-qty strong")
+        val qty = qtyEl?.text()?.trim()?.toIntOrNull()
         val explicitOutOfStock = el.selectFirst(".product-unavailable, .out-of-stock") != null
         val available: Boolean = when {
             inStockDiv != null -> true
-            qtyEl?.text()?.trim()?.toIntOrNull()?.let { it > 0 } == true -> true
+            qty?.let { it > 0 } == true -> true
             explicitOutOfStock -> false
             else -> true
         }
@@ -555,7 +692,7 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): Li
         val listingId = el.selectFirst("input.product_page_product_id")?.attr("value")?.toLongOrNull()
             ?: el.attr("data-id-product").toLongOrNull()
             ?: el.selectFirst("[data-id-product]")?.attr("data-id-product")?.toLongOrNull()
-        Candidate(title, a.attr("href").takeIf { it.isNotEmpty() } ?: url, price, available, listingId)
+        Candidate(title, a.attr("href").takeIf { it.isNotEmpty() } ?: url, price, available, listingId, qty?.takeIf { it > 0 })
     }
 
     val sem = Semaphore(3)
@@ -576,6 +713,7 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): Li
                     note = availabilityNote(c.available),
                     variantId = cartId,
                     cartToken = staticToken,
+                    stockQty = c.stockQty,
                 )
             }
         }
@@ -718,6 +856,7 @@ suspend fun searchUntappedPotential(client: HttpClient, base: String, card: Stri
             url = "$base/product/$slug",
             note = availabilityNote(available),
             setHint = setHint,
+            stockQty = stock.takeIf { it > 0 },
         )
     }
 }

@@ -47,6 +47,7 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
     val excludedCardsJson  = text("excluded_cards_json").nullable()   // JSON Set<String>
     val uncheckedLinesJson = text("unchecked_lines_json").nullable()  // JSON Set<String> (URLs)
     val pinnedListingsJson = text("pinned_listings_json").nullable()  // JSON Map<String,String>
+    val cardQuantitiesJson = text("card_quantities_json").nullable()  // JSON Map<String,Int>
     // Google Drive sync — see the matching comment on SearchLists above.
     val syncId    = text("sync_id").nullable()
     val deleted   = bool("deleted").default(false)

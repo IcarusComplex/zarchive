@@ -1,0 +1,8 @@
+-- Migration from schema version 3 to 4: adds card_quantities_json to saved_result_snapshots
+-- (saved results now preserve per-card search quantity, e.g. "4x Lightning Bolt"). Editing the
+-- CREATE TABLE alone in ZArchiveDatabase.sq only affects brand-new databases; an already-installed
+-- device's existing zarchive.db needs this ALTER TABLE path, applied automatically by
+-- AndroidSqliteDriver based on the bumped schema version -- without it, upgrading devices crash
+-- with "no such column: card_quantities_json" the first time a saved result is read or written.
+
+ALTER TABLE saved_result_snapshots ADD COLUMN card_quantities_json TEXT;

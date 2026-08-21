@@ -48,6 +48,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int>,
     ): Unit = withContext(Dispatchers.IO) {
         val n = name; val d = description; val now = System.currentTimeMillis()
         val cardsEnc    = json.encodeToString(cards)
@@ -55,6 +56,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
         val excludedEnc = json.encodeToString(excludedCards.toList())
         val uncheckedEnc = json.encodeToString(uncheckedLines.toList())
         val pinnedEnc   = json.encodeToString(pinnedListings)
+        val quantitiesEnc = json.encodeToString(cardQuantities)
         transaction {
             SavedResultSnapshots.insert {
                 it[SavedResultSnapshots.name]               = n
@@ -66,6 +68,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                 it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
                 it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
                 it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                it[SavedResultSnapshots.cardQuantitiesJson] = quantitiesEnc
                 it[SavedResultSnapshots.syncId]             = java.util.UUID.randomUUID().toString()
             }
         }
@@ -83,6 +86,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
         excludedCards: Set<String>,
         uncheckedLines: Set<String>,
         pinnedListings: Map<String, String>,
+        cardQuantities: Map<String, Int>,
     ): Unit = withContext(Dispatchers.IO) {
         val lid = id; val n = name; val d = description; val now = System.currentTimeMillis()
         val cardsEnc    = json.encodeToString(cards)
@@ -90,6 +94,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
         val excludedEnc = json.encodeToString(excludedCards.toList())
         val uncheckedEnc = json.encodeToString(uncheckedLines.toList())
         val pinnedEnc   = json.encodeToString(pinnedListings)
+        val quantitiesEnc = json.encodeToString(cardQuantities)
         transaction {
             SavedResultSnapshots.update({ Op.build { SavedResultSnapshots.id eq lid } }) {
                 it[SavedResultSnapshots.name]               = n
@@ -101,6 +106,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                 it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
                 it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
                 it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                it[SavedResultSnapshots.cardQuantitiesJson] = quantitiesEnc
             }
         }
         refresh()
@@ -119,6 +125,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
             excludedCards  = json.decodeFromString<List<String>>(row[SavedResultSnapshots.excludedCardsJson] ?: "[]").toSet(),
             uncheckedLines = json.decodeFromString<List<String>>(row[SavedResultSnapshots.uncheckedLinesJson] ?: "[]").toSet(),
             pinnedListings = json.decodeFromString(row[SavedResultSnapshots.pinnedListingsJson] ?: "{}"),
+            cardQuantities = json.decodeFromString(row[SavedResultSnapshots.cardQuantitiesJson] ?: "{}"),
         )
     }
 
@@ -149,6 +156,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                     excludedCards  = json.decodeFromString<List<String>>(row[SavedResultSnapshots.excludedCardsJson] ?: "[]").toSet(),
                     uncheckedLines = json.decodeFromString<List<String>>(row[SavedResultSnapshots.uncheckedLinesJson] ?: "[]").toSet(),
                     pinnedListings = json.decodeFromString(row[SavedResultSnapshots.pinnedListingsJson] ?: "{}"),
+                    cardQuantities = json.decodeFromString(row[SavedResultSnapshots.cardQuantitiesJson] ?: "{}"),
                     deleted        = row[SavedResultSnapshots.deleted],
                     deletedAt      = row[SavedResultSnapshots.deletedAt],
                 )
@@ -163,6 +171,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
         val excludedEnc  = json.encodeToString(record.excludedCards.toList())
         val uncheckedEnc = json.encodeToString(record.uncheckedLines.toList())
         val pinnedEnc    = json.encodeToString(record.pinnedListings)
+        val quantitiesEnc = json.encodeToString(record.cardQuantities)
         transaction {
             val existingId = SavedResultSnapshots.selectAll()
                 .where { SavedResultSnapshots.syncId eq sid }
@@ -178,6 +187,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                     it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
                     it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
                     it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                    it[SavedResultSnapshots.cardQuantitiesJson] = quantitiesEnc
                     it[SavedResultSnapshots.syncId]             = sid
                     it[SavedResultSnapshots.deleted]            = record.deleted
                     it[SavedResultSnapshots.deletedAt]          = record.deletedAt
@@ -193,6 +203,7 @@ class DesktopSearchResultRepo : SearchResultRepo {
                     it[SavedResultSnapshots.excludedCardsJson]  = excludedEnc
                     it[SavedResultSnapshots.uncheckedLinesJson] = uncheckedEnc
                     it[SavedResultSnapshots.pinnedListingsJson] = pinnedEnc
+                    it[SavedResultSnapshots.cardQuantitiesJson] = quantitiesEnc
                     it[SavedResultSnapshots.deleted]            = record.deleted
                     it[SavedResultSnapshots.deletedAt]          = record.deletedAt
                 }

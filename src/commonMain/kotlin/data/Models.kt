@@ -14,6 +14,7 @@ data class SearchResult(
     val variantId: Long? = null,   // Shopify variant ID, WC product/variation ID, BC product ID
     val cartToken: String? = null, // PrestaShop static_token (same across all pages for a given store)
     val setHint: String? = null,   // set name/code extracted from structured payload (body HTML, short_description, etc.)
+    val stockQty: Int? = null,     // per-listing stock count when the store exposes one; null = unknown/unlimited
 )
 
 
