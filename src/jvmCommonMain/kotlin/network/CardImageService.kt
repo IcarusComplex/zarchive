@@ -48,15 +48,23 @@ class CardImageService : AutoCloseable {
     // Loaded lazily and cached at ~/.zarchive/sets.json (refreshed every 7 days).
     private val setIndex = ScryfallSetIndex()
 
-    // Caps + lightly retries concurrent Scryfall API calls across this instance. resolveImages()
-    // is invoked once per store's result batch as they stream in (SearchViewModel.launchCardSearch
-    // launches a fresh coroutine per onResults call), so without this, ~19 stores returning results
-    // in a short window can fire many simultaneous requests and trip Scryfall's rate limiting; a
-    // bare `runCatching { ... }.getOrNull()` with no retry then permanently drops that card's art
-    // for the rest of the search -- reported as "sometimes images don't load".
+    // Caps + retries concurrent Scryfall API calls across this instance. resolveImages() is
+    // invoked once per store's result batch as they stream in (SearchViewModel.launchCardSearch
+    // launches a fresh coroutine per onResults call), so for a big card list against many stores
+    // this instance can have 100+ of these tiny batches in flight at once, all funneled through
+    // this one semaphore. Under that load Scryfall's rate limiting kicks in more than a single
+    // retry can absorb, permanently dropping a card's art for the rest of the search/load --
+    // reported as "thumbnails never finish loading" on big order lists. Three attempts with
+    // growing backoff gives transient 429s/timeouts room to clear.
     private val apiSemaphore = Semaphore(3)
     private suspend fun <T> scryfallCall(block: suspend () -> T): T? = apiSemaphore.withPermit {
-        runCatching { block() }.getOrNull() ?: run { delay(500); runCatching { block() }.getOrNull() }
+        var result: T? = null
+        for (attempt in 0 until 3) {
+            if (attempt > 0) delay(500L * attempt)
+            result = runCatching { block() }.getOrNull()
+            if (result != null) break
+        }
+        result
     }
 
     // Treatment keyword regex → Scryfall search filter
@@ -342,13 +350,14 @@ class CardImageService : AutoCloseable {
             delay(80)
         }
 
-        // 4. Fuzzy fallback for anything still missing — only for metas with NO set hint.
-        //    Set-specific metas (setCode or setName present) are left unresolved rather than
-        //    permanently caching wrong art under a set-specific cache key; the UI falls back
-        //    to the card-name image instead, and the batch is retried on the next search.
+        // 4. Fuzzy fallback for anything still missing. Metas with a set hint already had their
+        //    dedicated shot at the right printing in steps 1-3 (batch by name+set, child-set
+        //    batch, e:"setName" search); if all of those came up empty -- e.g. a set name that
+        //    doesn't resolve to a code, or a store's set guess that's simply wrong -- generic
+        //    art by name is still far better than a permanently blank thumbnail (the UI already
+        //    accepts this same tradeoff via the images[card] fallback for unresolved listings).
         for (meta in notFound) {
             if (result.containsKey(meta.cacheKey)) continue
-            if (meta.setCode != null || meta.setName != null) continue
             fuzzyResolve(meta.name)?.let { result[meta.cacheKey] = it }
             delay(100)
         }

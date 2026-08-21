@@ -15,7 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.graphics.drawscope.rotate as rotateCanvas
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -3613,7 +3615,7 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
         ) {
             // Card thumbnail
             Box(Modifier.width(COL_THUMB).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) {
-                CardThumbnail(imagePath, dimmed)
+                CardThumbnail(imagePath, dimmed, showShimmerWhenMissing = true)
             }
             // Name & Set
             Column(Modifier.weight(1f).padding(end = 12.dp)) {
@@ -3778,42 +3780,58 @@ private fun CardThumbnail(
 
 @Composable
 private fun ShimmerOverlay() {
-    // Sized to the placeholder's actual pixel dimensions (BoxWithConstraints), not a fixed 900px
-    // sweep -- that hard-coded distance assumed a ~260x364 card and only traversed part of any
-    // smaller thumbnail before the infinite-repeat restart snapped it back, reading as a jump
-    // rather than a clean loop.
-    BoxWithConstraints(Modifier.fillMaxSize()) {
-        val widthPx = constraints.maxWidth.toFloat()
-        val heightPx = constraints.maxHeight.toFloat()
-        val bandWidth = widthPx * 0.5f
-        // Total x-travel so the band starts fully off the top-left corner and ends fully off the
-        // bottom-right corner -- it's invisible (TileMode.Clamp's transparent edge colors) at both
-        // ends of the loop, so the instant restart never has anything visible to jump.
-        val travel = widthPx + 2f * bandWidth
-        val transition = rememberInfiniteTransition(label = "shimmer")
-        val progress by transition.animateFloat(
-            initialValue = 0f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(animation = tween(durationMillis = 900, easing = LinearEasing)),
-            label = "shimmerProgress",
-        )
-        val sweepX = progress * travel - bandWidth
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            Color.White.copy(alpha = 0f),
-                            Color.White.copy(alpha = 0.06f),
-                            Color.White.copy(alpha = 0f),
-                        ),
-                        start = Offset(sweepX - bandWidth, 0f),
-                        end = Offset(sweepX, heightPx),
-                    )
-                )
-        )
-    }
+    // The sweep itself is a plain horizontal gradient; the diagonal look comes from rotating the
+    // canvas around the box's center before drawing it, not from skewing the gradient's start/end
+    // points. A skewed axis (start y=0, end y=size.height, as this used to do) couples the "fully
+    // offscreen at both ends" travel distance to the box's height -- dir=(bandWidth, height) is
+    // dominated by height for a tall thumbnail, so the box only reads as fully transparent over a
+    // much narrower slice of the cycle than the x-only travel distance assumed, and the band was
+    // visibly cut off mid-sweep at the restart. Rotating the whole draw keeps the horizontal-only
+    // offscreen math exact at any angle.
+    //
+    // Rotating a fill sized exactly to the box leaves the corners uncovered: a rotated same-size
+    // rect's corners swing inward, away from the original box's own corners, so those corners
+    // never get any part of the gradient drawn over them at all. Instead we draw a square with
+    // side = the box's diagonal, centered on the same point -- large enough that any rotation of
+    // it about that center still fully contains the original box (every point of the box is within
+    // diag/2 of the center, which is exactly the enlarged square's half-width) -- so the shimmer
+    // now has "overhang" past every corner. CardThumbnail's own clip crops the excess back down to
+    // the visible thumbnail shape.
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val progress = transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(animation = tween(durationMillis = 1400, easing = LinearEasing)),
+        label = "shimmerProgress",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .drawWithCache {
+                val diag = kotlin.math.sqrt(size.width * size.width + size.height * size.height)
+                val rectTopLeft = Offset((size.width - diag) / 2f, (size.height - diag) / 2f)
+                val bandWidth = diag * 0.7f
+                val travel = diag + bandWidth
+                onDrawBehind {
+                    rotateCanvas(degrees = 20f) {
+                        val sweepCenter = rectTopLeft.x + progress.value * travel - bandWidth / 2f
+                        drawRect(
+                            brush = Brush.linearGradient(
+                                colors = listOf(
+                                    Color.White.copy(alpha = 0f),
+                                    Color.White.copy(alpha = 0.06f),
+                                    Color.White.copy(alpha = 0f),
+                                ),
+                                start = Offset(sweepCenter - bandWidth / 2f, 0f),
+                                end = Offset(sweepCenter + bandWidth / 2f, 0f),
+                            ),
+                            topLeft = rectTopLeft,
+                            size = androidx.compose.ui.geometry.Size(diag, diag),
+                        )
+                    }
+                }
+            }
+    )
 }
 
 // MTG card aspect ratio ≈ 63×88mm
@@ -4541,7 +4559,7 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
             }
             Spacer(Modifier.width(8.dp))
             // Content dims when unchecked
-            Box(Modifier.width(COL_THUMB).alpha(contentAlpha).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) { CardThumbnail(imagePath, dimmed = false) }
+            Box(Modifier.width(COL_THUMB).alpha(contentAlpha).then(if (hoverOnThumbnailOnly) Modifier.hoverable(thumbInteraction) else Modifier)) { CardThumbnail(imagePath, dimmed = false, showShimmerWhenMissing = true) }
             Column(Modifier.weight(1f).padding(end = 12.dp).alpha(contentAlpha)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(line.card, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,

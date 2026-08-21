@@ -14,6 +14,7 @@ import engine.runSearch
 import java.io.File
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.flow.debounce
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
@@ -718,9 +719,17 @@ class SearchViewModel(
             pinnedListings.clear()
             pinnedListings.putAll(loaded.pinnedListings)
             statusText = "Loaded — ${loadedResults.count { it.title != null }} listings"
-            // Resolve images per-store in parallel (mirrors live-search behaviour) so
-            // thumbnails trickle in one store-group at a time instead of all at once.
+            // Resolve images per-store so thumbnails trickle in one store-group at a time
+            // instead of all at once. Unlike a live search -- where store batches are already
+            // spread out over time by each store's own network round-trip -- every store here
+            // is ready immediately, so without a concurrency cap all of them would hit
+            // CardImageService's Semaphore(3) simultaneously in one burst. That burst, combined
+            // with a completely cold disk cache (these images were likely never fetched on this
+            // machine, e.g. a result synced in from another device), is what makes a big loaded
+            // result the one case prone to permanently dropping a few images. Capping concurrent
+            // store batches here reproduces live search's gentler ramp-up.
             val imageService = network.CardImageService()
+            val storeBatchLimiter = kotlinx.coroutines.sync.Semaphore(3)
             try {
                 val seenTitles = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -732,26 +741,49 @@ class SearchViewModel(
                     if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
                 }
 
-                // Listing-title arts grouped by store — each store is its own concurrent batch
+                // Listing-title arts grouped by store — each store is its own batch, throttled
+                // to a few concurrent stores at a time via storeBatchLimiter.
                 val storeJobs = loadedResults
                     .filter { it.title != null }
                     .groupBy { it.store }
                     .map { (_, storeResults) ->
                         scope.launch(Dispatchers.IO) {
-                            val hints = storeResults
-                                .mapNotNull { r -> r.title?.takeIf { seenTitles.add(it) }?.let { it to r.setHint } }
-                                .toMap()
-                            if (hints.isEmpty()) return@launch
-                            val resolved = imageService.resolveImages(hints)
-                            if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
+                            storeBatchLimiter.withPermit {
+                                val hints = storeResults
+                                    .mapNotNull { r -> r.title?.takeIf { seenTitles.add(it) }?.let { it to r.setHint } }
+                                    .toMap()
+                                if (hints.isEmpty()) return@withPermit
+                                val resolved = imageService.resolveImages(hints)
+                                if (resolved.isNotEmpty()) withContext(Dispatchers.Main) { images.putAll(resolved) }
+                            }
                         }
                     }
 
                 (storeJobs + cardNamesJob).forEach { it.join() }
+                retryMissingImages(imageService, cards)
             } finally {
                 imageService.close()
             }
         }
+    }
+
+    // Loading/searching a big list fires many small concurrent resolveImages() batches (one per
+    // store, or even one per card-per-store during a live search) all sharing CardImageService's
+    // apiSemaphore(3) -- under that contention a few images can still come back empty even with
+    // scryfallCall's internal retries. By the time everything else has joined, contention has
+    // dropped right off, so a single mop-up pass over whatever's still missing recovers most of
+    // the stragglers instead of leaving their thumbnails permanently blank.
+    private suspend fun retryMissingImages(imageService: CardImageService, cardNames: List<String>) {
+        val stillMissing = buildMap<String, String?> {
+            for (r in results) {
+                val title = r.title ?: continue
+                if (title !in images) put(title, r.setHint)
+            }
+            for (c in cardNames) if (c !in images) put(c, null)
+        }
+        if (stillMissing.isEmpty()) return
+        val resolved = withContext(Dispatchers.IO) { imageService.resolveImages(stillMissing) }
+        if (resolved.isNotEmpty()) images.putAll(resolved)
     }
 
     fun deleteSavedResult(id: Int) {
@@ -1192,6 +1224,7 @@ class SearchViewModel(
                     },
                 )
                 imageJobs.joinAll()
+                retryMissingImages(imageService, cardsToQuery)
             } finally {
                 imageService.close()
             }
