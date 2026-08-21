@@ -17,7 +17,7 @@ data class SearchResult(
 )
 
 
-enum class Platform { SHOPIFY, WOOCOMMERCE, WC_STORE_API, OPENCART, BIGCOMMERCE, PRESTASHOP, WARREN_API, BROWSER, UNKNOWN, UNREACHABLE }
+enum class Platform { SHOPIFY, WOOCOMMERCE, WC_STORE_API, OPENCART, BIGCOMMERCE, PRESTASHOP, WARREN_API, UNTAPPED_API, BROWSER, UNKNOWN, UNREACHABLE }
 
 val STORES: Map<String, String> = linkedMapOf(
     "A.I. Fest"              to "https://store.ai-fest.co.za",
@@ -59,6 +59,9 @@ val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
     "https://www.battlewizards.co.za"        to Platform.BIGCOMMERCE,
     "https://store.ai-fest.co.za"            to Platform.PRESTASHOP,
     "https://www.thehiddenrealm.co.za"       to Platform.WC_STORE_API,
+    // Untapped Potential TCG migrated off Shopify to a custom storefront backed by a Supabase
+    // RPC search endpoint (verified 2026-08) — see network.searchUntappedPotential.
+    "https://untappedpotentialtcg.co.za"     to Platform.UNTAPPED_API,
     // Shopify stores (verified 2026-06)
     "http://d20battleground.co.za"           to Platform.SHOPIFY,
     "https://thetradeinn.co.za"              to Platform.SHOPIFY,
@@ -72,8 +75,6 @@ val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
     "https://magicandmonsters.co.za"         to Platform.SHOPIFY,
     "https://thecantina.co.za"               to Platform.SHOPIFY,
     "http://www.underworldconnections.co.za" to Platform.SHOPIFY,
-    // Shopify stores (verified 2026-07)
-    "https://untappedpotentialtcg.co.za"     to Platform.SHOPIFY,
     // WooCommerce stores (verified 2026-06)
     "https://www.andressidehustle.co.za"     to Platform.WOOCOMMERCE,
     "https://shop.dracoti.co.za"             to Platform.WOOCOMMERCE,

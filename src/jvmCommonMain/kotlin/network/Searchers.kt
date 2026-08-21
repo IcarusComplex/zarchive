@@ -636,6 +636,92 @@ suspend fun searchWarrenApi(client: HttpClient, base: String, card: String): Lis
     }
 }
 
+// Untapped Potential TCG migrated off Shopify to a custom storefront (Aug 2026) backed by a
+// Supabase RPC endpoint. The apikey below is Supabase's "publishable" key — it's embedded in the
+// storefront's own client-side JS bundle (visible to any site visitor via devtools) and is
+// deliberately public, not a privileged/secret token.
+const val UNTAPPED_SUPABASE_HOST = "lflljzsbxgcemvrlaavo.supabase.co"
+private const val UNTAPPED_SUPABASE_URL =
+    "https://$UNTAPPED_SUPABASE_HOST/rest/v1/rpc/storefront_products_page_v1"
+private const val UNTAPPED_API_KEY = "sb_publishable_x_to7XANoonahQHDQmcw6w_PlLa3aNr"
+
+// The search RPC does fuzzy/trigram matching rather than a strict substring search, so it can
+// return a lot of loosely-related noise (isRelevant filters it back down) but total_count reflects
+// genuine matches, not a hard cap. p_sort only accepts "newest" — other values (e.g. "relevance")
+// return a Postgres error ("Sort is invalid").
+private val UNTAPPED_SET_CODE_RE = Regex(""" - ([A-Za-z0-9]{2,6}) #\d+$""")
+
+suspend fun searchUntappedPotential(client: HttpClient, base: String, card: String): List<SearchResult> {
+    val payload = buildJsonObject {
+        put("p_category", "mtg")
+        put("p_filters", buildJsonObject {
+            put("price_min_cents", JsonNull)
+            put("price_max_cents", JsonNull)
+            put("wishlist_only", false)
+        })
+        put("p_page", 1)
+        put("p_page_size", 30)
+        put("p_search", card)
+        put("p_sort", "newest")
+        put("p_type", "singles")
+        put("p_type_exclude", false)
+        put("p_wishlist_product_ids", buildJsonArray {})
+    }
+    val resp = client.post(UNTAPPED_SUPABASE_URL) {
+        header("apikey", UNTAPPED_API_KEY)
+        header(HttpHeaders.Authorization, "Bearer $UNTAPPED_API_KEY")
+        header("content-profile", "public")
+        contentType(ContentType.Application.Json)
+        setBody(payload.toString())
+    }
+    checkStatus(resp)
+    val body = resp.bodyAsText()
+
+    val items = try {
+        Json.parseToJsonElement(body).jsonObject["items"]?.jsonArray ?: return emptyList()
+    } catch (_: Exception) {
+        return emptyList()
+    }
+
+    return items.mapNotNull { p ->
+        val obj = p.jsonObject
+        val title = obj["title"]?.jsonPrimitive?.contentOrNull?.trim() ?: return@mapNotNull null
+        if (!isRelevant(card, title)) return@mapNotNull null
+        val slug = obj["slug"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+
+        // Each product is already a single specific condition/finish combo (unlike Shopify's
+        // multi-variant products), but pick the default variant defensively.
+        val variants = obj["variants"]?.jsonArray?.map { it.jsonObject } ?: emptyList()
+        val variant = variants.firstOrNull { it["is_default"]?.jsonPrimitive?.booleanOrNull == true }
+            ?: variants.firstOrNull()
+        val stock = variant?.get("stock")?.jsonPrimitive?.intOrNull ?: 0
+        val available = stock > 0
+
+        // effective_price_cents is the discounted price actually charged (site-wide 5% off at
+        // time of writing); price_cents/original_price_cents is the pre-discount price.
+        val priceCents = obj["effective_price_cents"]?.jsonPrimitive?.longOrNull
+            ?: variant?.get("effective_price_cents")?.jsonPrimitive?.longOrNull
+        val price = priceCents?.let { it / 100.0 }
+
+        // Titles are consistently "Card Name - CODE #123" — a much more reliable set code than
+        // the payload's own "set_code" field, which is sometimes a real code and sometimes the
+        // full set name (and occasionally neither, for non-Scryfall custom/proxy listings).
+        val setHint = UNTAPPED_SET_CODE_RE.find(title)?.groupValues?.get(1)
+            ?: obj["set_code"]?.jsonPrimitive?.contentOrNull
+
+        SearchResult(
+            store = "",
+            card = card,
+            title = title,
+            priceZar = price,
+            available = available,
+            url = "$base/product/$slug",
+            note = availabilityNote(available),
+            setHint = setHint,
+        )
+    }
+}
+
 private fun availabilityNote(available: Boolean?) = when (available) {
     true  -> "In stock"
     false -> "Out of stock"

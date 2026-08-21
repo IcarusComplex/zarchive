@@ -7,6 +7,8 @@ import io.ktor.client.plugins.*
 import io.ktor.client.plugins.DefaultRequest
 import io.ktor.client.plugins.HttpSend
 import io.ktor.client.plugins.plugin
+import io.ktor.client.network.sockets.ConnectTimeoutException
+import io.ktor.client.network.sockets.SocketTimeoutException as KtorSocketTimeoutException
 import io.ktor.client.request.*
 import io.ktor.http.*
 import kotlinx.coroutines.*
@@ -15,6 +17,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import network.*
+import java.net.SocketTimeoutException
 import java.security.SecureRandom
 import java.security.cert.X509Certificate
 import javax.net.ssl.SSLContext
@@ -203,6 +206,17 @@ private suspend fun <T> withRetry(
     throw lastError!!
 }
 
+// Timeout exceptions (Ktor's HttpRequestTimeoutException / ConnectTimeoutException, or a raw
+// SocketTimeoutException from the underlying engine) embed the full request URL in their message,
+// e.g. "Request timeout has expired [url=https://www.thehiddenrealm.co.za/wp-json/...]". A blind
+// take(60) on that chops mid-domain (e.g. "...url=https://www.thehiddenrealm."), which reads as a
+// mangled/broken URL rather than what it actually is: the store just isn't responding in time.
+private fun errorNote(e: Exception): String = when (e) {
+    is HttpRequestTimeoutException, is ConnectTimeoutException,
+    is KtorSocketTimeoutException, is SocketTimeoutException -> "[timeout]"
+    else -> "[error: ${e.message?.take(60)}]"
+}
+
 // ── Per-store search ───────────────────────────────────────────────────────────
 
 // onResults is called once per card as results arrive; onStoreComplete once per store.
@@ -283,6 +297,7 @@ suspend fun checkStore(
         Platform.BIGCOMMERCE  -> ::searchBigCommerce
         Platform.PRESTASHOP   -> ::searchPrestaShop
         Platform.WARREN_API   -> ::searchWarrenApi
+        Platform.UNTAPPED_API -> ::searchUntappedPotential
         else                  -> { _, _, _ -> emptyList() }
     }
 
@@ -308,7 +323,7 @@ suspend fun checkStore(
                         listOf(SearchResult(
                             store = storeName, card = card, title = null,
                             priceZar = null, available = null, url = baseUrl,
-                            note = "[error: ${e.message?.take(60)}]",
+                            note = errorNote(e),
                         ))
                     }
                     onResults(rows)
@@ -349,10 +364,13 @@ suspend fun runSearch(
 
     val cfRules = loadActiveCfThrottleRules()
     val hostProfiles: Map<String, ThrottleProfile> = stores.values.mapNotNull { baseUrl ->
-        val host     = extractHost(baseUrl) ?: return@mapNotNull null
         val platform = KNOWN_PLATFORMS[baseUrl] ?: Platform.SHOPIFY
         if (platform == Platform.BROWSER || platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE)
             return@mapNotNull null
+        // UNTAPPED_API's actual requests go to a shared Supabase host, not the store's own
+        // domain — throttle that host directly rather than the (never-requested) store host.
+        val host = if (platform == Platform.UNTAPPED_API) UNTAPPED_SUPABASE_HOST
+                   else extractHost(baseUrl) ?: return@mapNotNull null
         val rule = cfRules[baseUrl]
         val tier = if (rule == null) baseTier
                    else if (isLargeSearch) maxOf(baseTier, rule.tierLarge)
