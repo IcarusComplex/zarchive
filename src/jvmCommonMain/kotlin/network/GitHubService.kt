@@ -1,6 +1,7 @@
 package network
 
 import data.BuildInfo
+import data.isNewerVersion
 import io.ktor.client.*
 import io.ktor.client.engine.okhttp.*
 import io.ktor.client.plugins.*
@@ -141,13 +142,3 @@ suspend fun downloadRelease(url: String, dest: File, onProgress: (Float) -> Unit
     }.also { client.close() }.getOrThrow()
 }
 
-internal fun isNewerVersion(latest: String, current: String): Boolean {
-    fun parts(v: String) = v.split(".").mapNotNull { it.toIntOrNull() }
-    val l = parts(latest)
-    val c = parts(current)
-    for (i in 0 until maxOf(l.size, c.size)) {
-        val diff = (l.getOrElse(i) { 0 }) - (c.getOrElse(i) { 0 })
-        if (diff != 0) return diff > 0
-    }
-    return false
-}

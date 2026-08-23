@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -353,6 +354,42 @@ fun AllAlreadySearchedDialog(
             ) { Text("Re-search all $count", fontSize = 12.sp) }
             TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                 Text("Keep results", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f))
+            }
+        }
+    }
+}
+
+@Composable
+fun WhatsNewDialog(entries: List<Pair<String, List<String>>>, onDismiss: () -> Unit) {
+    ModalScrim(onDismiss = onDismiss) {
+        DialogSurface {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("What's new in ZArchive", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+            }
+            Column(
+                Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                entries.forEach { (version, bullets) ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            "v$version", fontSize = 12.sp, fontFamily = Mono,
+                            fontWeight = FontWeight.SemiBold, color = OnSurfaceVariant,
+                        )
+                        bullets.forEach { bullet ->
+                            Text("·  $bullet", fontSize = 13.sp, color = OnSurface)
+                        }
+                    }
+                }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Button(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                ) { Text("Got it", fontSize = 12.sp) }
             }
         }
     }

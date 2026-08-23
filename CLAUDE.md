@@ -395,6 +395,27 @@ Two-phase progress: `downloadPhase` state (`Downloading` / `Extracting`) shown i
 Progress bar: indeterminate (`LinearProgressIndicator` with no `progress` arg) when `progress.isNaN()`,
 determinate (`progress = { progress.coerceIn(0f, 1f) }`) otherwise. Label shows "…" when NaN.
 
+### "What's new" popup (`data/Changelog.kt`, `ui/SearchViewModel.kt`)
+
+A one-time modal shown on the first launch after an update, announcing what changed. Fully
+baked into the binary — no network call, no separate CDN/API. `data.CHANGELOG` is a
+`Map<version, List<bullet>>`; `SearchViewModel.checkWhatsNew()` runs once in `init {}`, compares
+the persisted `whatsNew.lastSeenVersion` setting to `BuildInfo.VERSION`, and — if there's a newer
+entry — pops `showWhatsNew` with every changelog entry strictly between the two versions (not just
+the latest one, so a user who skips several releases via the in-app updater still sees everything
+they missed). A fresh install has no `lastSeenVersion` yet, so it records the current version
+without showing anything — there's nothing "new" to a first-time user. Desktop's dialog lives in
+`App.kt` (`WhatsNewDialog`); Android's is the same content ported to `ui/MiscDialogs.kt`, wired up
+in `AndroidApp.kt`. `data.isNewerVersion` (shared, `data/Version.kt`) is also what
+`GitHubService.checkForUpdate` uses for the "is there a newer release" check.
+
+**Process for every release: add a `CHANGELOG` entry for the new version before tagging it.**
+Default to asking the user for the "what's new" text; only generate it yourself — from `git log`/
+`git diff` since the last tag, written up as a short, human-readable bullet list (not raw commit
+messages) — if they explicitly say to skip the prompt. A version with no `CHANGELOG` entry just
+never shows the popup for that release (silent no-op, not an error), so it's safe to occasionally
+skip an entry for a trivial/internal-only release — but do it deliberately, not by forgetting.
+
 ### Debugging the update chain
 
 The swap script that executes is **baked into the running version**, not the downloaded version.

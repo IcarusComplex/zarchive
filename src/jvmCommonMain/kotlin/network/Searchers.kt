@@ -208,7 +208,9 @@ private suspend fun shopifyFirstVariant(
     handle: String,
 ): ShopifyVariant? {
     return try {
-        val body = client.get("$base/products/$handle.js").bodyAsText()
+        val resp = client.get("$base/products/$handle.js")
+        checkStatus(resp)
+        val body = resp.bodyAsText()
         val productObj = Json.parseToJsonElement(body).jsonObject
         val variantObjs = productObj["variants"]?.jsonArray
             ?.mapNotNull { it.jsonObject } ?: return null
@@ -231,6 +233,8 @@ private suspend fun shopifyFirstVariant(
         }
         val stockQty = cartId?.let { probeShopifyStock(client, base, it) }
         ShopifyVariant(price, cartId, setHint, stockQty)
+    } catch (e: CloudflareBlockedException) {
+        throw e
     } catch (_: Exception) {
         null
     }
@@ -255,6 +259,16 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
             contentType(ContentType.Application.Json)
             setBody("""{"items":[{"id":$variantId,"quantity":$SHOPIFY_PROBE_QTY}]}""")
         }
+        // A rate-limited cart endpoint must be treated exactly like a rate-limited search
+        // endpoint -- same CloudflareBlockedException, same store-wide circuit breaker via
+        // withRetry/cfBlockedStores in SearchEngine.kt. Without this, a 429 here (cart mutation
+        // endpoints are often throttled more strictly than read-only ones) was silently absorbed
+        // as "unknown stock" and the search just kept hammering the same store on every
+        // subsequent candidate/card instead of backing off, unlike every other request type.
+        if (resp.status.value == 429) {
+            if (IS_DEBUG) dump429(resp)
+            throw CloudflareBlockedException()
+        }
         val body = resp.bodyAsText()
         when (resp.status.value) {
             200 -> {
@@ -270,6 +284,8 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
             }
             else -> null
         }
+    } catch (e: CloudflareBlockedException) {
+        throw e
     } catch (_: Exception) {
         null
     }
@@ -295,7 +311,17 @@ private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, produc
             contentType(ContentType.Application.FormUrlEncoded)
             setBody("product_id=$productId&quantity=$qty")
         }
+        // Same reasoning as Shopify's cart probe: a 429 here must trip the same circuit breaker
+        // as any other request to this store, not be silently read as "this quantity failed."
+        // A binary search that treats 429 as "false" would keep hammering the host with more
+        // probes while it's already rate-limiting us, instead of backing off store-wide.
+        if (resp.status.value == 429) {
+            if (IS_DEBUG) dump429(resp)
+            throw CloudflareBlockedException()
+        }
         resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
+    } catch (e: CloudflareBlockedException) {
+        throw e
     } catch (_: Exception) {
         false
     }
@@ -636,9 +662,13 @@ private val BC_DATA_PRODUCT_STOCK_RE = Regex("""data-product-stock[^>]*>\s*(\d+)
 
 private suspend fun resolveBigCommerceStock(client: HttpClient, productUrl: String): Int? {
     return try {
-        val body = client.get(productUrl).bodyAsText()
+        val resp = client.get(productUrl)
+        checkStatus(resp)
+        val body = resp.bodyAsText()
         BC_AVAILABLE_TO_SELL_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
             ?: BC_DATA_PRODUCT_STOCK_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
+    } catch (e: CloudflareBlockedException) {
+        throw e
     } catch (_: Exception) {
         null
     }

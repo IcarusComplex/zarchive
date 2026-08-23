@@ -74,6 +74,12 @@ class SearchViewModel(
     var alreadySearchedUnavailableCount by mutableStateOf(0)
     private var alreadySearchedUnavailableCards: List<String> = emptyList()
 
+    // "What's new" modal: shown once on the first launch after an update (see checkWhatsNew()).
+    var showWhatsNew by mutableStateOf(false)
+        private set
+    var whatsNewEntries by mutableStateOf<List<Pair<String, List<String>>>>(emptyList())
+        private set
+
     // Search summary modal: shown when a search completes.
     var showSearchSummary by mutableStateOf(false)
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
@@ -408,6 +414,7 @@ class SearchViewModel(
     }
 
     init {
+        checkWhatsNew()
         if (monitorEnabledState && monitor.runsMonitorLoopInProcess) startMonitorLoop()
 
         // Android can kill this whole process while the app is merely backgrounded (Samsung's
@@ -421,6 +428,27 @@ class SearchViewModel(
             sessionSnapshotFlow().collect { persistSession(it) }
         }
     }
+
+    // Compares the last version this install ever recorded seeing against BuildInfo.VERSION
+    // (baked in at compile time -- see build.gradle.kts's generateBuildInfo task). A fresh
+    // install has no recorded version yet, so it just records the current one without popping
+    // the modal -- there's nothing "new" to a first-time user. Runs synchronously in init{} (no
+    // network involved -- data.CHANGELOG is compiled into the binary), so it's guaranteed to
+    // run exactly once per process launch, matching "shows once on first launch post-update."
+    private fun checkWhatsNew() {
+        val lastSeen = SettingsStore.getSetting("whatsNew.lastSeenVersion", "")
+        val current = data.BuildInfo.VERSION
+        if (lastSeen != current) {
+            val pending = data.pendingWhatsNew(lastSeen, current)
+            if (pending.isNotEmpty()) {
+                whatsNewEntries = pending
+                showWhatsNew = true
+            }
+            SettingsStore.setSetting("whatsNew.lastSeenVersion", current)
+        }
+    }
+
+    fun dismissWhatsNew() { showWhatsNew = false }
 
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     private fun sessionSnapshotFlow() =

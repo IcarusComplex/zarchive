@@ -490,6 +490,9 @@ fun AndroidApp(
                 onDismiss = { showCrashDialog = false },
             )
         }
+        if (vm.showWhatsNew) {
+            WhatsNewDialog(entries = vm.whatsNewEntries, onDismiss = { vm.dismissWhatsNew() })
+        }
         if (vm.downloadProgress != null) {
             DownloadProgressDialog(
                 phase = vm.downloadPhase,

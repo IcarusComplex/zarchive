@@ -239,6 +239,9 @@ fun WindowScope.App(
             if (showCrashDialog && pendingCrash != null) {
                 CrashReportDialog(crashLog = pendingCrash, onDismiss = { showCrashDialog = false })
             }
+            if (vm.showWhatsNew) {
+                WhatsNewDialog(entries = vm.whatsNewEntries, onDismiss = { vm.dismissWhatsNew() })
+            }
             if (vm.showAddToSearchDialog) {
                 AddToSearchDialog(
                     newCount         = vm.pendingAddCount,
@@ -1932,6 +1935,62 @@ private fun AllAlreadySearchedDialog(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Keep results", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WhatsNewDialog(entries: List<Pair<String, List<String>>>, onDismiss: () -> Unit) {
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(420.dp).heightIn(max = 560.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Info, null, tint = Primary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("What's new in ZArchive", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary)
+                }
+
+                val scrollState = rememberScrollState()
+                Box(Modifier.weight(1f, fill = false)) {
+                    Column(
+                        Modifier.verticalScroll(scrollState).padding(end = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(16.dp),
+                    ) {
+                        entries.forEach { (version, bullets) ->
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    "v$version", fontSize = 12.sp, fontFamily = Mono,
+                                    fontWeight = FontWeight.SemiBold, color = OnSurfaceVariant,
+                                )
+                                bullets.forEach { bullet ->
+                                    Text("·  $bullet", fontSize = 13.sp, color = OnSurface)
+                                }
+                            }
+                        }
+                    }
+                    VerticalScrollbar(
+                        adapter = rememberScrollbarAdapter(scrollState),
+                        modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
+                        style = LocalScrollbarStyle.current.copy(
+                            unhoverColor = Primary.copy(alpha = 0.25f),
+                            hoverColor   = Primary.copy(alpha = 0.55f),
+                        ),
+                    )
+                }
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Button(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Got it", fontSize = 12.sp) }
+                }
             }
         }
     }
