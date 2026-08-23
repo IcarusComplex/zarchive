@@ -1246,6 +1246,7 @@ class SearchViewModel(
                     cards = cardsToQuery,
                     stores = storesToSearch,
                     sharedBrowserSearcher = warrenSearcher,
+                    cardQuantities = cardQuantities,
                     onProgress = { storeName ->
                         withContext(Dispatchers.Main) {
                             storeStatuses[storeName] = StoreStatus.CHECKING
@@ -1485,6 +1486,7 @@ class SearchViewModel(
                     cards = listOf(card),
                     stores = storesToSearch,
                     sharedBrowserSearcher = warrenSearcher,
+                    cardQuantities = cardQuantities,
                     onProgress = {},
                     onResults = { rows ->
                         withContext(Dispatchers.Main) { results.addAll(rows) }

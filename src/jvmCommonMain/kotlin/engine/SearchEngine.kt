@@ -11,6 +11,7 @@ import io.ktor.client.network.sockets.ConnectTimeoutException
 import io.ktor.client.network.sockets.SocketTimeoutException as KtorSocketTimeoutException
 import io.ktor.client.request.*
 import io.ktor.http.*
+import io.ktor.util.AttributeKey
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
@@ -49,6 +50,20 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
         val TIER2 = ThrottleProfile(1, 500L)   // medium: ~2 req/s, serialised
         val TIER3 = ThrottleProfile(1, 800L)   // heavy: ~1.25 req/s, serialised
 
+        // Cart-mutation endpoints used to probe real stock quantity (Shopify's POST /cart/add.js,
+        // WooCommerce's POST /?wc-ajax=add_to_cart) get their own, deliberately much stricter
+        // profile — independent of the store's normal browsing throttle above and applied on top
+        // of it. These endpoints exist to protect checkout/cart flow from abuse (scalping,
+        // cart-stuffing bots), so they're plausibly rate-limited far more aggressively than a
+        // plain product-page GET, regardless of how gently we're already pacing the GETs.
+        // Confirmed live (Aug 2026): a 17-card search including one "30x" quantity got rate-limited
+        // on most Shopify stores on two different networks/IPs even with the general per-host
+        // throttle already active and the 429 circuit breaker already firing — the browsing-tier
+        // pacing alone wasn't conservative enough for this specific endpoint. Single-flight
+        // (maxConcurrent=1) and several seconds apart, deliberately slower than "fast" — a heavy
+        // quantity search taking longer to fully resolve is a fine trade for not getting blocked.
+        val CART_MUTATION = ThrottleProfile(maxConcurrent = 1, minDelayMs = 2_000L)
+
         fun forTier(tier: Int): ThrottleProfile = when (tier) {
             1    -> TIER1
             2    -> TIER2
@@ -77,6 +92,11 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
     }
 }
 
+// Set on a request's attributes by a searcher (e.g. probeShopifyStock, wcAddToCartSucceeds) to
+// mark it as a cart-mutation stock probe -- see ThrottleProfile.CART_MUTATION and its use in
+// buildHttpClient's send interceptor below.
+val CART_MUTATION_ATTR: AttributeKey<Boolean> = AttributeKey("cartMutationProbe")
+
 // ── Per-host rate limiter ──────────────────────────────────────────────────────
 
 /**
@@ -99,8 +119,16 @@ class PerHostRateLimiter(
 
     suspend fun <T> withThrottle(host: String, block: suspend () -> T): T {
         val profile = hostProfiles[host] ?: ThrottleProfile.NONE
+        return withThrottle(host, profile, block)
+    }
+
+    // Explicit key/profile overload — used for cart-mutation requests, which key off a distinct
+    // "$host#cart" bucket (see CART_MUTATION_ATTR in buildHttpClient) so they're paced by
+    // ThrottleProfile.CART_MUTATION independently of that same host's normal browsing traffic,
+    // rather than sharing (and being diluted by) the host's regular semaphore/delay.
+    suspend fun <T> withThrottle(key: String, profile: ThrottleProfile, block: suspend () -> T): T {
         if (profile === ThrottleProfile.NONE) return block()
-        val sem = mutex.withLock { semaphores.getOrPut(host) { Semaphore(profile.maxConcurrent) } }
+        val sem = mutex.withLock { semaphores.getOrPut(key) { Semaphore(profile.maxConcurrent) } }
         return sem.withPermit {
             delay(profile.minDelayMs)
             block()
@@ -167,9 +195,17 @@ fun buildHttpClient(rateLimiter: PerHostRateLimiter): HttpClient {
         }
     }
     // Intercept every request at the send level so all HTTP calls — including nested
-    // handle.js / product-page fetches — are throttled per domain.
+    // handle.js / product-page fetches — are throttled per domain. Requests marked with
+    // CART_MUTATION_ATTR (stock-probing cart/add.js and wc-ajax=add_to_cart calls) are paced by
+    // their own, much stricter ThrottleProfile.CART_MUTATION under a separate "$host#cart" bucket,
+    // instead of sharing the host's regular browsing semaphore/delay.
     client.plugin(HttpSend).intercept { request ->
-        rateLimiter.withThrottle(request.url.host) { execute(request) }
+        val host = request.url.host
+        if (request.attributes.getOrNull(CART_MUTATION_ATTR) == true) {
+            rateLimiter.withThrottle("$host#cart", ThrottleProfile.CART_MUTATION) { execute(request) }
+        } else {
+            rateLimiter.withThrottle(host) { execute(request) }
+        }
     }
     return client
 }
@@ -232,6 +268,11 @@ suspend fun checkStore(
     // Called on the IO thread when a 429 is encountered; receives the base URL and
     // the number of cards being searched so the caller can persist a throttle rule.
     onCfBlocked: ((baseUrl: String, cardCount: Int) -> Unit)? = null,
+    // Requested quantity per card; absent cards default to 1. Threaded down to the searcher so
+    // platforms with an expensive stock-quantity probe (Shopify/WooCommerce/BigCommerce) can skip
+    // it entirely for qty=1 -- any available listing already satisfies a single-copy need
+    // regardless of its exact stock count, so probing for qty=1 is pure wasted request volume.
+    cardQuantities: Map<String, Int> = emptyMap(),
 ) {
     onProgress(storeName)
     // Only successful detections are cached for the session. UNKNOWN/UNREACHABLE results —
@@ -289,7 +330,7 @@ suspend fun checkStore(
         return
     }
 
-    val searcher: suspend (HttpClient, String, String) -> List<SearchResult> = when (platform) {
+    val searcher: suspend (HttpClient, String, String, Int) -> List<SearchResult> = when (platform) {
         Platform.SHOPIFY      -> ::searchShopify
         Platform.WOOCOMMERCE  -> ::searchWooCommerce
         Platform.WC_STORE_API -> ::searchWcStoreApi
@@ -298,7 +339,7 @@ suspend fun checkStore(
         Platform.PRESTASHOP   -> ::searchPrestaShop
         Platform.WARREN_API   -> ::searchWarrenApi
         Platform.UNTAPPED_API -> ::searchUntappedPotential
-        else                  -> { _, _, _ -> emptyList() }
+        else                  -> { _, _, _, _ -> emptyList() }
     }
 
     // 2 concurrent card-processing lanes per store, with a random jitter before each.
@@ -309,11 +350,12 @@ suspend fun checkStore(
             async {
                 sem.withPermit {
                     delay((500L..2000L).random())
+                    val qty = cardQuantities[card] ?: 1
                     val rows = try {
                         val hits = withRetry(
                             baseUrl,
                             onCfBlocked = { url -> onCfBlocked?.invoke(url, cards.size) },
-                        ) { searcher(client, baseUrl, card) }
+                        ) { searcher(client, baseUrl, card, qty) }
                         if (hits.isEmpty()) listOf(SearchResult(
                             store = storeName, card = card, title = null,
                             priceZar = null, available = null, url = baseUrl, note = "not stocked",
@@ -352,6 +394,8 @@ suspend fun runSearch(
     // supplied (desktop passes `{ parallelism -> BrowserSearcher(parallelism) }`). Keeps this
     // shared orchestrator free of any compile-time dependency on a concrete Playwright/WebView type.
     createBrowserSearcher: ((parallelism: Int) -> BrowserBackedSearcher)? = null,
+    // Requested quantity per card; see checkStore's cardQuantities doc.
+    cardQuantities: Map<String, Int> = emptyMap(),
 ) {
     cfBlockedMutex.withLock { cfBlockedStores.clear() }
 
@@ -399,6 +443,7 @@ suspend fun runSearch(
                             runCatching { recordCfThrottleBlock(url, cardCount, isLargeSearch) }
                             onStoreCfBlocked?.invoke(name)
                         },
+                        cardQuantities = cardQuantities,
                     )
                 }
             }.awaitAll()

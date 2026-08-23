@@ -17,18 +17,39 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Fixed a bug where large searches with quantities (e.g. \"4x Card Name\") could get rate-limited and stall on several stores.",
         "Added this What's New popup, shown once after each update.",
     ),
+    "1.1.15-beta.1" to listOf(
+        "Further fixed rate-limiting on several stores when searching with larger quantities (e.g. \"30x Card Name\") -- stock checks for those stores are now paced much more conservatively.",
+        "Sped up regular searches by skipping unnecessary stock checks for single-copy requests.",
+        "Fixed the What's New popup not showing up for existing installs updating into this feature for the first time.",
+    ),
 )
 
 /**
  * Changelog entries strictly newer than [lastSeenVersion] and no newer than [currentVersion],
  * oldest first -- so a user who skipped several releases (e.g. the in-app updater always jumps
- * straight to the latest) sees everything they missed, not just the newest entry. Returns nothing
- * when [lastSeenVersion] is blank (a fresh install has no prior version to compare against, so
- * there's nothing "new" to announce).
+ * straight to the latest) sees everything they missed, not just the newest entry.
+ *
+ * [lastSeenVersion] blank is ambiguous by construction: it means either a genuinely fresh install
+ * *or* an existing install updating for the first time since this feature shipped (every install
+ * that predates `whatsNew.lastSeenVersion` existing at all looks identical to a fresh install --
+ * there is no way to tell them apart from this setting alone). Silently returning nothing here
+ * would permanently skip the popup for every already-existing user on the very release that
+ * introduces it (confirmed live: an Android update from 1.1.13 to the 1.1.14 release that added
+ * this feature showed nothing). So blank shows just the single most recent entry instead of the
+ * full history -- a reasonable, low-noise default either way: a real first-time user gets a brief
+ * "here's what's new," and an existing user updating into this feature for the first time gets
+ * told about the release they just installed, instead of nothing.
  */
-fun pendingWhatsNew(lastSeenVersion: String, currentVersion: String): List<Pair<String, List<String>>> {
-    if (lastSeenVersion.isBlank()) return emptyList()
-    return CHANGELOG.entries
+fun pendingWhatsNew(
+    lastSeenVersion: String,
+    currentVersion: String,
+    changelog: Map<String, List<String>> = CHANGELOG,
+): List<Pair<String, List<String>>> {
+    val newest = changelog.entries
+        .filter { (v, _) -> !isNewerVersion(v, currentVersion) }
+        .maxWithOrNull(compareBy(versionComparator) { it.key })
+    if (lastSeenVersion.isBlank()) return newest?.let { listOf(it.key to it.value) } ?: emptyList()
+    return changelog.entries
         .filter { (v, _) -> isNewerVersion(v, lastSeenVersion) && !isNewerVersion(v, currentVersion) }
         .sortedWith(compareBy(versionComparator) { it.key })
         .map { it.key to it.value }

@@ -5,6 +5,7 @@ import data.PlatformPaths
 import data.SearchResult
 import data.isRelevant
 import data.parsePrice
+import engine.CART_MUTATION_ATTR
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -96,7 +97,7 @@ private suspend fun detectFromHomepage(client: HttpClient, base: String): Platfo
     }
 }
 
-suspend fun searchShopify(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
+suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
     val url = "$base/search/suggest.json"
     val response = client.get(url) {
         parameter("q", card)
@@ -166,7 +167,7 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String): List<
             sem.withPermit {
                 val handle = c.relUrl.removePrefix("/products/").substringBefore("?").trim('/')
                 val variant = if (handle.isNotBlank())
-                    shopifyFirstVariant(client, base, handle)
+                    shopifyFirstVariant(client, base, handle, probeStock = qty > 1)
                 else null
 
                 val price = variant?.price ?: c.suggestPrice
@@ -206,6 +207,10 @@ private suspend fun shopifyFirstVariant(
     client: HttpClient,
     base: String,
     handle: String,
+    // Only probe real stock when the caller actually needs more than 1 -- any available listing
+    // already covers a qty-1 need regardless of its exact count, so probing then is pure wasted
+    // request volume against the cart endpoint's own (much stricter) throttle.
+    probeStock: Boolean,
 ): ShopifyVariant? {
     return try {
         val resp = client.get("$base/products/$handle.js")
@@ -231,7 +236,7 @@ private suspend fun shopifyFirstVariant(
         val setHint = setPosition?.let { pos ->
             display["option$pos"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
         }
-        val stockQty = cartId?.let { probeShopifyStock(client, base, it) }
+        val stockQty = if (probeStock) cartId?.let { probeShopifyStock(client, base, it) } else null
         ShopifyVariant(price, cartId, setHint, stockQty)
     } catch (e: CloudflareBlockedException) {
         throw e
@@ -256,6 +261,7 @@ private val SHOPIFY_SOLD_OUT_RE = Regex("""(?i)sold out""")
 private suspend fun probeShopifyStock(client: HttpClient, base: String, variantId: Long): Int? {
     return try {
         val resp = client.post("$base/cart/add.js") {
+            attributes.put(CART_MUTATION_ATTR, true)
             contentType(ContentType.Application.Json)
             setBody("""{"items":[{"id":$variantId,"quantity":$SHOPIFY_PROBE_QTY}]}""")
         }
@@ -308,6 +314,7 @@ private const val WC_PROBE_CEILING = 20
 private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, productId: Long, qty: Int): Boolean {
     return try {
         val resp = client.post("$base/?wc-ajax=add_to_cart") {
+            attributes.put(CART_MUTATION_ATTR, true)
             contentType(ContentType.Application.FormUrlEncoded)
             setBody("product_id=$productId&quantity=$qty")
         }
@@ -339,7 +346,7 @@ private suspend fun probeWooCommerceStock(client: HttpClient, base: String, prod
     return lowSucceeds.takeIf { it > 0 }
 }
 
-suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
+suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/?s=$encoded&post_type=product"
     val resp = client.get(url)
@@ -368,8 +375,11 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
         // WooCommerce's core low-stock-threshold message renders as e.g. "Only 2 left in stock" in
         // this same element -- free when present, but only shows up near the threshold. Otherwise
         // (or if that text isn't there), fall back to the wc-ajax probe for a real number.
+        // The probe (a cart-mutation request, much more strictly throttled -- see
+        // ThrottleProfile.CART_MUTATION) only runs when it can actually change the plan: a qty-1
+        // need is satisfied by any available listing regardless of its exact stock count.
         val stockQty = WOOCOMMERCE_STOCK_QTY_RE.find(stockEl?.text() ?: "")?.groupValues?.get(1)?.toIntOrNull()
-            ?: if (available && productId != null) probeWooCommerceStock(client, base, productId) else null
+            ?: if (available && productId != null && qty > 1) probeWooCommerceStock(client, base, productId) else null
         val productUrl = soup.selectFirst("link[rel=canonical]")?.attr("href") ?: url
         // Some TCG-singles WC themes put "Rarity | #Number | Set Name" in the short description.
         val shortDesc = summaryEl.selectFirst(".woocommerce-product-details__short-description")?.text()?.trim()
@@ -425,7 +435,7 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                val stockQty = if (c.available && c.productId != null) probeWooCommerceStock(client, base, c.productId) else null
+                val stockQty = if (c.available && c.productId != null && qty > 1) probeWooCommerceStock(client, base, c.productId) else null
                 SearchResult(
                     store = "",
                     card = card,
@@ -448,7 +458,7 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String): L
 // For variable products we fetch each product page to extract the first in-stock variation ID
 // from the form's data-product_variations attribute — the parent product ID alone won't add
 // the correct variant to the cart.
-suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
+suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/wp-json/wc/store/v1/products?search=$encoded&per_page=10"
     val resp = client.get(url) {
@@ -565,7 +575,7 @@ private suspend fun resolveWcProductPage(client: HttpClient, productUrl: String)
     }
 }
 
-suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List<SearchResult> {
+suspend fun searchOpenCart(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     // Try asearch first (used by stores like Luckshack), then standard search
     for (route in listOf("product/asearch", "product/search")) {
@@ -600,7 +610,7 @@ suspend fun searchOpenCart(client: HttpClient, base: String, card: String): List
     return emptyList()
 }
 
-suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
+suspend fun searchBigCommerce(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
     // Quoting the query forces BigCommerce to match the exact phrase rather than individual
     // keywords — without quotes "Dark Ritual" returns 500+ unrelated results (cards from
     // "The Dark" set, cards with "Ritual" in the name, etc.) with the actual card buried.
@@ -636,7 +646,10 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String): L
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                val stockQty = if (c.available) resolveBigCommerceStock(client, c.productUrl) else null
+                // Not a cart-mutation endpoint (just the product page), so it isn't under the
+                // strict CART_MUTATION throttle -- still skipped for qty=1 anyway, since a
+                // qty-1 need is satisfied by any available listing regardless of its exact count.
+                val stockQty = if (c.available && qty > 1) resolveBigCommerceStock(client, c.productUrl) else null
                 SearchResult(
                     store = "",
                     card = card,
@@ -679,7 +692,7 @@ private suspend fun resolveBigCommerceStock(client: HttpClient, productUrl: Stri
 // - Marketplace products: listing HTML only has data-id-product (catalog ID); the real
 //   cartable product ID is in a separate input.product_page_product_id on the product page
 // We prefer the listing form ID, fall back to a product-page fetch, then to data-id-product.
-suspend fun searchPrestaShop(client: HttpClient, base: String, card: String): List<SearchResult> = coroutineScope {
+suspend fun searchPrestaShop(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/search?controller=search&search_query=$encoded"
     val resp = client.get(url)
@@ -763,7 +776,7 @@ private suspend fun resolvePrestaShopCartId(client: HttpClient, productUrl: Stri
 // This API endpoint requires an auth token that The Warren does not expose publicly.
 // Calls always return 401. The Warren is therefore searched via BrowserSearcher (Playwright headless),
 // which handles the JS token exchange. Do not attempt to fall back to this function.
-suspend fun searchWarrenApi(client: HttpClient, base: String, card: String): List<SearchResult> {
+suspend fun searchWarrenApi(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> {
     val encoded = java.net.URLEncoder.encode(card, "UTF-8")
     val url = "$base/openapi/1.0.0fe/client/product/search?" +
         "limit=20&offset=0&search_term=$encoded&in_stock=0" +
@@ -819,7 +832,7 @@ private const val UNTAPPED_API_KEY = "sb_publishable_x_to7XANoonahQHDQmcw6w_PlLa
 // return a Postgres error ("Sort is invalid").
 private val UNTAPPED_SET_CODE_RE = Regex(""" - ([A-Za-z0-9]{2,6}) #\d+$""")
 
-suspend fun searchUntappedPotential(client: HttpClient, base: String, card: String): List<SearchResult> {
+suspend fun searchUntappedPotential(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> {
     val payload = buildJsonObject {
         put("p_category", "mtg")
         put("p_filters", buildJsonObject {
