@@ -70,6 +70,16 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
             else -> TIER3
         }
 
+        // Cart-mutation pacing escalates with a store's own CfThrottleRule history exactly like
+        // forTier does for browsing -- a store that has already 429'd (Knightly Gaming, Underworld
+        // Connections, confirmed Aug 2026) gets slower cart probes on future searches specifically,
+        // instead of every Shopify store sharing one flat 2s delay regardless of track record.
+        fun cartMutationForTier(tier: Int): ThrottleProfile = when (tier) {
+            1    -> CART_MUTATION
+            2    -> ThrottleProfile(maxConcurrent = 1, minDelayMs = 3_500L)
+            else -> ThrottleProfile(maxConcurrent = 1, minDelayMs = 5_000L)
+        }
+
         // Non-Shopify platforms make far fewer HTTP requests per card and are rarely
         // rate-limited — use lighter profiles to keep large searches reasonably fast.
         fun forTierAndPlatform(tier: Int, platform: Platform): ThrottleProfile = when (platform) {
@@ -121,6 +131,11 @@ class PerHostRateLimiter(
         val profile = hostProfiles[host] ?: ThrottleProfile.NONE
         return withThrottle(host, profile, block)
     }
+
+    /** Looks up a profile by exact key (e.g. a per-store-escalated "$host#cart" bucket), falling
+     *  back to [default] when the key wasn't in the map this search built (e.g. no CfThrottleRule
+     *  history for that store yet). */
+    fun profileFor(key: String, default: ThrottleProfile): ThrottleProfile = hostProfiles[key] ?: default
 
     // Explicit key/profile overload — used for cart-mutation requests, which key off a distinct
     // "$host#cart" bucket (see CART_MUTATION_ATTR in buildHttpClient) so they're paced by
@@ -197,12 +212,16 @@ fun buildHttpClient(rateLimiter: PerHostRateLimiter): HttpClient {
     // Intercept every request at the send level so all HTTP calls — including nested
     // handle.js / product-page fetches — are throttled per domain. Requests marked with
     // CART_MUTATION_ATTR (stock-probing cart/add.js and wc-ajax=add_to_cart calls) are paced by
-    // their own, much stricter ThrottleProfile.CART_MUTATION under a separate "$host#cart" bucket,
-    // instead of sharing the host's regular browsing semaphore/delay.
+    // their own, much stricter profile under a separate "$host#cart" bucket, instead of sharing
+    // the host's regular browsing semaphore/delay. That bucket's profile is looked up per-store
+    // (escalated by CfThrottleRule history, same as browsing) with a flat fallback for stores
+    // with no escalation on record yet — see ThrottleProfile.cartMutationForTier.
     client.plugin(HttpSend).intercept { request ->
         val host = request.url.host
         if (request.attributes.getOrNull(CART_MUTATION_ATTR) == true) {
-            rateLimiter.withThrottle("$host#cart", ThrottleProfile.CART_MUTATION) { execute(request) }
+            val cartKey = "$host#cart"
+            val profile = rateLimiter.profileFor(cartKey, ThrottleProfile.CART_MUTATION)
+            rateLimiter.withThrottle(cartKey, profile) { execute(request) }
         } else {
             rateLimiter.withThrottle(host) { execute(request) }
         }
@@ -407,19 +426,24 @@ suspend fun runSearch(
     val baseTier = if (isLargeSearch) 2 else 1
 
     val cfRules = loadActiveCfThrottleRules()
-    val hostProfiles: Map<String, ThrottleProfile> = stores.values.mapNotNull { baseUrl ->
+    val hostProfiles: Map<String, ThrottleProfile> = stores.values.flatMap { baseUrl ->
         val platform = KNOWN_PLATFORMS[baseUrl] ?: Platform.SHOPIFY
         if (platform == Platform.BROWSER || platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE)
-            return@mapNotNull null
+            return@flatMap emptyList()
         // UNTAPPED_API's actual requests go to a shared Supabase host, not the store's own
         // domain — throttle that host directly rather than the (never-requested) store host.
         val host = if (platform == Platform.UNTAPPED_API) UNTAPPED_SUPABASE_HOST
-                   else extractHost(baseUrl) ?: return@mapNotNull null
+                   else extractHost(baseUrl) ?: return@flatMap emptyList()
         val rule = cfRules[baseUrl]
         val tier = if (rule == null) baseTier
                    else if (isLargeSearch) maxOf(baseTier, rule.tierLarge)
                    else maxOf(baseTier, rule.tierSmall)
-        host to ThrottleProfile.forTierAndPlatform(tier, platform)
+        // Cart-mutation bucket ("$host#cart") escalates with the same per-store tier as browsing
+        // — see ThrottleProfile.cartMutationForTier.
+        listOf(
+            host to ThrottleProfile.forTierAndPlatform(tier, platform),
+            "$host#cart" to ThrottleProfile.cartMutationForTier(tier),
+        )
     }.toMap()
 
     val rateLimiter = PerHostRateLimiter(hostProfiles)

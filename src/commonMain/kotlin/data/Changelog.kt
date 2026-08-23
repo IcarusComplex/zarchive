@@ -22,6 +22,9 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Sped up regular searches by skipping unnecessary stock checks for single-copy requests.",
         "Fixed the What's New popup not showing up for existing installs updating into this feature for the first time.",
     ),
+    "1.1.16" to listOf(
+        "Stock-count checks for stores that have previously rate-limited a search now automatically slow down further on later searches, instead of every store sharing the same fixed pace.",
+    ),
 )
 
 /**
