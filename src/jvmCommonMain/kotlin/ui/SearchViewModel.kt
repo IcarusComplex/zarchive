@@ -1196,6 +1196,34 @@ class SearchViewModel(
 
     fun dismissUpdateStatus() { updateCheckState = UpdateCheckState.IDLE }
 
+    // Wipes the current search box + results + order-list state back to a blank slate. Doesn't
+    // touch saved lists/results (persisted separately), settings, or monitor/sync/collection
+    // state -- only the "current session" fields that search()/loadSavedResult() populate.
+    fun clearAll() {
+        searchJob?.cancel()
+        isSearching = false
+        query = ""
+        searchedCards = emptyList()
+        cardQuantities = emptyMap()
+        results.clear()
+        images.clear()
+        storeStatuses.clear()
+        storeCardCounts.clear()
+        cfBlockedStores.clear()
+        pinnedListings.clear()
+        uncheckedOrderLines.clear()
+        excludedCards.clear()
+        refreshingCards.clear()
+        orderPriceFilter = ""
+        completedStores = 0
+        completedCardChecks = 0
+        totalCardChecks = 0
+        totalStores = STORES.size
+        statusText = ""
+        lastLoadedResultName = null
+        lastLoadedListName = null
+    }
+
     fun search() {
         val cards = parseCardList(query, ignoreBasicLands)
         if (cards.isEmpty()) return

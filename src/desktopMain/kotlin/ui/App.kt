@@ -423,13 +423,26 @@ private fun LeftPanel(vm: SearchViewModel) {
         SavedListsPanel(vm)
         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.5f))
 
-        // Search label
-        Text(
-            "Cards to search",
-            fontSize = 11.sp,
-            color = OnSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.padding(start = 12.dp, top = 10.dp, bottom = 4.dp),
-        )
+        // Search label + clear-all (only shown once there's something to clear)
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "Cards to search",
+                fontSize = 11.sp,
+                color = OnSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f),
+            )
+            if (vm.query.isNotBlank() || vm.results.isNotEmpty()) {
+                Text(
+                    "Clear all",
+                    fontSize = 11.sp,
+                    color = OnSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.clickable { vm.clearAll() },
+                )
+            }
+        }
 
         // Search field — fills all remaining vertical space
         PanelSearch(vm, Modifier.weight(1f).padding(horizontal = 12.dp))

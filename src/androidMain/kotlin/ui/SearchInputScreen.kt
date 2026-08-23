@@ -72,11 +72,22 @@ fun SearchInputScreen(vm: SearchViewModel, onOpenSearchOptions: () -> Unit) {
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.clickable { showFormatHelp = true },
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Icon(Icons.Default.HelpOutline, "Supported input format", tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
-                Text("Format help", fontSize = 12.sp, color = OnSurfaceVariant)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.clickable { showFormatHelp = true },
+                ) {
+                    Icon(Icons.Default.HelpOutline, "Supported input format", tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
+                    Text("Format help", fontSize = 12.sp, color = OnSurfaceVariant)
+                }
+                if (vm.query.isNotBlank() || vm.results.isNotEmpty()) {
+                    Text(
+                        "Clear all", fontSize = 12.sp, color = OnSurfaceVariant,
+                        modifier = Modifier.clickable { vm.clearAll() },
+                    )
+                }
             }
             Row(
                 verticalAlignment = Alignment.CenterVertically,
