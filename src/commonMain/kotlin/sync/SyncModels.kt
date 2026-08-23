@@ -34,6 +34,7 @@ data class SyncedResult(
     val excludedCards: Set<String> = emptySet(),
     val uncheckedLines: Set<String> = emptySet(),
     val pinnedListings: Map<String, String> = emptyMap(),
+    val cardQuantities: Map<String, Int> = emptyMap(),
     val deleted: Boolean = false,
     val deletedAt: Long? = null,
 )

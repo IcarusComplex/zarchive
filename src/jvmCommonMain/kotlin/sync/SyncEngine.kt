@@ -161,7 +161,7 @@ private fun SyncedList.toSavedSearchList() = SavedSearchList(
     deletedAt = deletedAt,
 )
 
-private fun SyncedResultRecord.toSynced() = SyncedResult(
+internal fun SyncedResultRecord.toSynced() = SyncedResult(
     syncId = syncId ?: java.util.UUID.randomUUID().toString(),
     name = name,
     description = description,
@@ -171,11 +171,12 @@ private fun SyncedResultRecord.toSynced() = SyncedResult(
     excludedCards = excludedCards,
     uncheckedLines = uncheckedLines,
     pinnedListings = pinnedListings,
+    cardQuantities = cardQuantities,
     deleted = deleted,
     deletedAt = deletedAt,
 )
 
-private fun SyncedResult.toSyncedResultRecord() = SyncedResultRecord(
+internal fun SyncedResult.toSyncedResultRecord() = SyncedResultRecord(
     id = 0, // ignored by applyRemote -- matching/updating is done by syncId
     syncId = syncId,
     name = name,
@@ -186,6 +187,7 @@ private fun SyncedResult.toSyncedResultRecord() = SyncedResultRecord(
     excludedCards = excludedCards,
     uncheckedLines = uncheckedLines,
     pinnedListings = pinnedListings,
+    cardQuantities = cardQuantities,
     deleted = deleted,
     deletedAt = deletedAt,
 )
