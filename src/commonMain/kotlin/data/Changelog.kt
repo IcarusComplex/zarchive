@@ -17,7 +17,7 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Fixed a bug where large searches with quantities (e.g. \"4x Card Name\") could get rate-limited and stall on several stores.",
         "Added this What's New popup, shown once after each update.",
     ),
-    "1.1.15-beta.1" to listOf(
+    "1.1.15" to listOf(
         "Further fixed rate-limiting on several stores when searching with larger quantities (e.g. \"30x Card Name\") -- stock checks for those stores are now paced much more conservatively.",
         "Sped up regular searches by skipping unnecessary stock checks for single-copy requests.",
         "Fixed the What's New popup not showing up for existing installs updating into this feature for the first time.",

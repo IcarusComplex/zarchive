@@ -1,8 +1,15 @@
 name: Release
 
-# Triggers on any version tag push:
-#   v1.2.3          → stable release  (make_latest: true)
-#   v1.2.3-beta.1   → pre-release     (make_latest: false, prerelease: true)
+# Triggers on any version tag push. Every tag should be a clean "vX.Y.Z" -- no "-beta" suffix.
+# Old already-installed clients' version-compare logic can choke on non-numeric suffixes in the
+# tag itself (it's what gets compared against), so betas must NOT be distinguished by tag format.
+#
+# This workflow always publishes as a normal stable/latest release. For a beta that should only
+# reach opted-in "Early access" users, immediately after this workflow finishes run:
+#   gh release edit vX.Y.Z --prerelease --latest=false
+# GitHub's real prerelease flag is what `checkForUpdate` actually gates on (opted-in users query
+# /releases, everyone else queries /releases/latest, which excludes prereleases) -- the tag text
+# never needs to encode beta-ness.
 on:
   push:
     tags:
@@ -162,6 +169,6 @@ jobs:
             ZArchive-windows-x64-*.zip
             ZArchive-macos-arm64-*.zip
             ZArchive-android-*.apk
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ !contains(github.ref_name, '-') }}
+          prerelease: false
+          make_latest: true
           generate_release_notes: true

@@ -416,6 +416,18 @@ messages) — if they explicitly say to skip the prompt. A version with no `CHAN
 never shows the popup for that release (silent no-op, not an error), so it's safe to occasionally
 skip an entry for a trivial/internal-only release — but do it deliberately, not by forgetting.
 
+**Beta/prerelease tags must be plain `vX.Y.Z` — never `vX.Y.Z-beta.N`.** `checkForUpdate` compares
+the raw GitHub tag string against `BuildInfo.VERSION` via `isNewerVersion`; a hyphenated dot-segment
+(e.g. `"15-beta"`) fails the numeric parse as a *whole segment*, not just the suffix, so an
+already-installed client evaluates a hyphenated tag as *older*, not newer, and the release becomes
+permanently invisible to every client that predates the tag (learned the hard way shipping
+`v1.1.15-beta.1` — see `data/Version.kt`'s doc comment and `VersionTest.kt`'s regression test).
+`release.yml` always publishes as stable/latest regardless of tag text; to restrict a release to
+opted-in "Early access" users, run `gh release edit vX.Y.Z --prerelease --latest=false` immediately
+after the workflow finishes. GitHub's real `prerelease` flag is what gates visibility
+(`checkForUpdate`'s opted-in path queries `/releases`, everyone else queries `/releases/latest`,
+which excludes prereleases) — the tag/version string itself never needs to encode beta-ness.
+
 ### Debugging the update chain
 
 The swap script that executes is **baked into the running version**, not the downloaded version.
