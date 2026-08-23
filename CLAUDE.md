@@ -427,6 +427,8 @@ opted-in "Early access" users, run `gh release edit vX.Y.Z --prerelease --latest
 after the workflow finishes. GitHub's real `prerelease` flag is what gates visibility
 (`checkForUpdate`'s opted-in path queries `/releases`, everyone else queries `/releases/latest`,
 which excludes prereleases) — the tag/version string itself never needs to encode beta-ness.
+**Confirmed working end-to-end for v1.1.15**: with Early Access on, an already-installed v1.1.14
+client found and offered it; with Early Access off, it did not.
 
 ### Debugging the update chain
 
