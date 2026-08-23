@@ -410,11 +410,12 @@ in `AndroidApp.kt`. `data.isNewerVersion` (shared, `data/Version.kt`) is also wh
 `GitHubService.checkForUpdate` uses for the "is there a newer release" check.
 
 **Process for every release: add a `CHANGELOG` entry for the new version before tagging it.**
-Default to asking the user for the "what's new" text; only generate it yourself — from `git log`/
-`git diff` since the last tag, written up as a short, human-readable bullet list (not raw commit
-messages) — if they explicitly say to skip the prompt. A version with no `CHANGELOG` entry just
-never shows the popup for that release (silent no-op, not an error), so it's safe to occasionally
-skip an entry for a trivial/internal-only release — but do it deliberately, not by forgetting.
+Always generate the text yourself — from `git log`/`git diff` since the last tag, written up as a
+short, human-readable bullet list (not raw commit messages). Never prompt the user to write it or
+ask for confirmation first (reversed 2026-08-23 — was "ask by default", now "always generate,
+never ask"). A version with no `CHANGELOG` entry just never shows the popup for that release
+(silent no-op, not an error), so it's safe to occasionally skip an entry for a trivial/
+internal-only release — but do it deliberately, not by forgetting.
 
 **Beta/prerelease tags must be plain `vX.Y.Z` — never `vX.Y.Z-beta.N`.** `checkForUpdate` compares
 the raw GitHub tag string against `BuildInfo.VERSION` via `isNewerVersion`; a hyphenated dot-segment
