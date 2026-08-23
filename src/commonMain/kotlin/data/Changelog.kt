@@ -25,6 +25,10 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
     "1.1.16" to listOf(
         "Stock-count checks for stores that have previously rate-limited a search now automatically slow down further on later searches, instead of every store sharing the same fixed pace.",
     ),
+    "1.1.17" to listOf(
+        "Fixed a bug where saved-result quantities (e.g. \"4x Card Name\") could get silently reset to 1 shortly after saving, if Google Drive sync was connected.",
+        "Added a \"Clear all\" button next to the search box to quickly reset the current search and results.",
+    ),
 )
 
 /**
