@@ -33,6 +33,9 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Reduced rate-limiting on searches for cards with many similarly-named listings (e.g. tokens reprinted across several sets) by limiting how many of them get a detailed stock check.",
         "Added an icon to the \"Clear all\" button.",
     ),
+    "1.1.19" to listOf(
+        "Fixed a bug where a store's stock check could silently fail and cause the order planner to assume unlimited stock, recommending far more copies from a listing than were actually available.",
+    ),
 )
 
 /**

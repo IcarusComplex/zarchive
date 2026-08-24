@@ -30,14 +30,14 @@ class CloudflareBlockedException : Exception("Cloudflare challenge — store ski
 private suspend fun checkStatus(response: HttpResponse) {
     when (response.status.value) {
         429 -> {
-            if (IS_DEBUG) dump429(response)
+            if (IS_DEBUG) dumpResponse("429", response)
             throw CloudflareBlockedException()
         }
         !in 200..299 -> throw Exception("HTTP ${response.status.value}")
     }
 }
 
-private suspend fun dump429(response: HttpResponse) {
+private suspend fun dumpResponse(label: String, response: HttpResponse) {
     runCatching {
         val req = response.call.request
         val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HHmmss_SSS"))
@@ -59,10 +59,10 @@ private suspend fun dump429(response: HttpResponse) {
             appendLine(body)
         }
 
-        val file = DEBUG_DIR.resolve("429_${host}_$ts.txt")
+        val file = DEBUG_DIR.resolve("${label}_${host}_$ts.txt")
         file.writeText(text)
-        println("[DEBUG] 429 dump → ${file.absolutePath}")
-    }.onFailure { e -> println("[DEBUG] Failed to write 429 dump: ${e.message}") }
+        println("[DEBUG] $label dump → ${file.absolutePath}")
+    }.onFailure { e -> println("[DEBUG] Failed to write $label dump: ${e.message}") }
 }
 
 private fun resolveUrl(base: String, path: String): String {
@@ -275,8 +275,17 @@ private const val SHOPIFY_PROBE_CANDIDATE_LIMIT = 3
 private val SHOPIFY_CAPPED_QTY_RE = Regex("""(?i)only\s+(\d+)\s+items?\s+(?:was|were)\s+added""")
 private val SHOPIFY_SOLD_OUT_RE = Regex("""(?i)sold out""")
 
+// A silent "null" here means "unknown -- assume unlimited," which the order optimizer will then
+// happily allocate an entire multi-copy need against. That's the correct, deliberate reading for
+// a listing that was never probed at all (qty=1 skip). It's actively wrong for a probe that WAS
+// attempted but failed transiently (timeout, connection reset) -- confirmed live, Aug 2026: a
+// listing with real stock of 3 got the app's full 30-card request assigned to it after a heavy,
+// already-rate-limited session, even though live-testing the exact same probe request against the
+// same listing afterwards returned a correctly-parseable "Only 3 items were added" 422. One retry
+// on a genuine network exception closes most of that window without masking a real circuit-breaker
+// 429 (which still propagates immediately, on either attempt, to trip the store-wide backoff).
 private suspend fun probeShopifyStock(client: HttpClient, base: String, variantId: Long): Int? {
-    return try {
+    suspend fun attempt(): Int? {
         val resp = client.post("$base/cart/add.js") {
             attributes.put(CART_MUTATION_ATTR, true)
             contentType(ContentType.Application.Json)
@@ -289,11 +298,11 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
         // as "unknown stock" and the search just kept hammering the same store on every
         // subsequent candidate/card instead of backing off, unlike every other request type.
         if (resp.status.value == 429) {
-            if (IS_DEBUG) dump429(resp)
+            if (IS_DEBUG) dumpResponse("429", resp)
             throw CloudflareBlockedException()
         }
         val body = resp.bodyAsText()
-        when (resp.status.value) {
+        return when (resp.status.value) {
             200 -> {
                 val qty = Json.parseToJsonElement(body).jsonObject["items"]?.jsonArray
                     ?.firstOrNull()?.jsonObject?.get("quantity")?.jsonPrimitive?.intOrNull
@@ -302,15 +311,33 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
                 qty?.takeIf { it < SHOPIFY_PROBE_QTY }
             }
             422 -> {
+                // A 422 here unambiguously means "requested quantity exceeds real stock" -- even
+                // if the message doesn't match the known wording (a different store/theme/locale),
+                // falling back to null (unlimited) would be actively backwards, not just uncertain.
+                // Dump it in debug builds so an unrecognised format is diagnosable, and don't fall
+                // through to null.
                 SHOPIFY_CAPPED_QTY_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
-                    ?: if (SHOPIFY_SOLD_OUT_RE.containsMatchIn(body)) 0 else null
+                    ?: if (SHOPIFY_SOLD_OUT_RE.containsMatchIn(body)) 0 else run {
+                        if (IS_DEBUG) dumpResponse("422_unparsed", resp)
+                        null
+                    }
             }
             else -> null
         }
+    }
+    return try {
+        attempt()
     } catch (e: CloudflareBlockedException) {
         throw e
     } catch (_: Exception) {
-        null
+        try {
+            delay(800L)
+            attempt()
+        } catch (e: CloudflareBlockedException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
     }
 }
 
@@ -340,7 +367,7 @@ private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, produc
         // A binary search that treats 429 as "false" would keep hammering the host with more
         // probes while it's already rate-limiting us, instead of backing off store-wide.
         if (resp.status.value == 429) {
-            if (IS_DEBUG) dump429(resp)
+            if (IS_DEBUG) dumpResponse("429", resp)
             throw CloudflareBlockedException()
         }
         resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
