@@ -29,6 +29,10 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Fixed a bug where saved-result quantities (e.g. \"4x Card Name\") could get silently reset to 1 shortly after saving, if Google Drive sync was connected.",
         "Added a \"Clear all\" button next to the search box to quickly reset the current search and results.",
     ),
+    "1.1.18" to listOf(
+        "Reduced rate-limiting on searches for cards with many similarly-named listings (e.g. tokens reprinted across several sets) by limiting how many of them get a detailed stock check.",
+        "Added an icon to the \"Clear all\" button.",
+    ),
 )
 
 /**

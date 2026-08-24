@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
@@ -83,10 +84,14 @@ fun SearchInputScreen(vm: SearchViewModel, onOpenSearchOptions: () -> Unit) {
                     Text("Format help", fontSize = 12.sp, color = OnSurfaceVariant)
                 }
                 if (vm.query.isNotBlank() || vm.results.isNotEmpty()) {
-                    Text(
-                        "Clear all", fontSize = 12.sp, color = OnSurfaceVariant,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
                         modifier = Modifier.clickable { vm.clearAll() },
-                    )
+                    ) {
+                        Icon(Icons.Default.Close, null, tint = OnSurfaceVariant, modifier = Modifier.size(14.dp))
+                        Text("Clear all", fontSize = 12.sp, color = OnSurfaceVariant)
+                    }
                 }
             }
             Row(

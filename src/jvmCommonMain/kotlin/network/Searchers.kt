@@ -161,13 +161,26 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: I
     // for each result to get the default (first) variant price and the first available variant's
     // cart ID. Availability for the result row comes from the suggest API (product-level).
     // .js endpoint is used (not .json) because .json omits per-variant available fields.
+    //
+    // Cart-mutation stock probes are capped to the SHOPIFY_PROBE_CANDIDATE_LIMIT cheapest
+    // candidates (by suggest-API price) -- a generic/reprint-heavy name like a token ("Rabbit
+    // Token", printed across many sets) can return up to 10 relevant candidates from one store,
+    // and probing every one means 10 sequential cart-mutation requests to the same host just for
+    // one card, which is enough sustained volume to trip a request-count-based rate limit even
+    // with polite per-request pacing (confirmed live, Aug 2026 -- "30x Rabbit Token" got
+    // rate-limited on Android/wifi). cheapestPlan() consumes cheapest-first anyway, so the
+    // un-probed pricier candidates falling back to stockQty=null ("unknown/unlimited") only
+    // matters if the cheap ones run short -- the same safe fallback every other unprobed listing
+    // already uses.
+    val probeCandidates = candidates.sortedBy { it.suggestPrice ?: Double.MAX_VALUE }
+        .take(SHOPIFY_PROBE_CANDIDATE_LIMIT).toSet()
     val sem = Semaphore(3)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
                 val handle = c.relUrl.removePrefix("/products/").substringBefore("?").trim('/')
                 val variant = if (handle.isNotBlank())
-                    shopifyFirstVariant(client, base, handle, probeStock = qty > 1)
+                    shopifyFirstVariant(client, base, handle, probeStock = qty > 1 && c in probeCandidates)
                 else null
 
                 val price = variant?.price ?: c.suggestPrice
@@ -255,6 +268,10 @@ private suspend fun shopifyFirstVariant(
 // anonymous, abandoned cart per check; this app's Ktor client doesn't persist cookies, so there's
 // no cross-request cart-state accumulation to worry about.
 private const val SHOPIFY_PROBE_QTY = 20
+
+// Cap on how many candidates (per card, per store) get a cart-mutation stock probe -- see the
+// comment at its use site in searchShopify for why this exists.
+private const val SHOPIFY_PROBE_CANDIDATE_LIMIT = 3
 private val SHOPIFY_CAPPED_QTY_RE = Regex("""(?i)only\s+(\d+)\s+items?\s+(?:was|were)\s+added""")
 private val SHOPIFY_SOLD_OUT_RE = Regex("""(?i)sold out""")
 

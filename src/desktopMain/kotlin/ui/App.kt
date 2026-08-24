@@ -435,12 +435,14 @@ private fun LeftPanel(vm: SearchViewModel) {
                 modifier = Modifier.weight(1f),
             )
             if (vm.query.isNotBlank() || vm.results.isNotEmpty()) {
-                Text(
-                    "Clear all",
-                    fontSize = 11.sp,
-                    color = OnSurfaceVariant.copy(alpha = 0.6f),
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.clickable { vm.clearAll() },
-                )
+                ) {
+                    Icon(Icons.Default.Close, null, tint = OnSurfaceVariant.copy(alpha = 0.6f), modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text("Clear all", fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.6f))
+                }
             }
         }
 
