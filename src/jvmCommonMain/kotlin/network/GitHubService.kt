@@ -20,6 +20,8 @@ const val CRASH_REPORT_URL =
     "https://github.com/$REPO/issues/new?labels=bug%2Ccrash-report&title=%5BCrash+Report%5D"
 const val BUG_REPORT_URL =
     "https://github.com/$REPO/issues/new?labels=bug"
+const val API_ERROR_REPORT_URL =
+    "https://github.com/$REPO/issues/new?labels=bug%2Capi-error&title=%5BAPI+errors%5D"
 
 data class UpdateInfo(
     val tag: String,

@@ -1,0 +1,15 @@
+-- Migration from schema version 4 to 5: adds the api_error_logs table (persisted API
+-- error/Cloudflare-backoff log, surfaced via the Diagnostics dialog). Editing the CREATE TABLE
+-- alone in ZArchiveDatabase.sq only affects brand-new databases; an already-installed device's
+-- existing zarchive.db needs this explicit path, applied automatically by AndroidSqliteDriver
+-- based on the bumped schema version -- without it, upgrading devices crash with "no such table:
+-- api_error_logs" the first time an error is recorded or the Diagnostics dialog is opened.
+
+CREATE TABLE api_error_logs (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,
+    store TEXT NOT NULL,
+    url TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL
+);

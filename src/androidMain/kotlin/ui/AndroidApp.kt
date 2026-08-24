@@ -297,7 +297,7 @@ fun AndroidApp(
                         // icon itself communicates progress/outcome (spinning/check/cross) instead
                         // of a bottom toast.
                         SyncIconButton(vm)
-                        SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
+                        SettingsMenu(vm, onOpenUrl = platformActions::openUrl, onCopyToClipboard = platformActions::copyToClipboard)
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = HeaderBg),
                 )

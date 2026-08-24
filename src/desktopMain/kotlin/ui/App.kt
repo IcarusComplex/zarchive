@@ -1484,6 +1484,7 @@ private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 private fun SettingsMenu(vm: SearchViewModel) {
     var expanded by remember { mutableStateOf(false) }
     var showCollectionDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
     Box {
         GhostIconButton(Icons.Default.Settings, "Settings", tint = OnSurfaceVariant, iconSize = 16.dp) {
             expanded = !expanded
@@ -1564,6 +1565,17 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             },
                         )
                         HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
+                        SettingsActionItem(
+                            label = "Diagnostics",
+                            sublabel = "View API errors & Cloudflare backoffs",
+                            icon = Icons.Default.ErrorOutline,
+                            onClick = {
+                                vm.loadDiagnostics()
+                                showDiagnosticsDialog = true
+                                expanded = false
+                            },
+                        )
+                        HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f), modifier = Modifier.padding(vertical = 4.dp))
                         SettingsLinkItem(
                             label = "Support ZArchive",
                             sublabel = "Support on Ko-fi",
@@ -1575,6 +1587,9 @@ private fun SettingsMenu(vm: SearchViewModel) {
         }
         if (showCollectionDialog) {
             CollectionImportDialog(vm) { showCollectionDialog = false }
+        }
+        if (showDiagnosticsDialog) {
+            DiagnosticsDialog(vm) { showDiagnosticsDialog = false }
         }
     }
 }
@@ -2272,6 +2287,87 @@ private fun CrashReportDialog(crashLog: String, onDismiss: () -> Unit) {
                                 }
                             }
                             runCatching { Desktop.getDesktop().browse(URI(network.CRASH_REPORT_URL)) }
+                            onDismiss()
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Open GitHub", fontSize = 12.sp) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiagnosticsDialog(vm: SearchViewModel, onDismiss: () -> Unit) {
+    var copied by remember { mutableStateOf(false) }
+    val platformActions = remember { PlatformActions() }
+    val osName = remember { System.getProperty("os.name") ?: "Unknown OS" }
+    val reportText = remember(vm.diagnosticsEntries) {
+        data.formatErrorLogForReport(vm.diagnosticsEntries, data.BuildInfo.VERSION, osName)
+    }
+
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(460.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Diagnostics", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+                Text(
+                    "Recent API errors and Cloudflare backoffs recorded on this device. " +
+                        "Copy the log, then open the GitHub issue page to report it.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text(
+                    "${vm.diagnosticsEntries.size} entries",
+                    fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+                )
+                Box(
+                    Modifier.fillMaxWidth().height(160.dp)
+                        .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
+                        .border(1.dp, OutlineVariant, RoundedCornerShape(4.dp))
+                        .padding(8.dp)
+                ) {
+                    val scroll = rememberScrollState()
+                    Text(
+                        reportText,
+                        fontSize = 10.sp, fontFamily = Mono, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier.verticalScroll(scroll),
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Dismiss", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = { vm.clearDiagnostics(); copied = false },
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Clear", fontSize = 12.sp) }
+                    OutlinedButton(
+                        onClick = {
+                            platformActions.copyToClipboard(reportText)
+                            copied = true
+                        },
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, if (copied) Tertiary else OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = if (copied) Tertiary else OnSurface),
+                        modifier = Modifier.weight(1f),
+                    ) { Text(if (copied) "Copied!" else "Copy log", fontSize = 12.sp) }
+                    Button(
+                        onClick = {
+                            if (!copied) { platformActions.copyToClipboard(reportText); copied = true }
+                            runCatching { Desktop.getDesktop().browse(URI(network.API_ERROR_REPORT_URL)) }
                             onDismiss()
                         },
                         shape = RoundedCornerShape(4.dp),

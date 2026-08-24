@@ -156,7 +156,8 @@ internal val NOISE_RE = Regex(
     """(?i)\b(foil|etched|borderless|extended[ -]?art|showcase|retro|promo|prerelease|""" +
     """pre-release|near[ -]?mint|lightly[ -]?played|moderately[ -]?played|heavily[ -]?played|""" +
     """nm|lp|mp|hp|sp|dmg|damaged|played|mint|english|japanese|alt(?:ernate)?[ -]?art|""" +
-    """full[ -]?art|galaxy[ -]?foil|surge[ -]?foil|textured|serial(?:ized)?|game[ -]?day|buy-?a-?box)\b"""
+    """full[ -]?art|galaxy[ -]?foil|surge[ -]?foil|textured|serial(?:ized)?|game[ -]?day|buy-?a-?box|""" +
+    """double[ -]?sided(?:[ -]?token)?|dfc)\b"""
 )
 
 /**
@@ -165,7 +166,7 @@ internal val NOISE_RE = Regex(
  * and trailing "- Set Name" suffixes. Not perfect — the image service falls back to a
  * fuzzy Scryfall lookup when the cleaned name doesn't match exactly.
  */
-fun normalizeCardName(title: String): String {
+private fun normalizeCardNameSingle(title: String): String {
     var s = title
     s = s.replace(Regex("""\[[^\]]*\]"""), " ")   // [Set Name]
     s = s.replace(Regex("""\([^)]*\)"""), " ")    // (PFRF), (Foil), etc.
@@ -178,3 +179,13 @@ fun normalizeCardName(title: String): String {
     s = s.replace(Regex("""\s+"""), " ").trim()
     return s.trim(' ', '-', '–', '—', ',', '.', ':', '*')
 }
+
+/**
+ * Like [normalizeCardNameSingle], but preserves a double-faced/double-sided-token " // "
+ * separator instead of destroying it — each face is cleaned independently and rejoined, so
+ * e.g. "Rabbit // Splash Lasher Double-Sided Token [Bloomburrow Tokens]" becomes
+ * "Rabbit // Splash Lasher" rather than mangling both face names into one unresolvable string.
+ */
+fun normalizeCardName(title: String): String =
+    if (" // " in title) title.split(" // ").joinToString(" // ") { normalizeCardNameSingle(it) }
+    else normalizeCardNameSingle(title)

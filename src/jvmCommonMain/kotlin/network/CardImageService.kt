@@ -145,7 +145,12 @@ class CardImageService : AutoCloseable {
             setCode == null -> extractSetNameHint(title)
             else -> null
         }
-        return TitleMeta(normalizeCardName(title), setCode, setName, treatment)
+        // Double-faced spell cards ("Fire // Ice") resolve as one Scryfall object via card_faces
+        // (see imageUrlOf below). Double-sided *tokens* (e.g. "Rabbit // Splash Lasher") don't —
+        // Scryfall catalogues each face as its own independent single-faced card — so only the
+        // first face is usable as a lookup name; it's also the face whose art we want to show.
+        val name = normalizeCardName(title).substringBefore(" // ")
+        return TitleMeta(name, setCode, setName, treatment)
     }
 
     private fun fileFor(meta: TitleMeta): File {

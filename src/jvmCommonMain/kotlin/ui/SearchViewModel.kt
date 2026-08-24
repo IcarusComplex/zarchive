@@ -450,6 +450,25 @@ class SearchViewModel(
 
     fun dismissWhatsNew() { showWhatsNew = false }
 
+    // ── Diagnostics (API error/backoff log) ──────────────────────────────────
+
+    var diagnosticsEntries by mutableStateOf<List<data.ApiErrorEntry>>(emptyList())
+        private set
+
+    fun loadDiagnostics() {
+        scope.launch(Dispatchers.IO) {
+            val entries = data.loadRecentApiErrors(200)
+            withContext(Dispatchers.Main) { diagnosticsEntries = entries }
+        }
+    }
+
+    fun clearDiagnostics() {
+        scope.launch(Dispatchers.IO) {
+            data.clearApiErrors()
+            withContext(Dispatchers.Main) { diagnosticsEntries = emptyList() }
+        }
+    }
+
     @OptIn(kotlinx.coroutines.FlowPreview::class)
     private fun sessionSnapshotFlow() =
         snapshotFlow { SessionSnapshot(query, searchedCards.toList(), results.toList(), cardQuantities.toMap()) }.debounce(2_000)

@@ -73,6 +73,19 @@ object CfThrottleRules : Table("cf_throttle_rules") {
 // engine.SearchEngine, which moved to jvmCommonMain in Phase 3) — same `data` package, no import
 // needed here.
 
+// Persisted API error/backoff log — see data/ErrorLog.kt (commonMain expect/actual). Capped to the
+// most recent ~500 rows (see AppDatabase.recordApiError) so a repeated backoff loop can't grow the
+// table unbounded.
+object ApiErrorLogs : Table("api_error_logs") {
+    val id        = integer("id").autoIncrement()
+    val timestamp = long("timestamp")
+    val store     = text("store")
+    val url       = text("url")
+    val kind      = text("kind")
+    val message   = text("message")
+    override val primaryKey = PrimaryKey(id)
+}
+
 // A full replace on every collection import (see data/CollectionRepo.kt) — no sync_id/deleted,
 // this never round-trips through Google Drive's list/result merge.
 object CollectionRows : Table("collection_rows") {
@@ -98,6 +111,7 @@ object AppDatabase {
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
                 Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots, CollectionRows,
+                ApiErrorLogs,
             )
         }
         migrateCfThresholdV2()
@@ -176,6 +190,47 @@ object AppDatabase {
                 it[CfThrottleRules.lastHitCards] = cardCount
             }
         }
+    }
+
+    // ── API error/backoff log ────────────────────────────────────────────────
+
+    private const val API_ERROR_LOG_CAP = 500
+
+    fun recordApiError(store: String, url: String, kind: String, message: String): Unit = transaction {
+        ApiErrorLogs.insert {
+            it[ApiErrorLogs.timestamp] = System.currentTimeMillis()
+            it[ApiErrorLogs.store]     = store
+            it[ApiErrorLogs.url]       = url
+            it[ApiErrorLogs.kind]      = kind
+            it[ApiErrorLogs.message]   = message
+        }
+        val count = ApiErrorLogs.selectAll().count()
+        if (count > API_ERROR_LOG_CAP) {
+            val staleIds = ApiErrorLogs.selectAll()
+                .orderBy(ApiErrorLogs.timestamp, SortOrder.ASC)
+                .limit((count - API_ERROR_LOG_CAP).toInt())
+                .map { it[ApiErrorLogs.id] }
+            ApiErrorLogs.deleteWhere { Op.build { ApiErrorLogs.id inList staleIds } }
+        }
+    }
+
+    fun loadRecentApiErrors(limit: Int): List<ApiErrorEntry> = transaction {
+        ApiErrorLogs.selectAll()
+            .orderBy(ApiErrorLogs.timestamp, SortOrder.DESC)
+            .limit(limit)
+            .map { row ->
+                ApiErrorEntry(
+                    timestamp = row[ApiErrorLogs.timestamp],
+                    store     = row[ApiErrorLogs.store],
+                    url       = row[ApiErrorLogs.url],
+                    kind      = row[ApiErrorLogs.kind],
+                    message   = row[ApiErrorLogs.message],
+                )
+            }
+    }
+
+    fun clearApiErrors(): Unit = transaction {
+        ApiErrorLogs.deleteAll()
     }
 
     // ── CF threshold migration (v2) ────────────────────────────────────────────

@@ -158,6 +158,11 @@ private val platformCache = mutableMapOf<String, Platform>()
 private val cfBlockedMutex = Mutex()
 private val cfBlockedStores = mutableSetOf<String>()
 
+// Dedupes generic (non-CF) error-log writes within a single search: a store timing out fails the
+// same way for every card, and without this every one of those would write its own DB row.
+private val errorLogMutex = Mutex()
+private val loggedApiErrors = mutableSetOf<Pair<String, String>>()
+
 // Retry delays for transient non-429 errors: 1 s then 5 s then propagate.
 private val RETRY_DELAYS_MS = listOf(1_000L, 5_000L)
 
@@ -373,7 +378,12 @@ suspend fun checkStore(
                     val rows = try {
                         val hits = withRetry(
                             baseUrl,
-                            onCfBlocked = { url -> onCfBlocked?.invoke(url, cards.size) },
+                            onCfBlocked = { url ->
+                                runCatching {
+                                    recordApiError(storeName, url, "BACKOFF", "Cloudflare rate-limit (429) -- store skipped for the rest of this search")
+                                }
+                                onCfBlocked?.invoke(url, cards.size)
+                            },
                         ) { searcher(client, baseUrl, card, qty) }
                         if (hits.isEmpty()) listOf(SearchResult(
                             store = storeName, card = card, title = null,
@@ -381,6 +391,17 @@ suspend fun checkStore(
                         ))
                         else hits.map { it.copy(store = storeName) }
                     } catch (e: Exception) {
+                        // The Cloudflare-block case is already logged once above, via onCfBlocked --
+                        // don't double-log it here for every card that fast-fails against a store
+                        // already known to be blocked this search.
+                        if (e !is CloudflareBlockedException) {
+                            val msg = e.message?.take(120) ?: e::class.simpleName ?: "unknown error"
+                            val isNew = errorLogMutex.withLock { loggedApiErrors.add(storeName to msg) }
+                            if (isNew) {
+                                val kind = if (errorNote(e) == "[timeout]") "TIMEOUT" else "ERROR"
+                                runCatching { recordApiError(storeName, baseUrl, kind, msg) }
+                            }
+                        }
                         listOf(SearchResult(
                             store = storeName, card = card, title = null,
                             priceZar = null, available = null, url = baseUrl,
@@ -417,6 +438,7 @@ suspend fun runSearch(
     cardQuantities: Map<String, Int> = emptyMap(),
 ) {
     cfBlockedMutex.withLock { cfBlockedStores.clear() }
+    errorLogMutex.withLock { loggedApiErrors.clear() }
 
     // Determine the base tier from total card-store pairs: < 300 = tier 1, >= 300 = tier 2.
     // This base applies to every store; per-store DB history can only raise it, never lower it.

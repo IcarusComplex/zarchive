@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.BuildInfo
+import network.API_ERROR_REPORT_URL
 import network.CRASH_REPORT_URL
 import network.UpdateInfo
 import ui.theme.ErrorColor
@@ -238,6 +239,70 @@ fun CrashReportDialog(crashLog: String, onCopyToClipboard: (String) -> Unit, onO
                         onCopyToClipboard(crashLog)
                         copied = true
                         onOpenUrl(CRASH_REPORT_URL)
+                        onDismiss()
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(4.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                ) { Text(if (copied) "Copied!" else "Copy & report", fontSize = 12.sp) }
+            }
+        }
+    }
+}
+
+@Composable
+fun DiagnosticsDialog(
+    vm: SearchViewModel,
+    onCopyToClipboard: (String) -> Unit,
+    onOpenUrl: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var copied by remember { mutableStateOf(false) }
+    val reportText = remember(vm.diagnosticsEntries) {
+        data.formatErrorLogForReport(vm.diagnosticsEntries, BuildInfo.VERSION, "Android")
+    }
+    ModalScrim(onDismiss = onDismiss) {
+        DialogSurface {
+            Text("Diagnostics", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface)
+            Text(
+                "Recent API errors and Cloudflare backoffs recorded on this device. " +
+                    "Copy the log, then open the GitHub issue page to report it.",
+                fontSize = 13.sp, color = OnSurface,
+            )
+            Text(
+                "${vm.diagnosticsEntries.size} entries",
+                fontSize = 10.sp, color = OnSurfaceVariant.copy(alpha = 0.5f),
+            )
+            Box(
+                Modifier.fillMaxWidth().heightIn(max = 160.dp)
+                    .background(SurfaceContainerLowest, RoundedCornerShape(4.dp))
+                    .padding(8.dp),
+            ) {
+                Text(
+                    reportText, fontSize = 10.sp, fontFamily = Mono, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                ) { Text("Dismiss", fontSize = 12.sp) }
+                OutlinedButton(
+                    onClick = { vm.clearDiagnostics(); copied = false },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, OutlineVariant),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                ) { Text("Clear", fontSize = 12.sp) }
+                Button(
+                    onClick = {
+                        onCopyToClipboard(reportText)
+                        copied = true
+                        onOpenUrl(API_ERROR_REPORT_URL)
                         onDismiss()
                     },
                     modifier = Modifier.weight(1f),

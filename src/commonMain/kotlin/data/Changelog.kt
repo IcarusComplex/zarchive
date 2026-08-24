@@ -6,11 +6,11 @@ package data
  * at build time -- not fetched over the network, so every entry must ship in the same release it
  * describes.
  *
- * Add an entry here as part of preparing each release: by default, ask the user for the "what's
- * new" text before tagging a release; only generate it yourself (from `git log`/`git diff` since
- * the last tag, written up as a short human-readable bullet list) if they explicitly say to.
- * Versions with no entry here are silently skipped -- the popup only ever shows for versions that
- * actually have something written.
+ * Add an entry here as part of preparing each release: always generate the text yourself (from
+ * `git log`/`git diff` since the last tag, written up as a short human-readable bullet list) --
+ * never prompt the user to write it or ask for confirmation first. Versions with no entry here
+ * are silently skipped -- the popup only ever shows for versions that actually have something
+ * written.
  */
 val CHANGELOG: Map<String, List<String>> = mapOf(
     "1.1.14" to listOf(
@@ -35,6 +35,11 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
     ),
     "1.1.19" to listOf(
         "Fixed a bug where a store's stock check could silently fail and cause the order planner to assume unlimited stock, recommending far more copies from a listing than were actually available.",
+    ),
+    "1.1.20" to listOf(
+        "Fixed a bug where an unconfirmed stock count was still treated as unlimited when planning orders, letting a single listing get assigned far more copies than the store actually had.",
+        "Fixed card art for double-sided tokens (e.g. Bloomburrow's two-sided tokens) not loading -- the two names are now recognised correctly and the first face's art is shown.",
+        "Added a Diagnostics screen (Settings menu) that logs API errors and Cloudflare rate-limit backoffs, with buttons to copy the log or report it on GitHub.",
     ),
 )
 

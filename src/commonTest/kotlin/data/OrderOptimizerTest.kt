@@ -174,7 +174,7 @@ class OrderOptimizerTest {
     @Test fun `cheapest splits quantity across listings when one is insufficient`() {
         val results = listOf(
             result("Bolt", "StoreA", 5.0, stockQty = 2),
-            result("Bolt", "StoreB", 8.0, stockQty = null),
+            result("Bolt", "StoreB", 8.0, stockQty = 2),
         )
         val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 4))
         assertTrue(plan.uncoveredCards.isEmpty())
@@ -183,6 +183,17 @@ class OrderOptimizerTest {
         assertEquals(4, lines.sumOf { it.qty })
         assertEquals(2, lines.first { it.listing.store == "StoreA" }.qty)
         assertEquals(2, lines.first { it.listing.store == "StoreB" }.qty)
+    }
+
+    @Test fun `cheapest treats unconfirmed stock as 1, not unlimited`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, stockQty = null),
+        )
+        val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 26))
+        assertEquals(listOf(OrderShortfall("Bolt", needed = 26, found = 1)), plan.uncoveredCards)
+        val lines = plan.storeOrders.flatMap { it.lines }
+        assertEquals(1, lines.size)
+        assertEquals(1, lines[0].qty)
     }
 
     @Test fun `cheapest reports shortfall when total stock is insufficient`() {
@@ -244,7 +255,7 @@ class OrderOptimizerTest {
     @Test fun `pinned listing with top-up sources the remainder elsewhere`() {
         val results = listOf(
             result("Bolt", "StoreA", 5.0, stockQty = 2, url = "https://example.com/pin"),
-            result("Bolt", "StoreB", 8.0, stockQty = null),
+            result("Bolt", "StoreB", 8.0, stockQty = 2),
         )
         val plan = cheapestPlan(
             listOf("Bolt"), results,

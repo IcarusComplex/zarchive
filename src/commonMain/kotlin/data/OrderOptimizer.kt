@@ -33,10 +33,6 @@ data class OrderPlan(
     val grandTotal: Double get() = storeOrders.sumOf { it.total }
 }
 
-// A store's contribution is treated as this large when a listing's stockQty is unknown (null),
-// so summing/min-ing against real remaining-need values always "takes everything needed."
-private const val UNLIMITED_SENTINEL = 1_000_000
-
 // Cheapest first; null prices (Unknown) sort last.
 private val byPrice = compareBy<SearchResult>({ it.priceZar == null }, { it.priceZar ?: Double.MAX_VALUE })
 
@@ -98,13 +94,15 @@ private fun candidatePool(
 
 // Consumes [pool] cheapest-first (pool is already ordered) until [needed] units are taken or the
 // pool is exhausted. A listing with a known stockQty caps how much can be taken from it; an
-// unknown (null) stockQty is treated as "enough to cover whatever's left."
+// unknown (null) stockQty is conservatively assumed to be 1 — we have no confirmation the store
+// actually has more, and wrongly assuming "unlimited" here is what causes the plan (and then the
+// real store cart, via the "Open cart" button) to over-order from an under-stocked listing.
 private fun consume(card: String, needed: Int, pool: List<SearchResult>): Pair<List<OrderLine>, Int> {
     val lines = mutableListOf<OrderLine>()
     var remaining = needed
     for (listing in pool) {
         if (remaining <= 0) break
-        val take = listing.stockQty?.let { minOf(remaining, it) } ?: remaining
+        val take = minOf(remaining, listing.stockQty ?: 1)
         if (take <= 0) continue
         lines += OrderLine(card, listing, take)
         remaining -= take
@@ -188,9 +186,9 @@ fun fewestStoresPlan(
     val storeCoverage: Map<String, Map<String, Int>> = buildMap<String, MutableMap<String, Int>> {
         for (card in coverable) {
             for (listing in pools.getValue(card)) {
-                val units = listing.stockQty ?: UNLIMITED_SENTINEL
+                val units = listing.stockQty ?: 1
                 val perCard = getOrPut(listing.store) { mutableMapOf() }
-                perCard[card] = minOf((perCard[card] ?: 0) + units, UNLIMITED_SENTINEL)
+                perCard[card] = (perCard[card] ?: 0) + units
             }
         }
     }

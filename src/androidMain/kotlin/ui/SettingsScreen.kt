@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.CloudSync
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.Refresh
@@ -51,6 +52,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import data.BuildInfo
+import network.API_ERROR_REPORT_URL
 import network.BUG_REPORT_URL
 import ui.theme.ErrorColor
 import ui.theme.HeaderBg
@@ -69,9 +71,10 @@ private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 // Android equivalent. Links open via PlatformActions (Intent.ACTION_VIEW) instead of
 // Desktop.getDesktop().browse.
 @Composable
-fun SettingsMenu(vm: SearchViewModel, onOpenUrl: (String) -> Unit) {
+fun SettingsMenu(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onCopyToClipboard: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     var showCollectionDialog by remember { mutableStateOf(false) }
+    var showDiagnosticsDialog by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
             Icon(Icons.Default.Settings, "Settings", tint = OnSurfaceVariant)
@@ -154,12 +157,25 @@ fun SettingsMenu(vm: SearchViewModel, onOpenUrl: (String) -> Unit) {
             )
             HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
             DropdownMenuItem(
+                text = { SettingsItemContent(label = "Diagnostics", sublabel = "View API errors & Cloudflare backoffs", icon = Icons.Default.ErrorOutline) },
+                onClick = { vm.loadDiagnostics(); showDiagnosticsDialog = true; expanded = false },
+            )
+            HorizontalDivider(color = OutlineVariant.copy(alpha = 0.4f))
+            DropdownMenuItem(
                 text = { SettingsItemContent(label = "Support ZArchive", sublabel = "Support on Ko-fi", icon = Icons.Default.Favorite) },
                 onClick = { onOpenUrl(SUPPORT_URL); expanded = false },
             )
         }
         if (showCollectionDialog) {
             CollectionImportDialog(vm, onDismiss = { showCollectionDialog = false })
+        }
+        if (showDiagnosticsDialog) {
+            DiagnosticsDialog(
+                vm = vm,
+                onCopyToClipboard = onCopyToClipboard,
+                onOpenUrl = onOpenUrl,
+                onDismiss = { showDiagnosticsDialog = false },
+            )
         }
     }
 }

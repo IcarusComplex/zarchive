@@ -59,4 +59,16 @@ class NormalizeCardNameTest {
         assertEquals("Lightning Bolt", normalizeCardName("Lightning Bolt [M10] NM"))
     @Test fun `paren and dash combined`() =
         assertEquals("Shadowspear", normalizeCardName("Shadowspear (THB) - Theros"))
+
+    // ── Double-faced / double-sided token names ─────────────────────────────
+
+    @Test fun `preserves double-faced separator while cleaning both faces`() =
+        assertEquals(
+            "Rabbit // Splash Lasher",
+            normalizeCardName("Rabbit // Splash Lasher Double-Sided Token [Bloomburrow Tokens]"),
+        )
+    @Test fun `strips double-sided token wording with no separator`() =
+        assertEquals("Elephant", normalizeCardName("Elephant Double-Sided Token [Set]"))
+    @Test fun `double-faced spell card separator preserved`() =
+        assertEquals("Fire // Ice", normalizeCardName("Fire // Ice [Dominaria Remastered]"))
 }

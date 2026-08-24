@@ -155,6 +155,36 @@ updateThrottleRule:
 UPDATE cf_throttle_rules SET tier = ?, tier_large = ?, last_hit_at = ?, last_hit_cards = ?
 WHERE base_url = ?;
 
+-- Persisted API error/backoff log -- see data/ErrorLog.kt (commonMain expect/actual). Capped to
+-- the most recent ~500 rows on insert (see ErrorLogStore.android.kt) so a repeated backoff loop
+-- can't grow the table unbounded.
+CREATE TABLE api_error_logs (
+    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    timestamp INTEGER NOT NULL,
+    store TEXT NOT NULL,
+    url TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    message TEXT NOT NULL
+);
+
+selectRecentErrors:
+SELECT * FROM api_error_logs ORDER BY timestamp DESC LIMIT ?;
+
+countErrors:
+SELECT COUNT(*) FROM api_error_logs;
+
+selectStaleErrorIds:
+SELECT id FROM api_error_logs ORDER BY timestamp ASC LIMIT ?;
+
+deleteErrorById:
+DELETE FROM api_error_logs WHERE id = ?;
+
+insertError:
+INSERT INTO api_error_logs(timestamp, store, url, kind, message) VALUES (?, ?, ?, ?, ?);
+
+clearErrors:
+DELETE FROM api_error_logs;
+
 -- A full replace on every collection import (see data/CollectionRepo.kt in commonMain) -- no
 -- sync_id/deleted, this never round-trips through Google Drive's list/result merge.
 CREATE TABLE collection_rows (
