@@ -41,6 +41,11 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Fixed card art for double-sided tokens (e.g. Bloomburrow's two-sided tokens) not loading -- the two names are now recognised correctly and the first face's art is shown.",
         "Added a Diagnostics screen (Settings menu) that logs API errors and Cloudflare rate-limit backoffs, with buttons to copy the log or report it on GitHub.",
     ),
+    "1.1.21" to listOf(
+        "Fixed the Diagnostics screen rendering as a tiny, unreadable strip on Android instead of a proper full-screen dialog.",
+        "Diagnostics entries now include the full response detail (headers and body) for API errors and Cloudflare backoffs, not just a generic message.",
+        "Reduced rate-limiting on large multi-quantity searches on Shopify/WooCommerce stores by combining a store's regular browsing traffic and its stock-count checks into one shared, paced queue instead of two independent ones that could add up to more requests than the store allows.",
+    ),
 )
 
 /**

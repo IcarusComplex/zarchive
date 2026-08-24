@@ -6,13 +6,14 @@ private val queries get() = AndroidDatabase.instance.zArchiveDatabaseQueries
 
 private const val API_ERROR_LOG_CAP = 500L
 
-actual fun recordApiError(store: String, url: String, kind: String, message: String) {
+actual fun recordApiError(store: String, url: String, kind: String, message: String, detail: String?) {
     queries.insertError(
         timestamp = System.currentTimeMillis(),
         store = store,
         url = url,
         kind = kind,
         message = message,
+        detail = detail,
     )
     val count = queries.countErrors().executeAsOne()
     if (count > API_ERROR_LOG_CAP) {
@@ -30,6 +31,7 @@ actual fun loadRecentApiErrors(limit: Int): List<ApiErrorEntry> =
             url = row.url,
             kind = row.kind,
             message = row.message,
+            detail = row.detail,
         )
     }
 

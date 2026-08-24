@@ -1,0 +1,11 @@
+-- Migration from schema version 5 to 6: adds detail to api_error_logs (full response detail --
+-- status/headers/truncated body -- captured for 429s and other HTTP errors, e.g. a Cloudflare
+-- block's cf-ray/retry-after headers and challenge body, so the persisted Diagnostics log has real
+-- evidence to inspect instead of just a generic message). Editing the CREATE TABLE alone in
+-- ZArchiveDatabase.sq only affects brand-new databases; an already-installed device's existing
+-- zarchive.db (created by 4.sqm, v1.1.20) needs this ALTER TABLE path, applied automatically by
+-- AndroidSqliteDriver based on the bumped schema version -- without it, upgrading devices crash
+-- with "no such column: detail" the first time an error is recorded or the Diagnostics dialog is
+-- opened.
+
+ALTER TABLE api_error_logs ADD COLUMN detail TEXT;

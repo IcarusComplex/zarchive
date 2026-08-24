@@ -297,7 +297,7 @@ fun AndroidApp(
                         // icon itself communicates progress/outcome (spinning/check/cross) instead
                         // of a bottom toast.
                         SyncIconButton(vm)
-                        SettingsMenu(vm, onOpenUrl = platformActions::openUrl, onCopyToClipboard = platformActions::copyToClipboard)
+                        SettingsMenu(vm, onOpenUrl = platformActions::openUrl)
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = HeaderBg),
                 )
@@ -492,6 +492,14 @@ fun AndroidApp(
         }
         if (vm.showWhatsNew) {
             WhatsNewDialog(entries = vm.whatsNewEntries, onDismiss = { vm.dismissWhatsNew() })
+        }
+        if (vm.showDiagnostics) {
+            DiagnosticsDialog(
+                vm = vm,
+                onCopyToClipboard = platformActions::copyToClipboard,
+                onOpenUrl = platformActions::openUrl,
+                onDismiss = { vm.dismissDiagnostics() },
+            )
         }
         if (vm.downloadProgress != null) {
             DownloadProgressDialog(

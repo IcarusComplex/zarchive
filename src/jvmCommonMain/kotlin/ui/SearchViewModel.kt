@@ -454,13 +454,21 @@ class SearchViewModel(
 
     var diagnosticsEntries by mutableStateOf<List<data.ApiErrorEntry>>(emptyList())
         private set
+    var showDiagnostics by mutableStateOf(false)
 
+    // Rendered at the app root (not nested inside the settings menu that opens it) -- ModalScrim
+    // is a plain fillMaxSize() Box, not a real OS-level popup/window, so nesting it inside the
+    // small settings-menu container only filled *that* container: the dialog rendered as an
+    // unreadable clipped title strip over the still-live screen behind it instead of a real modal.
     fun loadDiagnostics() {
+        showDiagnostics = true
         scope.launch(Dispatchers.IO) {
             val entries = data.loadRecentApiErrors(200)
             withContext(Dispatchers.Main) { diagnosticsEntries = entries }
         }
     }
+
+    fun dismissDiagnostics() { showDiagnostics = false }
 
     fun clearDiagnostics() {
         scope.launch(Dispatchers.IO) {

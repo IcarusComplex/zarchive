@@ -83,6 +83,10 @@ object ApiErrorLogs : Table("api_error_logs") {
     val url       = text("url")
     val kind      = text("kind")
     val message   = text("message")
+    // Full response detail (status/headers/truncated body) when available -- e.g. a Cloudflare
+    // block's cf-ray/retry-after headers and challenge body. Nullable: added after the table's
+    // first release; createMissingTablesAndColumns adds it as a nullable column to existing DBs.
+    val detail    = text("detail").nullable()
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -196,13 +200,14 @@ object AppDatabase {
 
     private const val API_ERROR_LOG_CAP = 500
 
-    fun recordApiError(store: String, url: String, kind: String, message: String): Unit = transaction {
+    fun recordApiError(store: String, url: String, kind: String, message: String, detail: String? = null): Unit = transaction {
         ApiErrorLogs.insert {
             it[ApiErrorLogs.timestamp] = System.currentTimeMillis()
             it[ApiErrorLogs.store]     = store
             it[ApiErrorLogs.url]       = url
             it[ApiErrorLogs.kind]      = kind
             it[ApiErrorLogs.message]   = message
+            it[ApiErrorLogs.detail]    = detail
         }
         val count = ApiErrorLogs.selectAll().count()
         if (count > API_ERROR_LOG_CAP) {
@@ -225,6 +230,7 @@ object AppDatabase {
                     url       = row[ApiErrorLogs.url],
                     kind      = row[ApiErrorLogs.kind],
                     message   = row[ApiErrorLogs.message],
+                    detail    = row[ApiErrorLogs.detail],
                 )
             }
     }

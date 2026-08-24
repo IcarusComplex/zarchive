@@ -164,7 +164,8 @@ CREATE TABLE api_error_logs (
     store TEXT NOT NULL,
     url TEXT NOT NULL,
     kind TEXT NOT NULL,
-    message TEXT NOT NULL
+    message TEXT NOT NULL,
+    detail TEXT
 );
 
 selectRecentErrors:
@@ -180,7 +181,7 @@ deleteErrorById:
 DELETE FROM api_error_logs WHERE id = ?;
 
 insertError:
-INSERT INTO api_error_logs(timestamp, store, url, kind, message) VALUES (?, ?, ?, ?, ?);
+INSERT INTO api_error_logs(timestamp, store, url, kind, message, detail) VALUES (?, ?, ?, ?, ?, ?);
 
 clearErrors:
 DELETE FROM api_error_logs;

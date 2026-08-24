@@ -242,6 +242,9 @@ fun WindowScope.App(
             if (vm.showWhatsNew) {
                 WhatsNewDialog(entries = vm.whatsNewEntries, onDismiss = { vm.dismissWhatsNew() })
             }
+            if (vm.showDiagnostics) {
+                DiagnosticsDialog(vm) { vm.dismissDiagnostics() }
+            }
             if (vm.showAddToSearchDialog) {
                 AddToSearchDialog(
                     newCount         = vm.pendingAddCount,
@@ -1484,7 +1487,6 @@ private const val SUPPORT_URL = "https://ko-fi.com/icaruscomplexza"
 private fun SettingsMenu(vm: SearchViewModel) {
     var expanded by remember { mutableStateOf(false) }
     var showCollectionDialog by remember { mutableStateOf(false) }
-    var showDiagnosticsDialog by remember { mutableStateOf(false) }
     Box {
         GhostIconButton(Icons.Default.Settings, "Settings", tint = OnSurfaceVariant, iconSize = 16.dp) {
             expanded = !expanded
@@ -1571,7 +1573,6 @@ private fun SettingsMenu(vm: SearchViewModel) {
                             icon = Icons.Default.ErrorOutline,
                             onClick = {
                                 vm.loadDiagnostics()
-                                showDiagnosticsDialog = true
                                 expanded = false
                             },
                         )
@@ -1587,9 +1588,6 @@ private fun SettingsMenu(vm: SearchViewModel) {
         }
         if (showCollectionDialog) {
             CollectionImportDialog(vm) { showCollectionDialog = false }
-        }
-        if (showDiagnosticsDialog) {
-            DiagnosticsDialog(vm) { showDiagnosticsDialog = false }
         }
     }
 }

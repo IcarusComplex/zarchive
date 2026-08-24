@@ -21,6 +21,11 @@ fun formatErrorLogForReport(entries: List<ApiErrorEntry>, appVersion: String, pl
             val ts = LocalDateTime.ofInstant(java.time.Instant.ofEpochMilli(e.timestamp), ZoneId.systemDefault())
                 .format(TS_FORMAT)
             appendLine("[$ts] ${e.store} -- ${e.kind} -- ${e.message} (${e.url})")
+            if (!e.detail.isNullOrBlank()) {
+                appendLine("  --- response detail ---")
+                e.detail.lineSequence().forEach { line -> appendLine("  $line") }
+            }
+            appendLine()
         }
     }
 }

@@ -25,15 +25,50 @@ private val DEBUG_DIR by lazy { PlatformPaths.debugDumpDir }
 // Matches WooCommerce's core low-stock-threshold wording, e.g. "Only 2 left in stock".
 private val WOOCOMMERCE_STOCK_QTY_RE = Regex("""(?i)only\s+(\d+)\s+left""")
 
-class CloudflareBlockedException : Exception("Cloudflare challenge — store skipped")
+// [url] is the specific request that got the 429 (e.g. "https://store.co.za/search/suggest.json"
+// or ".../cart/add.js") and [detail] is its full response (status/headers/body, truncated) --
+// surfaced through withRetry's onCfBlocked so the persisted error-log entry (Diagnostics dialog)
+// carries real evidence (cf-ray, retry-after, the actual challenge/error body), not just a generic
+// "Cloudflare challenge" message and which store.
+class CloudflareBlockedException(val url: String? = null, val detail: String? = null) :
+    Exception("Cloudflare challenge — store skipped")
+
+// Generic non-2xx, non-429 HTTP failure, carrying the same response detail as
+// CloudflareBlockedException so the persisted error log has real evidence for these too.
+class HttpStatusException(val status: Int, val url: String, val detail: String) : Exception("HTTP $status")
 
 private suspend fun checkStatus(response: HttpResponse) {
     when (response.status.value) {
         429 -> {
             if (IS_DEBUG) dumpResponse("429", response)
-            throw CloudflareBlockedException()
+            val detail = captureResponseDetail(response)
+            traceLog("checkStatus", "429 from ${response.call.request.url}")
+            throw CloudflareBlockedException(response.call.request.url.toString(), detail)
         }
-        !in 200..299 -> throw Exception("HTTP ${response.status.value}")
+        !in 200..299 -> {
+            val url = response.call.request.url.toString()
+            val detail = captureResponseDetail(response)
+            traceLog("checkStatus", "HTTP ${response.status.value} from $url")
+            throw HttpStatusException(response.status.value, url, detail)
+        }
+    }
+}
+
+// Status line + headers + body (truncated to [maxBodyChars]) -- the single source of response
+// detail used both for debug-only file dumps (dumpResponse, untruncated) and for the detail text
+// persisted into the production error log (truncated, so a large Cloudflare challenge page doesn't
+// bloat the DB row).
+private suspend fun captureResponseDetail(response: HttpResponse, maxBodyChars: Int = 4000): String {
+    val body = runCatching { response.bodyAsText() }.getOrDefault("[body unreadable]")
+    val shownBody = if (body.length > maxBodyChars)
+        body.take(maxBodyChars) + "\n... [truncated, ${body.length} chars total]"
+    else body
+    return buildString {
+        appendLine("HTTP ${response.status.value} ${response.status.description}")
+        response.headers.forEach { key, values -> values.forEach { v -> appendLine("$key: $v") } }
+        appendLine()
+        appendLine("--- Body ---")
+        appendLine(shownBody)
     }
 }
 
@@ -42,7 +77,6 @@ private suspend fun dumpResponse(label: String, response: HttpResponse) {
         val req = response.call.request
         val ts = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HHmmss_SSS"))
         val host = req.url.host.replace(Regex("[^a-zA-Z0-9]"), "_")
-        val body = runCatching { response.bodyAsText() }.getOrDefault("[body unreadable]")
 
         val text = buildString {
             appendLine("=== REQUEST ===")
@@ -51,12 +85,7 @@ private suspend fun dumpResponse(label: String, response: HttpResponse) {
             req.headers.forEach { key, values -> values.forEach { v -> appendLine("$key: $v") } }
             appendLine()
             appendLine("=== RESPONSE ===")
-            appendLine("HTTP ${response.status.value} ${response.status.description}")
-            appendLine()
-            response.headers.forEach { key, values -> values.forEach { v -> appendLine("$key: $v") } }
-            appendLine()
-            appendLine("--- Body ---")
-            appendLine(body)
+            append(captureResponseDetail(response, maxBodyChars = Int.MAX_VALUE))
         }
 
         val file = DEBUG_DIR.resolve("${label}_${host}_$ts.txt")
@@ -98,6 +127,7 @@ private suspend fun detectFromHomepage(client: HttpClient, base: String): Platfo
 }
 
 suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: Int = 1): List<SearchResult> = coroutineScope {
+    traceLog("shopify", "$base: search start card=\"$card\" qty=$qty")
     val url = "$base/search/suggest.json"
     val response = client.get(url) {
         parameter("q", card)
@@ -105,6 +135,7 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: I
         parameter("resources[limit]", "10")
     }
     checkStatus(response)
+    traceLog("shopify", "$base: suggest.json ${response.status.value} for \"$card\"")
     val body = response.bodyAsText()
 
     val products = try {
@@ -174,14 +205,27 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: I
     // already uses.
     val probeCandidates = candidates.sortedBy { it.suggestPrice ?: Double.MAX_VALUE }
         .take(SHOPIFY_PROBE_CANDIDATE_LIMIT).toSet()
+    traceLog(
+        "shopify",
+        "$base: \"$card\" -> ${candidates.size} relevant candidate(s), " +
+            "${probeCandidates.size} probe-eligible: ${probeCandidates.joinToString { it.title }}",
+    )
     val sem = Semaphore(3)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
                 val handle = c.relUrl.removePrefix("/products/").substringBefore("?").trim('/')
+                val willProbe = qty > 1 && c in probeCandidates
+                val startedAt = System.currentTimeMillis()
+                traceLog("shopify", "$base: \"${c.title}\" candidate start (willProbe=$willProbe)")
                 val variant = if (handle.isNotBlank())
-                    shopifyFirstVariant(client, base, handle, probeStock = qty > 1 && c in probeCandidates)
+                    shopifyFirstVariant(client, base, handle, probeStock = willProbe)
                 else null
+                traceLog(
+                    "shopify",
+                    "$base: \"${c.title}\" candidate done in ${System.currentTimeMillis() - startedAt}ms -- " +
+                        "price=${variant?.price} stockQty=${variant?.stockQty}",
+                )
 
                 val price = variant?.price ?: c.suggestPrice
                 val available = c.suggestAvailable  // suggest API availability is authoritative
@@ -226,8 +270,10 @@ private suspend fun shopifyFirstVariant(
     probeStock: Boolean,
 ): ShopifyVariant? {
     return try {
+        traceLog("shopify.variant", "$base/products/$handle.js: GET start")
         val resp = client.get("$base/products/$handle.js")
         checkStatus(resp)
+        traceLog("shopify.variant", "$base/products/$handle.js: ${resp.status.value}")
         val body = resp.bodyAsText()
         val productObj = Json.parseToJsonElement(body).jsonObject
         val variantObjs = productObj["variants"]?.jsonArray
@@ -286,11 +332,13 @@ private val SHOPIFY_SOLD_OUT_RE = Regex("""(?i)sold out""")
 // 429 (which still propagates immediately, on either attempt, to trip the store-wide backoff).
 private suspend fun probeShopifyStock(client: HttpClient, base: String, variantId: Long): Int? {
     suspend fun attempt(): Int? {
+        traceLog("shopify.probe", "$base/cart/add.js: POST start variantId=$variantId qty=$SHOPIFY_PROBE_QTY")
         val resp = client.post("$base/cart/add.js") {
             attributes.put(CART_MUTATION_ATTR, true)
             contentType(ContentType.Application.Json)
             setBody("""{"items":[{"id":$variantId,"quantity":$SHOPIFY_PROBE_QTY}]}""")
         }
+        traceLog("shopify.probe", "$base/cart/add.js: ${resp.status.value} for variantId=$variantId")
         // A rate-limited cart endpoint must be treated exactly like a rate-limited search
         // endpoint -- same CloudflareBlockedException, same store-wide circuit breaker via
         // withRetry/cfBlockedStores in SearchEngine.kt. Without this, a 429 here (cart mutation
@@ -299,7 +347,7 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
         // subsequent candidate/card instead of backing off, unlike every other request type.
         if (resp.status.value == 429) {
             if (IS_DEBUG) dumpResponse("429", resp)
-            throw CloudflareBlockedException()
+            throw CloudflareBlockedException("$base/cart/add.js", captureResponseDetail(resp))
         }
         val body = resp.bodyAsText()
         return when (resp.status.value) {
@@ -308,7 +356,9 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
                     ?.firstOrNull()?.jsonObject?.get("quantity")?.jsonPrimitive?.intOrNull
                 // Hitting our own probe ceiling exactly means we can't tell real stock from a
                 // backorder-allowed variant -- treat as unknown/unlimited, not a false "20".
-                qty?.takeIf { it < SHOPIFY_PROBE_QTY }
+                val result = qty?.takeIf { it < SHOPIFY_PROBE_QTY }
+                traceLog("shopify.probe", "$base/cart/add.js: variantId=$variantId parsed qty=$qty -> stockQty=$result")
+                result
             }
             422 -> {
                 // A 422 here unambiguously means "requested quantity exceeds real stock" -- even
@@ -316,26 +366,33 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
                 // falling back to null (unlimited) would be actively backwards, not just uncertain.
                 // Dump it in debug builds so an unrecognised format is diagnosable, and don't fall
                 // through to null.
-                SHOPIFY_CAPPED_QTY_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
+                val result = SHOPIFY_CAPPED_QTY_RE.find(body)?.groupValues?.get(1)?.toIntOrNull()
                     ?: if (SHOPIFY_SOLD_OUT_RE.containsMatchIn(body)) 0 else run {
                         if (IS_DEBUG) dumpResponse("422_unparsed", resp)
                         null
                     }
+                traceLog("shopify.probe", "$base/cart/add.js: variantId=$variantId 422 -> stockQty=$result")
+                result
             }
-            else -> null
+            else -> {
+                traceLog("shopify.probe", "$base/cart/add.js: variantId=$variantId unhandled status ${resp.status.value} -> stockQty=null")
+                null
+            }
         }
     }
     return try {
         attempt()
     } catch (e: CloudflareBlockedException) {
         throw e
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        traceLog("shopify.probe", "$base/cart/add.js: variantId=$variantId attempt 1 failed (${e::class.simpleName}: ${e.message}), retrying in 800ms")
         try {
             delay(800L)
             attempt()
         } catch (e: CloudflareBlockedException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            traceLog("shopify.probe", "$base/cart/add.js: variantId=$variantId attempt 2 also failed (${e::class.simpleName}: ${e.message}) -> stockQty=null")
             null
         }
     }
@@ -357,20 +414,24 @@ private const val WC_PROBE_CEILING = 20
 
 private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, productId: Long, qty: Int): Boolean {
     return try {
+        traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: POST start productId=$productId qty=$qty")
         val resp = client.post("$base/?wc-ajax=add_to_cart") {
             attributes.put(CART_MUTATION_ATTR, true)
             contentType(ContentType.Application.FormUrlEncoded)
             setBody("product_id=$productId&quantity=$qty")
         }
+        traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: ${resp.status.value} for productId=$productId qty=$qty")
         // Same reasoning as Shopify's cart probe: a 429 here must trip the same circuit breaker
         // as any other request to this store, not be silently read as "this quantity failed."
         // A binary search that treats 429 as "false" would keep hammering the host with more
         // probes while it's already rate-limiting us, instead of backing off store-wide.
         if (resp.status.value == 429) {
             if (IS_DEBUG) dumpResponse("429", resp)
-            throw CloudflareBlockedException()
+            throw CloudflareBlockedException("$base/?wc-ajax=add_to_cart", captureResponseDetail(resp))
         }
-        resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
+        val succeeded = resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
+        traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: productId=$productId qty=$qty succeeded=$succeeded")
+        succeeded
     } catch (e: CloudflareBlockedException) {
         throw e
     } catch (_: Exception) {
