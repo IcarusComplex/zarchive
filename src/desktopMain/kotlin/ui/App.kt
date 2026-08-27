@@ -1917,24 +1917,13 @@ private fun GovernanceExplainerDialog(
                     fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
                 )
                 Text(
-                    if (isLarge)
-                        "This is a large search across $storeCount stores and will take a while — " +
-                        "potentially 20-40+ minutes for the biggest searches. That's deliberate: for " +
-                        "stores that have rate-limited us before, slowing down to one request at a " +
-                        "time is what actually gets a search through cleanly instead of getting " +
-                        "blocked partway. Confirmed live: a store that used to rate-limit often " +
-                        "completed an 83-card search this way without a single block."
-                    else
-                        "This search touches $storeCount stores and will take longer than usual — " +
-                        "we space out requests to stay under each store's limits.",
+                    (if (isLarge) "This is a large search across $storeCount stores"
+                     else "This search across $storeCount stores") +
+                    " and will take a while. This is intentional to avoid tripping Cloudflare's " +
+                    "rate limit trip wires and bot detection so we can bring you results from all " +
+                    "the stores. This isn't guaranteed — if you're experiencing rate limits, try " +
+                    "reducing the size of the search you're running.",
                     fontSize = 13.sp, color = OnSurface,
-                )
-                Text(
-                    "Some stores (mostly Shopify-based ones) may still show a \"verifying you're " +
-                    "human\" page regardless of pacing — that's a store-side anti-bot system, " +
-                    "largely outside this app's control. Pacing does meaningfully help everywhere " +
-                    "else, and reduces (but can't eliminate) exposure on Shopify stores too.",
-                    fontSize = 12.sp, color = OnSurfaceVariant,
                 )
                 Spacer(Modifier.height(2.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1970,7 +1959,7 @@ private fun GovernanceExplainerDialog(
                         onClick = { onProceed(dontShowAgain) },
                         shape = RoundedCornerShape(4.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
-                    ) { Text("Search anyway", fontSize = 12.sp) }
+                    ) { Text("Search", fontSize = 12.sp) }
                 }
             }
         }
