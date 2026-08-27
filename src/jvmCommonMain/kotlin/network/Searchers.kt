@@ -414,6 +414,20 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
 // probe (i.e. is meaningfully limited) pays for the ~5 extra requests to locate the exact boundary.
 private const val WC_PROBE_CEILING = 20
 
+// Caps the binary search to a fixed worst-case number of requests instead of always converging on
+// the exact boundary -- confirmed live, Aug 2026: with a host serialized to one in-flight request
+// at a time (see PerHostRateLimiter's combined budget), a single product's full binary search alone
+// took 6+ sequential round trips (30+ seconds) to pin down exactly. A search that stops early
+// returns a *lower bound* on real stock (see probeWooCommerceStock), which is the safe direction of
+// error -- the order optimizer already treats unconfirmed/approximate stock conservatively.
+private const val WC_PROBE_MAX_ATTEMPTS = 4
+
+// Cap on how many candidates (per card, per store) get a cart-mutation stock probe -- mirrors
+// Shopify's SHOPIFY_PROBE_CANDIDATE_LIMIT and exists for the same reason: an uncapped probe loop
+// against a generic/reprint-heavy card name can mean many sequential cart-mutation requests to the
+// same host just for one card.
+private const val WC_PROBE_CANDIDATE_LIMIT = 3
+
 private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, productId: Long, qty: Int): Boolean {
     return try {
         traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: POST start productId=$productId qty=$qty")
@@ -448,9 +462,11 @@ private suspend fun probeWooCommerceStock(client: HttpClient, base: String, prod
     if (wcAddToCartSucceeds(client, base, productId, WC_PROBE_CEILING)) return null
     var lowSucceeds = 0
     var highFails = WC_PROBE_CEILING
-    while (highFails - lowSucceeds > 1) {
+    var attempts = 1  // the ceiling probe above already counts as attempt 1
+    while (highFails - lowSucceeds > 1 && attempts < WC_PROBE_MAX_ATTEMPTS) {
         val mid = (lowSucceeds + highFails) / 2
         if (wcAddToCartSucceeds(client, base, productId, mid)) lowSucceeds = mid else highFails = mid
+        attempts++
     }
     return lowSucceeds.takeIf { it > 0 }
 }
@@ -539,12 +555,18 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qt
     }
 
     // The results-grid tiles have no stock element at all (confirmed live) -- the wc-ajax probe
-    // is the only source of a real number here, not just a low-stock-threshold bonus.
+    // is the only source of a real number here, not just a low-stock-threshold bonus. Capped to the
+    // WC_PROBE_CANDIDATE_LIMIT cheapest available candidates -- see its doc comment; cheapestPlan()
+    // consumes cheapest-first anyway, so pricier un-probed candidates falling back to
+    // stockQty=null ("unknown") only matters if the cheap ones run short.
+    val probeCandidates = candidates.filter { it.available && it.productId != null }
+        .sortedBy { it.price ?: Double.MAX_VALUE }
+        .take(WC_PROBE_CANDIDATE_LIMIT).toSet()
     val sem = Semaphore(3)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                val stockQty = if (c.available && c.productId != null && qty > 1) probeWooCommerceStock(client, base, c.productId) else null
+                val stockQty = if (qty > 1 && c in probeCandidates) probeWooCommerceStock(client, base, c.productId!!) else null
                 SearchResult(
                     store = "",
                     card = card,

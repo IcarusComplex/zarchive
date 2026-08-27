@@ -245,6 +245,14 @@ fun WindowScope.App(
             if (vm.showDiagnostics) {
                 DiagnosticsDialog(vm) { vm.dismissDiagnostics() }
             }
+            if (vm.showGovernanceExplainer) {
+                GovernanceExplainerDialog(
+                    category   = vm.governanceCategory,
+                    storeCount = vm.governanceStoreCount,
+                    onProceed  = { dontShowAgain -> vm.confirmGovernanceExplainer(dontShowAgain) },
+                    onDismiss  = { vm.dismissGovernanceExplainer() },
+                )
+            }
             if (vm.showAddToSearchDialog) {
                 AddToSearchDialog(
                     newCount         = vm.pendingAddCount,
@@ -1879,6 +1887,91 @@ private fun AddToSearchDialog(
                     onClick = onDismiss,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Cancel", fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f)) }
+            }
+        }
+    }
+}
+
+// Shown before a MEDIUM/LARGE search actually launches (see SearchViewModel.gatedSearch). Sets
+// expectations honestly -- never claims pacing eliminates Cloudflare blocks, only that it reduces
+// them, and (for LARGE) that heavy pacing is a deliberate, confirmed-effective tradeoff, not a bug.
+@Composable
+private fun GovernanceExplainerDialog(
+    category: data.SearchCategory,
+    storeCount: Int,
+    onProceed: (dontShowAgain: Boolean) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var dontShowAgain by remember { mutableStateOf(false) }
+    val isLarge = category == data.SearchCategory.LARGE
+    ModalScrim {
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = SurfaceContainerLow,
+            border = BorderStroke(1.dp, OutlineVariant),
+            modifier = Modifier.width(480.dp),
+        ) {
+            Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "This search will be paced to reduce rate-limiting",
+                    fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Primary,
+                )
+                Text(
+                    if (isLarge)
+                        "This is a large search across $storeCount stores and will take a while — " +
+                        "potentially 20-40+ minutes for the biggest searches. That's deliberate: for " +
+                        "stores that have rate-limited us before, slowing down to one request at a " +
+                        "time is what actually gets a search through cleanly instead of getting " +
+                        "blocked partway. Confirmed live: a store that used to rate-limit often " +
+                        "completed an 83-card search this way without a single block."
+                    else
+                        "This search touches $storeCount stores and will take longer than usual — " +
+                        "we space out requests to stay under each store's limits.",
+                    fontSize = 13.sp, color = OnSurface,
+                )
+                Text(
+                    "Some stores (mostly Shopify-based ones) may still show a \"verifying you're " +
+                    "human\" page regardless of pacing — that's a store-side anti-bot system, " +
+                    "largely outside this app's control. Pacing does meaningfully help everywhere " +
+                    "else, and reduces (but can't eliminate) exposure on Shopify stores too.",
+                    fontSize = 12.sp, color = OnSurfaceVariant,
+                )
+                Spacer(Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    @OptIn(ExperimentalMaterial3Api::class)
+                    CompositionLocalProvider(LocalMinimumInteractiveComponentEnforcement provides false) {
+                        Checkbox(
+                            checked = dontShowAgain,
+                            onCheckedChange = { dontShowAgain = it },
+                            modifier = Modifier.size(20.dp),
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = Primary,
+                                uncheckedColor = OutlineVariant,
+                                checkmarkColor = Color(0xFF3C2F00),
+                            ),
+                        )
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Don't show this again",
+                        fontSize = 12.sp, color = OnSurfaceVariant,
+                        modifier = Modifier.clickable { dontShowAgain = !dontShowAgain },
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Spacer(Modifier.weight(1f))
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp, OutlineVariant),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = OnSurfaceVariant),
+                    ) { Text("Cancel", fontSize = 12.sp) }
+                    Button(
+                        onClick = { onProceed(dontShowAgain) },
+                        shape = RoundedCornerShape(4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = Primary, contentColor = OnPrimary),
+                    ) { Text("Search anyway", fontSize = 12.sp) }
+                }
             }
         }
     }

@@ -61,9 +61,10 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
 // 429s on a large search doesn't slow down future small searches.
 object CfThrottleRules : Table("cf_throttle_rules") {
     val baseUrl       = text("base_url")
-    val cardThreshold = integer("card_threshold") // kept for schema compat; logic uses cards*stores
-    val tier          = integer("tier")           // tierSmall: for cards*stores < 300
-    val tierLarge     = integer("tier_large").default(2) // for cards*stores >= 300
+    val cardThreshold = integer("card_threshold") // kept for schema compat; logic uses SearchClassifier weight
+    val tier          = integer("tier")           // tierSmall: for SearchCategory.SMALL
+    val tierMedium    = integer("tier_medium").default(2) // for SearchCategory.MEDIUM
+    val tierLarge     = integer("tier_large").default(2)  // for SearchCategory.LARGE
     val lastHitAt     = long("last_hit_at")       // epoch ms of most-recent 429
     val lastHitCards  = integer("last_hit_cards") // card count at that time
     override val primaryKey = PrimaryKey(baseUrl)
@@ -144,24 +145,24 @@ object AppDatabase {
     fun loadActiveCfRules(): Map<String, CfThrottleRule> = transaction {
         CfThrottleRules.selectAll().map { row ->
             CfThrottleRule(
-                baseUrl   = row[CfThrottleRules.baseUrl],
-                tierSmall = row[CfThrottleRules.tier],
-                tierLarge = row[CfThrottleRules.tierLarge],
+                baseUrl    = row[CfThrottleRules.baseUrl],
+                tierSmall  = row[CfThrottleRules.tier],
+                tierMedium = row[CfThrottleRules.tierMedium],
+                tierLarge  = row[CfThrottleRules.tierLarge],
             )
         }.associateBy { it.baseUrl }
     }
 
     /**
-     * Record a 429 hit for [baseUrl].
+     * Record a 429 hit for [baseUrl]. Only the bucket matching [category] escalates: a 429 on a
+     * MEDIUM search advances tierMedium; a 429 on a SMALL search advances tierSmall; etc. Each
+     * bucket escalates at most once per 2-hour window (max tier 3).
      *
-     * [isLargeSearch] is true when cards*stores >= 300 — i.e. the search was in the
-     * large bucket. Only the matching bucket's tier escalates: a 429 on a large search
-     * advances tierLarge; a 429 on a small search advances tierSmall. Each bucket
-     * escalates at most once per 2-hour window (max tier 3).
-     *
-     * First hit in either bucket escalates from the bucket's base (small=1, large=2).
+     * First hit in any bucket escalates from that bucket's base (small=1, medium=2, large=3) --
+     * large's base is already the max tier, so a first LARGE-bucket hit is a no-op numerically, but
+     * still records lastHitAt/lastHitCards.
      */
-    fun recordCfBlock(baseUrl: String, cardCount: Int, isLargeSearch: Boolean): Unit = transaction {
+    fun recordCfBlock(baseUrl: String, cardCount: Int, category: SearchCategory): Unit = transaction {
         val now        = System.currentTimeMillis()
         val twoHoursMs = 2L * 60 * 60 * 1_000
 
@@ -169,27 +170,28 @@ object AppDatabase {
             .where { CfThrottleRules.baseUrl eq baseUrl }
             .firstOrNull()
 
+        val isNewEvent = existing == null || (now - existing[CfThrottleRules.lastHitAt]) > twoHoursMs
+        val (newSmall, newMedium, newLarge) = if (existing == null) escalateCfTiers(category, isNewEvent)
+            else escalateCfTiers(
+                category, isNewEvent,
+                existing[CfThrottleRules.tier], existing[CfThrottleRules.tierMedium], existing[CfThrottleRules.tierLarge],
+            )
+
         if (existing == null) {
             CfThrottleRules.insert {
                 it[CfThrottleRules.baseUrl]       = baseUrl
                 it[CfThrottleRules.cardThreshold] = 300
-                // Escalate from the base for whichever bucket got the 429.
-                it[CfThrottleRules.tier]          = if (isLargeSearch) 1 else 2 // tierSmall
-                it[CfThrottleRules.tierLarge]     = if (isLargeSearch) 3 else 2 // tierLarge
+                it[CfThrottleRules.tier]          = newSmall
+                it[CfThrottleRules.tierMedium]    = newMedium
+                it[CfThrottleRules.tierLarge]     = newLarge
                 it[CfThrottleRules.lastHitAt]     = now
                 it[CfThrottleRules.lastHitCards]  = cardCount
             }
         } else {
-            val lastHitAt  = existing[CfThrottleRules.lastHitAt]
-            val isNewEvent = (now - lastHitAt) > twoHoursMs
-            val storedSmall = existing[CfThrottleRules.tier]
-            val storedLarge = existing[CfThrottleRules.tierLarge]
-            val newSmall = if (!isLargeSearch && isNewEvent) minOf(3, storedSmall + 1) else storedSmall
-            val newLarge = if (isLargeSearch  && isNewEvent) minOf(3, storedLarge + 1) else storedLarge
-
             CfThrottleRules.update({ CfThrottleRules.baseUrl eq baseUrl }) {
-                it[CfThrottleRules.tier]      = newSmall
-                it[CfThrottleRules.tierLarge] = newLarge
+                it[CfThrottleRules.tier]         = newSmall
+                it[CfThrottleRules.tierMedium]   = newMedium
+                it[CfThrottleRules.tierLarge]    = newLarge
                 it[CfThrottleRules.lastHitAt]    = now
                 it[CfThrottleRules.lastHitCards] = cardCount
             }

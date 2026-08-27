@@ -107,6 +107,30 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
 // buildHttpClient's send interceptor below.
 val CART_MUTATION_ATTR: AttributeKey<Boolean> = AttributeKey("cartMutationProbe")
 
+/**
+ * Delays a store's first-ever request by `index * stepMs + jitter`, spreading many stores' first
+ * contact out over time instead of every store firing its first request within the same ~1-2s
+ * window (see `runSearch`'s per-card jitter, which only staggers *within* a store). Confirmed live
+ * (Aug 2026): a dozen independent Shopify zones all showed a Cloudflare Managed Challenge within
+ * the same second at search launch on a fresh IP -- a cross-domain "spray" of first contacts to many
+ * independent zones in a couple seconds is itself a plausible bot signal, unaddressed by any
+ * per-host pacing since it's a *cross*-host pattern. SMALL searches get no stagger at all -- the
+ * common case (most searches) stays exactly as fast as before this existed.
+ */
+data class StaggerProfile(val stepMs: Long, val jitterMs: LongRange) {
+    companion object {
+        val NONE   = StaggerProfile(0L, 0L..0L)
+        val MEDIUM = StaggerProfile(400L, 0L..300L)   // ~19 stores spread across ~7.6s
+        val LARGE  = StaggerProfile(900L, 0L..500L)   // ~19 stores spread across ~17s
+
+        fun forCategory(category: SearchCategory): StaggerProfile = when (category) {
+            SearchCategory.SMALL  -> NONE
+            SearchCategory.MEDIUM -> MEDIUM
+            SearchCategory.LARGE  -> LARGE
+        }
+    }
+}
+
 // ── Per-host rate limiter ──────────────────────────────────────────────────────
 
 /**
@@ -479,22 +503,29 @@ suspend fun runSearch(
     cfBlockedMutex.withLock { cfBlockedStores.clear() }
     errorLogMutex.withLock { loggedApiErrors.clear() }
 
-    // Determine the base tier from total card-store pairs: < 300 = tier 1, >= 300 = tier 2.
-    // This base applies to every store; per-store DB history can only raise it, never lower it.
-    // BROWSER stores are excluded — they manage their own concurrency.
-    val totalSearches = cards.size * stores.size
-    val isLargeSearch = totalSearches >= 300
-    val baseTier = if (isLargeSearch) 2 else 1
+    // Holistic classification (see SearchClassifier): replaces the old isLargeSearch/baseTier +
+    // separate mayProbeStock split with one weighted request-volume estimate that already accounts
+    // for quantity-probing's extra cost, not a bolted-on boolean checked after the fact. Drives both
+    // the base governance tier below and the cross-store start stagger further down.
+    val estimate = SearchClassifier.classify(cards, cardQuantities, stores)
+    val category = estimate.category
+    val baseTier = when (category) {
+        SearchCategory.SMALL  -> 1
+        SearchCategory.MEDIUM -> 2
+        SearchCategory.LARGE  -> 3
+    }
 
     // Only searches that actually request more than 1 copy of something ever trigger a
     // cart-mutation stock probe (see checkStore's qty computation) -- the overwhelmingly common
     // plain search (every card at qty=1) never sends one, so it should keep its normal browsing
-    // concurrency rather than being pre-emptively serialized "just in case."
+    // concurrency rather than being pre-emptively serialized "just in case." This answers a
+    // narrower question than `category` (whether a host needs a combined budget at all, vs. how
+    // strict governance should be overall) -- kept separate on purpose, not folded together.
     val mayProbeStock = cardQuantities.values.any { it > 1 }
 
     traceReset(
-        "runSearch: ${cards.size} card(s) x ${stores.size} store(s) = $totalSearches, " +
-            "isLargeSearch=$isLargeSearch, baseTier=$baseTier, mayProbeStock=$mayProbeStock",
+        "runSearch: ${cards.size} card(s) x ${stores.size} store(s), weight=${estimate.totalWeight}, " +
+            "category=$category, baseTier=$baseTier, mayProbeStock=$mayProbeStock",
     )
 
     val cfRules = loadActiveCfThrottleRules()
@@ -509,9 +540,7 @@ suspend fun runSearch(
         val host = if (platform == Platform.UNTAPPED_API) UNTAPPED_SUPABASE_HOST
                    else extractHost(baseUrl) ?: continue
         val rule = cfRules[baseUrl]
-        val tier = if (rule == null) baseTier
-                   else if (isLargeSearch) maxOf(baseTier, rule.tierLarge)
-                   else maxOf(baseTier, rule.tierSmall)
+        val tier = if (rule == null) baseTier else maxOf(baseTier, rule.tierFor(category))
         hostProfiles[host] = ThrottleProfile.forTierAndPlatform(tier, platform)
         // Only Shopify/WooCommerce ever send a cart-mutation stock probe (see CART_MUTATION_ATTR
         // usages in Searchers.kt), and only when this search actually has a qty>1 card somewhere.
@@ -537,15 +566,24 @@ suspend fun runSearch(
     } else null
     val effectiveBrowserSearcher = sharedBrowserSearcher ?: localBrowserSearcher
 
+    // Cross-store start stagger (see StaggerProfile) -- shuffled so the same physical store isn't
+    // always launched first/last across searches.
+    val stagger = StaggerProfile.forCategory(category)
+    val staggeredStores = stores.entries.toList().shuffled()
+
     try {
         coroutineScope {
-            stores.map { (name, base) ->
+            staggeredStores.mapIndexed { index, entry ->
+                val (name, base) = entry
                 async(Dispatchers.IO) {
+                    if (stagger.stepMs > 0) {
+                        delay(index * stagger.stepMs + stagger.jitterMs.random())
+                    }
                     checkStore(
                         client, name, base, cards, effectiveBrowserSearcher,
                         onProgress, onResults, onStoreComplete,
                         onCfBlocked = { url, cardCount ->
-                            runCatching { recordCfThrottleBlock(url, cardCount, isLargeSearch) }
+                            runCatching { recordCfThrottleBlock(url, cardCount, category) }
                             onStoreCfBlocked?.invoke(name)
                         },
                         cardQuantities = cardQuantities,

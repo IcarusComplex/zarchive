@@ -306,6 +306,9 @@ Then double-click normally.
 **"A store always shows no results"**
 Some stores use Cloudflare protection or rate-limiting. Try searching again later. If a store consistently returns nothing, it may be temporarily blocking automated requests.
 
+**"Why is a big search so slow?"**
+Searches with a lot of cards, a lot of stores, or requested quantities above 1 (which trigger a live stock check on some stores) are automatically paced more conservatively to avoid getting rate-limited — the app shows an explainer before a search like this starts, since it can take several minutes to tens of minutes for the largest searches. This is deliberate: going slower is what keeps a search from getting blocked partway through on stores that are sensitive to request volume. It can't guarantee zero rate-limiting on every store, but it meaningfully reduces it.
+
 **"Card art is not loading"**
 Art is fetched from Scryfall and cached locally. Check your internet connection. If art was loading before but stopped, delete `~/.zarchive/images/` and search again.
 
