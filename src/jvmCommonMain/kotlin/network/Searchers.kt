@@ -42,13 +42,13 @@ private suspend fun checkStatus(response: HttpResponse) {
         429 -> {
             if (IS_DEBUG) dumpResponse("429", response)
             val detail = captureResponseDetail(response)
-            traceLog("checkStatus", "429 from ${response.call.request.url}")
+            traceLog("checkStatus", "429 from ${response.call.request.url}\n$detail")
             throw CloudflareBlockedException(response.call.request.url.toString(), detail)
         }
         !in 200..299 -> {
             val url = response.call.request.url.toString()
             val detail = captureResponseDetail(response)
-            traceLog("checkStatus", "HTTP ${response.status.value} from $url")
+            traceLog("checkStatus", "HTTP ${response.status.value} from $url\n$detail")
             throw HttpStatusException(response.status.value, url, detail)
         }
     }
@@ -347,7 +347,9 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
         // subsequent candidate/card instead of backing off, unlike every other request type.
         if (resp.status.value == 429) {
             if (IS_DEBUG) dumpResponse("429", resp)
-            throw CloudflareBlockedException("$base/cart/add.js", captureResponseDetail(resp))
+            val detail = captureResponseDetail(resp)
+            traceLog("shopify.probe", "$base/cart/add.js: 429 for variantId=$variantId\n$detail")
+            throw CloudflareBlockedException("$base/cart/add.js", detail)
         }
         val body = resp.bodyAsText()
         return when (resp.status.value) {
@@ -427,7 +429,9 @@ private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, produc
         // probes while it's already rate-limiting us, instead of backing off store-wide.
         if (resp.status.value == 429) {
             if (IS_DEBUG) dumpResponse("429", resp)
-            throw CloudflareBlockedException("$base/?wc-ajax=add_to_cart", captureResponseDetail(resp))
+            val detail = captureResponseDetail(resp)
+            traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: 429 for productId=$productId qty=$qty\n$detail")
+            throw CloudflareBlockedException("$base/?wc-ajax=add_to_cart", detail)
         }
         val succeeded = resp.status.value == 200 && "\"error\":true" !in resp.bodyAsText()
         traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: productId=$productId qty=$qty succeeded=$succeeded")
