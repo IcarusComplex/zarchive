@@ -430,9 +430,13 @@ suspend fun checkStore(
         else                  -> { _, _, _, _ -> emptyList() }
     }
 
-    // 2 concurrent card-processing lanes per store, with a random jitter before each.
-    // Actual HTTP request pacing is handled by the per-host rate limiter in the client.
-    val sem = Semaphore(2)
+    // Card-processing lanes per store, with a random jitter before each. Set to 1 (was 2) --
+    // SizeScaledThrottle's per-host profile is unconditionally maxConcurrent=1 now (every category,
+    // both quantity brackets), so a higher lane count here never provided real throughput: every
+    // lane's requests funnel through the SAME single-slot per-host queue regardless, they just raced
+    // each other for it. Kept as a real Semaphore (not inlined away) so a future experiment with
+    // genuine per-host concurrency > 1 can just change this number back without restructuring.
+    val sem = Semaphore(1)
     coroutineScope {
         cards.map { card ->
             async {

@@ -210,7 +210,10 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: I
         "$base: \"$card\" -> ${candidates.size} relevant candidate(s), " +
             "${probeCandidates.size} probe-eligible: ${probeCandidates.joinToString { it.title }}",
     )
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment: the per-host throttle is
+    // unconditionally maxConcurrent=1 now, so candidate concurrency here never added real
+    // throughput, just multiple lanes racing for the same single-slot queue.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
@@ -562,7 +565,8 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qt
     val probeCandidates = candidates.filter { it.available && it.productId != null }
         .sortedBy { it.price ?: Double.MAX_VALUE }
         .take(WC_PROBE_CANDIDATE_LIMIT).toSet()
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
@@ -633,7 +637,8 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String, qty
         Candidate(title, permalink, price, productId, descSetHint ?: sku)
     }
 
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
@@ -773,12 +778,14 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String, qt
     }.distinctBy { it.productUrl }
 
     // The search grid has no stock count — fetch each in-stock candidate's product page for it.
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                // Not a cart-mutation endpoint (just the product page), so it isn't under the
-                // strict CART_MUTATION throttle -- still skipped for qty=1 anyway, since a
+                // Not a cart-mutation endpoint (just the product page), so it's paced the same as
+                // any other request to this host (see PerHostRateLimiter) -- still skipped for
+                // qty=1 anyway, since a
                 // qty-1 need is satisfied by any available listing regardless of its exact count.
                 val stockQty = if (c.available && qty > 1) resolveBigCommerceStock(client, c.productUrl) else null
                 SearchResult(
@@ -869,7 +876,8 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String, qty
         Candidate(title, a.attr("href").takeIf { it.isNotEmpty() } ?: url, price, available, listingId, qty?.takeIf { it > 0 })
     }
 
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
