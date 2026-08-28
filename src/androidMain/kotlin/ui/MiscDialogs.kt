@@ -395,6 +395,12 @@ fun GovernanceExplainerDialog(
                 "reducing the size of the search you're running.",
                 fontSize = 13.sp, color = OnSurface,
             )
+            Text(
+                "If you've already hit a rate limit, there's a cooloff period — wait 10 minutes, " +
+                "then try again. If you're still getting backed off, come back in a few hours and " +
+                "try again.",
+                fontSize = 13.sp, color = OnSurface,
+            )
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(
                     checked = dontShowAgain,
