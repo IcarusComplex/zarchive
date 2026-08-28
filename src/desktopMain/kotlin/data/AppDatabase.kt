@@ -55,23 +55,13 @@ object SavedResultSnapshots : Table("saved_result_snapshots") {
     override val primaryKey = PrimaryKey(id)
 }
 
-// Persisted Cloudflare throttle rules — one row per store that has ever 429'd.
-// Two independent tiers: tierSmall (for cards*stores < 300) and tierLarge (>= 300).
-// Each escalates only when a 429 fires in its respective bucket, so a store that
-// 429s on a large search doesn't slow down future small searches.
-object CfThrottleRules : Table("cf_throttle_rules") {
-    val baseUrl       = text("base_url")
-    val cardThreshold = integer("card_threshold") // kept for schema compat; logic uses cards*stores
-    val tier          = integer("tier")           // tierSmall: for cards*stores < 300
-    val tierLarge     = integer("tier_large").default(2) // for cards*stores >= 300
-    val lastHitAt     = long("last_hit_at")       // epoch ms of most-recent 429
-    val lastHitCards  = integer("last_hit_cards") // card count at that time
-    override val primaryKey = PrimaryKey(baseUrl)
-}
-
-// CfThrottleRule itself now lives in commonMain/kotlin/data/CfThrottleRule.kt (shared with
-// engine.SearchEngine, which moved to jvmCommonMain in Phase 3) — same `data` package, no import
-// needed here.
+// NOTE: the per-store escalating Cloudflare throttle system (a "cf_throttle_rules" table +
+// CfThrottleRule/CfThrottleStore.desktop.kt) was removed (Aug 2026) in favour of SizeScaledThrottle
+// (engine/SearchEngine.kt) -- a search-size-scaled delay applied unconditionally from a store's
+// first request, not gated behind having 429'd before. The old table is deliberately left as an
+// orphaned, unqueried artifact in any existing user's local DB rather than migrated away -- see the
+// plan doc's "Redesign (Aug 28)" section for the reasoning (a DROP TABLE migration carries real risk
+// for zero benefit versus just leaving inert data behind).
 
 // Persisted API error/backoff log — see data/ErrorLog.kt (commonMain expect/actual). Capped to the
 // most recent ~500 rows (see AppDatabase.recordApiError) so a repeated backoff loop can't grow the
@@ -114,11 +104,10 @@ object AppDatabase {
         )
         transaction {
             SchemaUtils.createMissingTablesAndColumns(
-                Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots, CollectionRows,
+                Settings, SearchLists, SearchListCards, SavedResultSnapshots, CollectionRows,
                 ApiErrorLogs,
             )
         }
-        migrateCfThresholdV2()
         migrateSyncV1Backfill()
     }
 
@@ -138,63 +127,6 @@ object AppDatabase {
     }
 
     fun setSettingBoolean(key: String, value: Boolean) = setSetting(key, value.toString())
-
-    // ── CF throttle rules ──────────────────────────────────────────────────────
-
-    fun loadActiveCfRules(): Map<String, CfThrottleRule> = transaction {
-        CfThrottleRules.selectAll().map { row ->
-            CfThrottleRule(
-                baseUrl   = row[CfThrottleRules.baseUrl],
-                tierSmall = row[CfThrottleRules.tier],
-                tierLarge = row[CfThrottleRules.tierLarge],
-            )
-        }.associateBy { it.baseUrl }
-    }
-
-    /**
-     * Record a 429 hit for [baseUrl].
-     *
-     * [isLargeSearch] is true when cards*stores >= 300 — i.e. the search was in the
-     * large bucket. Only the matching bucket's tier escalates: a 429 on a large search
-     * advances tierLarge; a 429 on a small search advances tierSmall. Each bucket
-     * escalates at most once per 2-hour window (max tier 3).
-     *
-     * First hit in either bucket escalates from the bucket's base (small=1, large=2).
-     */
-    fun recordCfBlock(baseUrl: String, cardCount: Int, isLargeSearch: Boolean): Unit = transaction {
-        val now        = System.currentTimeMillis()
-        val twoHoursMs = 2L * 60 * 60 * 1_000
-
-        val existing = CfThrottleRules.selectAll()
-            .where { CfThrottleRules.baseUrl eq baseUrl }
-            .firstOrNull()
-
-        if (existing == null) {
-            CfThrottleRules.insert {
-                it[CfThrottleRules.baseUrl]       = baseUrl
-                it[CfThrottleRules.cardThreshold] = 300
-                // Escalate from the base for whichever bucket got the 429.
-                it[CfThrottleRules.tier]          = if (isLargeSearch) 1 else 2 // tierSmall
-                it[CfThrottleRules.tierLarge]     = if (isLargeSearch) 3 else 2 // tierLarge
-                it[CfThrottleRules.lastHitAt]     = now
-                it[CfThrottleRules.lastHitCards]  = cardCount
-            }
-        } else {
-            val lastHitAt  = existing[CfThrottleRules.lastHitAt]
-            val isNewEvent = (now - lastHitAt) > twoHoursMs
-            val storedSmall = existing[CfThrottleRules.tier]
-            val storedLarge = existing[CfThrottleRules.tierLarge]
-            val newSmall = if (!isLargeSearch && isNewEvent) minOf(3, storedSmall + 1) else storedSmall
-            val newLarge = if (isLargeSearch  && isNewEvent) minOf(3, storedLarge + 1) else storedLarge
-
-            CfThrottleRules.update({ CfThrottleRules.baseUrl eq baseUrl }) {
-                it[CfThrottleRules.tier]      = newSmall
-                it[CfThrottleRules.tierLarge] = newLarge
-                it[CfThrottleRules.lastHitAt]    = now
-                it[CfThrottleRules.lastHitCards] = cardCount
-            }
-        }
-    }
 
     // ── API error/backoff log ────────────────────────────────────────────────
 
@@ -237,27 +169,6 @@ object AppDatabase {
 
     fun clearApiErrors(): Unit = transaction {
         ApiErrorLogs.deleteAll()
-    }
-
-    // ── CF threshold migration (v2) ────────────────────────────────────────────
-
-    // Ran once to fix the old threshold=cardCount-5 escalation cycle. Now also ensures
-    // tierSmall=1 and tierLarge is present (added by createMissingTablesAndColumns with
-    // default=2). After this migration: all stores start at tierSmall=1, tierLarge=2.
-    private fun migrateCfThresholdV2() {
-        val done = transaction {
-            Settings.selectAll().where { Settings.key eq "_cf_v2_threshold" }.count() > 0
-        }
-        if (done) return
-        transaction {
-            CfThrottleRules.update({ CfThrottleRules.cardThreshold less 300 }) {
-                it[CfThrottleRules.cardThreshold] = 300
-            }
-            CfThrottleRules.update({ CfThrottleRules.tier greater 1 }) {
-                it[CfThrottleRules.tier] = 1
-            }
-            Settings.upsert { it[Settings.key] = "_cf_v2_threshold"; it[Settings.value] = "true" }
-        }
     }
 
     // ── Sync backfill (v1) ──────────────────────────────────────────────────────

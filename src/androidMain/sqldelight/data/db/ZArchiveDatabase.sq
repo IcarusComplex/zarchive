@@ -132,28 +132,23 @@ WHERE id = ?;
 deleteSnapshot:
 UPDATE saved_result_snapshots SET deleted = 1, deleted_at = ?, saved_at = ? WHERE id = ?;
 
+-- NOTE: the per-store escalating Cloudflare throttle system (this table + CfThrottleRule/
+-- CfThrottleStore.android.kt) was removed (Aug 2026) in favour of SizeScaledThrottle
+-- (engine/SearchEngine.kt) -- a search-size-scaled delay applied unconditionally from a store's
+-- first request, not gated behind having 429'd before. This CREATE TABLE is deliberately left here
+-- (rather than deleted) since existing installs already created it via 4.sqm/5.sqm/6.sqm; removing
+-- it from a fresh install's schema is fine (nothing queries it any more either way), but rewriting
+-- migration history to DROP it from existing devices would carry real risk for zero benefit -- see
+-- the plan doc's "Redesign (Aug 28)" section.
 CREATE TABLE cf_throttle_rules (
     base_url TEXT NOT NULL PRIMARY KEY,
     card_threshold INTEGER NOT NULL,
     tier INTEGER NOT NULL,
+    tier_medium INTEGER NOT NULL DEFAULT 2,
     tier_large INTEGER NOT NULL DEFAULT 2,
     last_hit_at INTEGER NOT NULL,
     last_hit_cards INTEGER NOT NULL
 );
-
-selectAllThrottleRules:
-SELECT * FROM cf_throttle_rules;
-
-selectThrottleRule:
-SELECT * FROM cf_throttle_rules WHERE base_url = ?;
-
-insertThrottleRule:
-INSERT INTO cf_throttle_rules(base_url, card_threshold, tier, tier_large, last_hit_at, last_hit_cards)
-VALUES (?, ?, ?, ?, ?, ?);
-
-updateThrottleRule:
-UPDATE cf_throttle_rules SET tier = ?, tier_large = ?, last_hit_at = ?, last_hit_cards = ?
-WHERE base_url = ?;
 
 -- Persisted API error/backoff log -- see data/ErrorLog.kt (commonMain expect/actual). Capped to
 -- the most recent ~500 rows on insert (see ErrorLogStore.android.kt) so a repeated backoff loop

@@ -80,6 +80,21 @@ class SearchViewModel(
     var whatsNewEntries by mutableStateOf<List<Pair<String, List<String>>>>(emptyList())
         private set
 
+    // Governance explainer dialog: shown before a MEDIUM/LARGE search actually launches (see
+    // gatedSearch()) so heavy pacing/long completion times aren't a surprise. Not shown for SMALL
+    // searches -- the common case stays exactly as fast/unprompted as before this existed.
+    var showGovernanceExplainer by mutableStateOf(false)
+        private set
+    var governanceCategory by mutableStateOf(data.SearchCategory.SMALL)
+        private set
+    var governanceStoreCount by mutableStateOf(0)
+        private set
+    private var pendingSearchAction: (() -> Unit)? = null
+    private var suppressGovernanceExplainerState by mutableStateOf(SettingsStore.getSettingBoolean("suppressGovernanceExplainer", false))
+    var suppressGovernanceExplainer: Boolean
+        get() = suppressGovernanceExplainerState
+        set(value) { suppressGovernanceExplainerState = value; SettingsStore.setSettingBoolean("suppressGovernanceExplainer", value) }
+
     // Search summary modal: shown when a search completes.
     var showSearchSummary by mutableStateOf(false)
     val storeStatuses = mutableStateMapOf<String, StoreStatus>()
@@ -1251,7 +1266,49 @@ class SearchViewModel(
         lastLoadedListName = null
     }
 
+    // Entry point every existing call site (requestSearch()/declineAddToSearch()/
+    // confirmResearchAll()) already uses. Transparently gates through the governance explainer for
+    // MEDIUM/LARGE searches (see gatedSearch) instead of running immediately -- SMALL searches (the
+    // common case) fall straight through to executeSearch() unchanged.
     fun search() {
+        val cards = parseCardList(query, ignoreBasicLands)
+        if (cards.isEmpty()) return
+        val quantities = parseCardQuantities(query, ignoreBasicLands)
+        gatedSearch(cards, quantities) { executeSearch() }
+    }
+
+    // Classifies the pending search and, for MEDIUM/LARGE, defers to the governance explainer
+    // dialog instead of running [action] immediately. suppressGovernanceExplainer (a "don't show
+    // this again" setting) skips the gate entirely once a user has seen and accepted it.
+    private fun gatedSearch(cards: List<String>, quantities: Map<String, Int>, action: () -> Unit) {
+        val storesToSearch = STORES.filterKeys { it in enabledStores }
+        val estimate = if (suppressGovernanceExplainer) null
+                       else data.SearchClassifier.classify(cards, quantities, storesToSearch)
+        if (estimate == null || estimate.category == data.SearchCategory.SMALL) {
+            action()
+            return
+        }
+        governanceCategory = estimate.category
+        governanceStoreCount = storesToSearch.size
+        pendingSearchAction = action
+        showGovernanceExplainer = true
+    }
+
+    /** "Search anyway" on the governance explainer -- launches the deferred search. */
+    fun confirmGovernanceExplainer(dontShowAgain: Boolean) {
+        showGovernanceExplainer = false
+        if (dontShowAgain) suppressGovernanceExplainer = true
+        pendingSearchAction?.invoke()
+        pendingSearchAction = null
+    }
+
+    /** "Cancel" on the governance explainer -- no search runs at all. */
+    fun dismissGovernanceExplainer() {
+        showGovernanceExplainer = false
+        pendingSearchAction = null
+    }
+
+    private fun executeSearch() {
         val cards = parseCardList(query, ignoreBasicLands)
         if (cards.isEmpty()) return
 

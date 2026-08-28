@@ -1,0 +1,9 @@
+-- Migration from schema version 6 to 7: adds tier_medium to cf_throttle_rules for the 3-category
+-- (small/medium/large) search governance system replacing the old 2-bucket (small/large) scheme --
+-- see data/SearchClassifier.kt and data/CfThrottleRule.kt. Editing the CREATE TABLE alone in
+-- ZArchiveDatabase.sq only affects brand-new databases; an already-installed device's existing
+-- zarchive.db needs this ALTER TABLE path, applied automatically by AndroidSqliteDriver based on
+-- the bumped schema version -- without it, upgrading devices crash with "no such column:
+-- tier_medium" the first time a search runs or a throttle rule is recorded/read.
+
+ALTER TABLE cf_throttle_rules ADD COLUMN tier_medium INTEGER NOT NULL DEFAULT 2;

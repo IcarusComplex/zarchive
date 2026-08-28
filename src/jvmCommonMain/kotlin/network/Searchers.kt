@@ -210,7 +210,10 @@ suspend fun searchShopify(client: HttpClient, base: String, card: String, qty: I
         "$base: \"$card\" -> ${candidates.size} relevant candidate(s), " +
             "${probeCandidates.size} probe-eligible: ${probeCandidates.joinToString { it.title }}",
     )
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment: the per-host throttle is
+    // unconditionally maxConcurrent=1 now, so candidate concurrency here never added real
+    // throughput, just multiple lanes racing for the same single-slot queue.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
@@ -414,6 +417,20 @@ private suspend fun probeShopifyStock(client: HttpClient, base: String, variantI
 // probe (i.e. is meaningfully limited) pays for the ~5 extra requests to locate the exact boundary.
 private const val WC_PROBE_CEILING = 20
 
+// Caps the binary search to a fixed worst-case number of requests instead of always converging on
+// the exact boundary -- confirmed live, Aug 2026: with a host serialized to one in-flight request
+// at a time (see PerHostRateLimiter's combined budget), a single product's full binary search alone
+// took 6+ sequential round trips (30+ seconds) to pin down exactly. A search that stops early
+// returns a *lower bound* on real stock (see probeWooCommerceStock), which is the safe direction of
+// error -- the order optimizer already treats unconfirmed/approximate stock conservatively.
+private const val WC_PROBE_MAX_ATTEMPTS = 4
+
+// Cap on how many candidates (per card, per store) get a cart-mutation stock probe -- mirrors
+// Shopify's SHOPIFY_PROBE_CANDIDATE_LIMIT and exists for the same reason: an uncapped probe loop
+// against a generic/reprint-heavy card name can mean many sequential cart-mutation requests to the
+// same host just for one card.
+private const val WC_PROBE_CANDIDATE_LIMIT = 3
+
 private suspend fun wcAddToCartSucceeds(client: HttpClient, base: String, productId: Long, qty: Int): Boolean {
     return try {
         traceLog("wc.probe", "$base/?wc-ajax=add_to_cart: POST start productId=$productId qty=$qty")
@@ -448,9 +465,11 @@ private suspend fun probeWooCommerceStock(client: HttpClient, base: String, prod
     if (wcAddToCartSucceeds(client, base, productId, WC_PROBE_CEILING)) return null
     var lowSucceeds = 0
     var highFails = WC_PROBE_CEILING
-    while (highFails - lowSucceeds > 1) {
+    var attempts = 1  // the ceiling probe above already counts as attempt 1
+    while (highFails - lowSucceeds > 1 && attempts < WC_PROBE_MAX_ATTEMPTS) {
         val mid = (lowSucceeds + highFails) / 2
         if (wcAddToCartSucceeds(client, base, productId, mid)) lowSucceeds = mid else highFails = mid
+        attempts++
     }
     return lowSucceeds.takeIf { it > 0 }
 }
@@ -484,8 +503,8 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qt
         // WooCommerce's core low-stock-threshold message renders as e.g. "Only 2 left in stock" in
         // this same element -- free when present, but only shows up near the threshold. Otherwise
         // (or if that text isn't there), fall back to the wc-ajax probe for a real number.
-        // The probe (a cart-mutation request, much more strictly throttled -- see
-        // ThrottleProfile.CART_MUTATION) only runs when it can actually change the plan: a qty-1
+        // The probe (a cart-mutation request, throttled via SizeScaledThrottle same as any other
+        // request to this host) only runs when it can actually change the plan: a qty-1
         // need is satisfied by any available listing regardless of its exact stock count.
         val stockQty = WOOCOMMERCE_STOCK_QTY_RE.find(stockEl?.text() ?: "")?.groupValues?.get(1)?.toIntOrNull()
             ?: if (available && productId != null && qty > 1) probeWooCommerceStock(client, base, productId) else null
@@ -539,12 +558,19 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qt
     }
 
     // The results-grid tiles have no stock element at all (confirmed live) -- the wc-ajax probe
-    // is the only source of a real number here, not just a low-stock-threshold bonus.
-    val sem = Semaphore(3)
+    // is the only source of a real number here, not just a low-stock-threshold bonus. Capped to the
+    // WC_PROBE_CANDIDATE_LIMIT cheapest available candidates -- see its doc comment; cheapestPlan()
+    // consumes cheapest-first anyway, so pricier un-probed candidates falling back to
+    // stockQty=null ("unknown") only matters if the cheap ones run short.
+    val probeCandidates = candidates.filter { it.available && it.productId != null }
+        .sortedBy { it.price ?: Double.MAX_VALUE }
+        .take(WC_PROBE_CANDIDATE_LIMIT).toSet()
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                val stockQty = if (c.available && c.productId != null && qty > 1) probeWooCommerceStock(client, base, c.productId) else null
+                val stockQty = if (qty > 1 && c in probeCandidates) probeWooCommerceStock(client, base, c.productId!!) else null
                 SearchResult(
                     store = "",
                     card = card,
@@ -611,7 +637,8 @@ suspend fun searchWcStoreApi(client: HttpClient, base: String, card: String, qty
         Candidate(title, permalink, price, productId, descSetHint ?: sku)
     }
 
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
@@ -751,12 +778,14 @@ suspend fun searchBigCommerce(client: HttpClient, base: String, card: String, qt
     }.distinctBy { it.productUrl }
 
     // The search grid has no stock count — fetch each in-stock candidate's product page for it.
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {
-                // Not a cart-mutation endpoint (just the product page), so it isn't under the
-                // strict CART_MUTATION throttle -- still skipped for qty=1 anyway, since a
+                // Not a cart-mutation endpoint (just the product page), so it's paced the same as
+                // any other request to this host (see PerHostRateLimiter) -- still skipped for
+                // qty=1 anyway, since a
                 // qty-1 need is satisfied by any available listing regardless of its exact count.
                 val stockQty = if (c.available && qty > 1) resolveBigCommerceStock(client, c.productUrl) else null
                 SearchResult(
@@ -847,7 +876,8 @@ suspend fun searchPrestaShop(client: HttpClient, base: String, card: String, qty
         Candidate(title, a.attr("href").takeIf { it.isNotEmpty() } ?: url, price, available, listingId, qty?.takeIf { it > 0 })
     }
 
-    val sem = Semaphore(3)
+    // 1 (was 3) -- see SearchEngine.kt's checkStore doc comment.
+    val sem = Semaphore(1)
     candidates.map { c ->
         async(Dispatchers.IO) {
             sem.withPermit {

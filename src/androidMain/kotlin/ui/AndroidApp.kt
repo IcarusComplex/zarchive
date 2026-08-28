@@ -517,6 +517,14 @@ fun AndroidApp(
                 onDismiss = { vm.updateInfo = null },
             )
         }
+        if (vm.showGovernanceExplainer) {
+            GovernanceExplainerDialog(
+                category = vm.governanceCategory,
+                storeCount = vm.governanceStoreCount,
+                onProceed = { dontShowAgain -> vm.confirmGovernanceExplainer(dontShowAgain) },
+                onDismiss = { vm.dismissGovernanceExplainer() },
+            )
+        }
         if (vm.showAddToSearchDialog) {
             AddToSearchDialog(
                 newCount = vm.pendingAddCount,
