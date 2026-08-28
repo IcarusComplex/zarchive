@@ -53,15 +53,17 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
  * concurrency has never been validated, so don't reintroduce it without new evidence.
  *
  * [SIZE_DELAY_BREAKPOINTS] is the one place to tune "where's the line". Ordered by weight
- * ascending; a given weight uses the LAST breakpoint it meets or exceeds. Every breakpoint
- * currently maps to the single value proven safe so far (20s) -- lower individual breakpoints only
- * as real testing confirms a smaller delay is still safe at that weight. Don't guess intermediate
- * values; add them as data comes in.
+ * ascending; a given weight uses the LAST breakpoint it meets or exceeds. Only the flat 20s value
+ * above is actually confirmed safe by live testing so far -- the breakpoints below (1s/4s/7s,
+ * matching SearchClassifier's SMALL_MAX/MEDIUM_MAX thresholds) are an explicit, deliberate
+ * experiment (requested live, Aug 2026) to find out whether smaller/medium searches actually need
+ * anywhere near 20s, not yet validated themselves. Adjust based on what real runs at each size show.
  */
 object SizeScaledThrottle {
     private val SIZE_DELAY_BREAKPOINTS: List<Pair<Double, Long>> = listOf(
-        0.0 to 20_000L,
-        // e.g. once tested safe: 200.0 to 10_000L,
+        0.0 to 1_000L,      // SMALL (weight < 500)
+        500.0 to 4_000L,    // MEDIUM (500 <= weight < 1500)
+        1500.0 to 7_000L,   // LARGE (weight >= 1500)
     )
 
     fun delayForWeight(weight: Double): Long =
