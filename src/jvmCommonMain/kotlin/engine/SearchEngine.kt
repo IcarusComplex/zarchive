@@ -28,103 +28,54 @@ import javax.net.ssl.X509TrustManager
 // ── Throttle profiles ──────────────────────────────────────────────────────────
 
 /**
- * Per-domain concurrency and pacing parameters.
- *
- * The base tier for every search is determined by total card-store pairs (cards * stores):
- *   < 300  -> tier 1 (light; small searches stay fast)
- *   >= 300 -> tier 2 minimum (medium; large searches throttled to avoid CF rate limits)
- *
- * Per-store escalation stored in the DB can raise the effective tier above the base. Each
- * store tracks two independent tiers — small-bucket and large-bucket — so a 429 on a large
- * search doesn't penalise future small searches, and vice versa.
- *
- * Platform matters: Shopify makes 1 suggest.json + N handle.js requests per card and is
- * aggressively CF-protected. WooCommerce/BigCommerce make 1 request per card and rarely 429.
- * BROWSER (Playwright/WebView) stores bypass the Ktor rate limiter entirely.
+ * Per-domain concurrency and pacing parameters. Built by [SizeScaledThrottle], not tiered by
+ * platform/history any more -- see its doc comment.
  */
 data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
     companion object {
-        // ── TEMPORARY EXPERIMENT (requested live, Aug 2026) ─────────────────────────────────
-        // Forces every request -- browsing AND cart-mutation probes, every tier, every platform --
-        // to a single in-flight request per host with a flat 20s delay between requests. Goal:
-        // isolate "pacing" from "IP reputation" as the cause of today's rate limits by proving/
-        // disproving whether pure pacing, taken to an extreme, avoids Cloudflare blocks even on a
-        // heavily-tested IP. Not a permanent design -- flip EXTREME_SLOW_MODE back to false (or
-        // delete this block) once the experiment concludes; the normal tiered profiles below are
-        // left untouched so reverting is a one-line change.
-        private const val EXTREME_SLOW_MODE = true
-        private val EXTREME_PROFILE = ThrottleProfile(maxConcurrent = 1, minDelayMs = 20_000L)
-
-        val NONE  = ThrottleProfile(2, 0L)
-        // Shopify profiles — applied when search ≥ 300 cards.
-        val TIER1 = ThrottleProfile(2, 200L)   // light: ~5 req/s per store
-        val TIER2 = ThrottleProfile(1, 500L)   // medium: ~2 req/s, serialised
-        val TIER3 = ThrottleProfile(1, 800L)   // heavy: ~1.25 req/s, serialised
-
-        // Cart-mutation endpoints used to probe real stock quantity (Shopify's POST /cart/add.js,
-        // WooCommerce's POST /?wc-ajax=add_to_cart) get their own, deliberately much stricter
-        // profile — independent of the store's normal browsing throttle above and applied on top
-        // of it. These endpoints exist to protect checkout/cart flow from abuse (scalping,
-        // cart-stuffing bots), so they're plausibly rate-limited far more aggressively than a
-        // plain product-page GET, regardless of how gently we're already pacing the GETs.
-        // Confirmed live (Aug 2026): a 17-card search including one "30x" quantity got rate-limited
-        // on most Shopify stores on two different networks/IPs even with the general per-host
-        // throttle already active and the 429 circuit breaker already firing — the browsing-tier
-        // pacing alone wasn't conservative enough for this specific endpoint. Single-flight
-        // (maxConcurrent=1) and several seconds apart, deliberately slower than "fast" — a heavy
-        // quantity search taking longer to fully resolve is a fine trade for not getting blocked.
-        val CART_MUTATION = ThrottleProfile(maxConcurrent = 1, minDelayMs = 2_000L)
-
-        fun forTier(tier: Int): ThrottleProfile {
-            if (EXTREME_SLOW_MODE) return EXTREME_PROFILE
-            return when (tier) {
-                1    -> TIER1
-                2    -> TIER2
-                else -> TIER3
-            }
-        }
-
-        // Cart-mutation pacing escalates with a store's own CfThrottleRule history exactly like
-        // forTier does for browsing -- a store that has already 429'd (Knightly Gaming, Underworld
-        // Connections, confirmed Aug 2026) gets slower cart probes on future searches specifically,
-        // instead of every Shopify store sharing one flat 2s delay regardless of track record.
-        fun cartMutationForTier(tier: Int): ThrottleProfile {
-            if (EXTREME_SLOW_MODE) return EXTREME_PROFILE
-            return when (tier) {
-                1    -> CART_MUTATION
-                2    -> ThrottleProfile(maxConcurrent = 1, minDelayMs = 3_500L)
-                else -> ThrottleProfile(maxConcurrent = 1, minDelayMs = 5_000L)
-            }
-        }
-
-        // Non-Shopify platforms make far fewer HTTP requests per card and are rarely
-        // rate-limited — use lighter profiles to keep large searches reasonably fast.
-        fun forTierAndPlatform(tier: Int, platform: Platform): ThrottleProfile {
-            if (EXTREME_SLOW_MODE) return EXTREME_PROFILE
-            return when (platform) {
-                Platform.SHOPIFY -> forTier(tier)
-                Platform.WOOCOMMERCE, Platform.WC_STORE_API -> when (tier) {
-                    1    -> ThrottleProfile(3, 0L)
-                    2    -> ThrottleProfile(2, 150L)
-                    else -> ThrottleProfile(1, 300L)
-                }
-                Platform.BIGCOMMERCE -> when (tier) {
-                    1    -> ThrottleProfile(3, 0L)
-                    else -> ThrottleProfile(2, 100L)
-                }
-                Platform.PRESTASHOP -> when (tier) {
-                    1    -> ThrottleProfile(2, 100L)
-                    else -> ThrottleProfile(1, 300L)
-                }
-                else -> forTier(tier)
-            }
-        }
+        val NONE = ThrottleProfile(2, 0L)
     }
 }
 
+/**
+ * Maps a search's total estimated request weight ([SearchClassifier]) directly to a per-request
+ * delay, applied to every host from a store's very first request -- regardless of whether that
+ * store has ever been blocked before. Replaces the old tier system + per-store `CfThrottleRule`
+ * escalation (which only slowed a store down *after* a 429 already happened).
+ *
+ * Confirmed live (Aug 2026): running every host at `maxConcurrent=1` with a flat 20s delay --
+ * applied unconditionally regardless of search size or platform -- produced zero Cloudflare blocks
+ * across roughly a dozen repeated runs over ~8.5 hours, spanning both a SMALL search (4 cards x 20
+ * stores, weight=178.8) and a LARGE search (83 cards x 20 stores, weight=4942.1, including quantity
+ * probing) run to full completion (68 minutes). Every store that had previously blocked earlier in
+ * this same investigation, under lighter pacing, completed clean. `maxConcurrent` is fixed at 1
+ * everywhere -- that's the only concurrency level actually tested; a smaller delay at higher
+ * concurrency has never been validated, so don't reintroduce it without new evidence.
+ *
+ * [SIZE_DELAY_BREAKPOINTS] is the one place to tune "where's the line". Ordered by weight
+ * ascending; a given weight uses the LAST breakpoint it meets or exceeds. Every breakpoint
+ * currently maps to the single value proven safe so far (20s) -- lower individual breakpoints only
+ * as real testing confirms a smaller delay is still safe at that weight. Don't guess intermediate
+ * values; add them as data comes in.
+ */
+object SizeScaledThrottle {
+    private val SIZE_DELAY_BREAKPOINTS: List<Pair<Double, Long>> = listOf(
+        0.0 to 20_000L,
+        // e.g. once tested safe: 200.0 to 10_000L,
+    )
+
+    fun delayForWeight(weight: Double): Long =
+        SIZE_DELAY_BREAKPOINTS.lastOrNull { weight >= it.first }?.second
+            ?: SIZE_DELAY_BREAKPOINTS.first().second
+
+    fun profileForWeight(weight: Double): ThrottleProfile =
+        ThrottleProfile(maxConcurrent = 1, minDelayMs = delayForWeight(weight))
+}
+
 // Set on a request's attributes by a searcher (e.g. probeShopifyStock, wcAddToCartSucceeds) to
-// mark it as a cart-mutation stock probe -- see ThrottleProfile.CART_MUTATION and its use in
-// buildHttpClient's send interceptor below.
+// mark it as a cart-mutation stock probe -- used only for trace-log clarity now (isCartMutation in
+// PerHostRateLimiter.withThrottle/buildHttpClient's send interceptor below); every host gets the
+// same SizeScaledThrottle profile regardless of request type.
 val CART_MUTATION_ATTR: AttributeKey<Boolean> = AttributeKey("cartMutationProbe")
 
 /**
@@ -158,19 +109,18 @@ data class StaggerProfile(val stepMs: Long, val jitterMs: LongRange) {
  * including nested handle.js / product-page fetches inside a single card search —
  * is throttled per domain automatically.
  *
- * [hostProfiles] maps domain names (e.g. "greedygold.co.za") to their browsing throttle profile.
- * [cartProfiles] maps the same domains to their (much stricter) cart-mutation stock-probe profile,
- * for hosts where probing is possible (Shopify/WooCommerce). Hosts not in [hostProfiles] use
- * ThrottleProfile.NONE (no delay, no semaphore).
+ * [hostProfiles] maps domain names (e.g. "greedygold.co.za") to their throttle profile -- the SAME
+ * profile governs both browsing and cart-mutation-probe requests to that host (no separate
+ * cart-mutation profile any more; see [SizeScaledThrottle] -- every profile is already
+ * `maxConcurrent=1`, so a second, independently-tracked "combined budget" concept is redundant).
+ * Hosts not in [hostProfiles] use ThrottleProfile.NONE (no delay, no semaphore).
  *
  * Browsing and cart-mutation requests to the SAME host share ONE semaphore/queue, not two
  * independent ones. Confirmed live (Aug 2026, full request-level trace log): several stores got
  * Cloudflare-blocked on a plain suggest.json/product.js GET, not a cart probe -- each lane
  * individually paced "politely," but their *combined* rate to the same domain exceeded the site's
- * real limit (observed: blocks landed consistently around 40-50 total requests/minute, well under
- * what browsing+cart running as two independent "polite" lanes could add up to). Whatever's
- * protecting these stores evidently tracks total request volume to the domain, not per-endpoint
- * volume, so our own budget has to be combined too.
+ * real limit. Whatever's protecting these stores evidently tracks total request volume to the
+ * domain, not per-endpoint volume, so our own budget has to be combined too.
  *
  * The mutex only guards the (fast) get-or-create of a host's semaphore — the actual
  * withPermit/delay/block() execution runs outside the lock, so per-host (and cross-host)
@@ -178,7 +128,6 @@ data class StaggerProfile(val stepMs: Long, val jitterMs: LongRange) {
  */
 class PerHostRateLimiter(
     private val hostProfiles: Map<String, ThrottleProfile>,
-    private val cartProfiles: Map<String, ThrottleProfile> = emptyMap(),
 ) {
     private val mutex = Mutex()
     private val semaphores = mutableMapOf<String, Semaphore>()
@@ -188,24 +137,14 @@ class PerHostRateLimiter(
     // tried that and was wrong -- see withThrottle's own doc comment for why: real queueing time
     // under sustained demand isn't bounded by a single delay value, so no fixed formula based on it
     // can work as a request-timeout budget).
-    val maxDelayMs: Long =
-        (hostProfiles.values.asSequence() + cartProfiles.values.asSequence())
-            .map { it.minDelayMs }.maxOrNull() ?: 0L
+    val maxDelayMs: Long = hostProfiles.values.maxOfOrNull { it.minDelayMs } ?: 0L
 
     suspend fun <T> withThrottle(host: String, isCartMutation: Boolean, block: suspend () -> T): T {
-        val profile = if (isCartMutation) cartProfiles[host] ?: ThrottleProfile.CART_MUTATION
-                      else hostProfiles[host] ?: ThrottleProfile.NONE
+        val profile = hostProfiles[host] ?: ThrottleProfile.NONE
         if (profile === ThrottleProfile.NONE) return block()
         val key = host
-        // A host with any cart-mutation traffic must serialize to exactly 1 in-flight request of
-        // EITHER type -- that's what makes the combined budget real instead of nominal. Hosts that
-        // never do cart mutations keep their own browsing profile's concurrency (2-3 for light
-        // platforms/tiers) since there's no combined-lane risk for them.
         val sem = mutex.withLock {
-            semaphores.getOrPut(key) {
-                val cap = if (cartProfiles.containsKey(host)) 1 else profile.maxConcurrent
-                Semaphore(cap)
-            }
+            semaphores.getOrPut(key) { Semaphore(profile.maxConcurrent) }
         }
         val queuedAt = System.currentTimeMillis()
         traceLog(
@@ -407,9 +346,8 @@ suspend fun checkStore(
     onProgress: suspend (String) -> Unit,
     onResults: suspend (List<SearchResult>) -> Unit,
     onStoreComplete: suspend (String) -> Unit,
-    // Called on the IO thread when a 429 is encountered; receives the base URL and
-    // the number of cards being searched so the caller can persist a throttle rule.
-    onCfBlocked: ((baseUrl: String, cardCount: Int) -> Unit)? = null,
+    // Called on the IO thread when a 429 is encountered; receives the base URL.
+    onCfBlocked: ((baseUrl: String) -> Unit)? = null,
     // Requested quantity per card; absent cards default to 1. Threaded down to the searcher so
     // platforms with an expensive stock-quantity probe (Shopify/WooCommerce/BigCommerce) can skip
     // it entirely for qty=1 -- any available listing already satisfies a single-copy need
@@ -508,7 +446,7 @@ suspend fun checkStore(
                                         detail,
                                     )
                                 }
-                                onCfBlocked?.invoke(url, cards.size)
+                                onCfBlocked?.invoke(url)
                             },
                         ) { searcher(client, baseUrl, card, qty) }
                         if (hits.isEmpty()) listOf(SearchResult(
@@ -568,34 +506,20 @@ suspend fun runSearch(
     cfBlockedMutex.withLock { cfBlockedStores.clear() }
     errorLogMutex.withLock { loggedApiErrors.clear() }
 
-    // Holistic classification (see SearchClassifier): replaces the old isLargeSearch/baseTier +
-    // separate mayProbeStock split with one weighted request-volume estimate that already accounts
-    // for quantity-probing's extra cost, not a bolted-on boolean checked after the fact. Drives both
-    // the base governance tier below and the cross-store start stagger further down.
+    // Holistic classification (see SearchClassifier): one weighted request-volume estimate that
+    // already accounts for quantity-probing's extra cost. `category` still drives the cross-store
+    // start stagger below and the pre-search explainer dialog gating (SearchViewModel); the actual
+    // per-request delay is now driven directly off `totalWeight` (see SizeScaledThrottle) rather
+    // than a coarse tier -- and applies unconditionally, not gated behind per-store block history.
     val estimate = SearchClassifier.classify(cards, cardQuantities, stores)
     val category = estimate.category
-    val baseTier = when (category) {
-        SearchCategory.SMALL  -> 1
-        SearchCategory.MEDIUM -> 2
-        SearchCategory.LARGE  -> 3
-    }
-
-    // Only searches that actually request more than 1 copy of something ever trigger a
-    // cart-mutation stock probe (see checkStore's qty computation) -- the overwhelmingly common
-    // plain search (every card at qty=1) never sends one, so it should keep its normal browsing
-    // concurrency rather than being pre-emptively serialized "just in case." This answers a
-    // narrower question than `category` (whether a host needs a combined budget at all, vs. how
-    // strict governance should be overall) -- kept separate on purpose, not folded together.
-    val mayProbeStock = cardQuantities.values.any { it > 1 }
 
     traceReset(
         "runSearch: ${cards.size} card(s) x ${stores.size} store(s), weight=${estimate.totalWeight}, " +
-            "category=$category, baseTier=$baseTier, mayProbeStock=$mayProbeStock",
+            "category=$category, delayMs=${SizeScaledThrottle.delayForWeight(estimate.totalWeight)}",
     )
 
-    val cfRules = loadActiveCfThrottleRules()
     val hostProfiles = mutableMapOf<String, ThrottleProfile>()
-    val cartProfiles = mutableMapOf<String, ThrottleProfile>()
     for (baseUrl in stores.values) {
         val platform = KNOWN_PLATFORMS[baseUrl] ?: Platform.SHOPIFY
         if (platform == Platform.BROWSER || platform == Platform.UNKNOWN || platform == Platform.UNREACHABLE)
@@ -604,24 +528,13 @@ suspend fun runSearch(
         // domain — throttle that host directly rather than the (never-requested) store host.
         val host = if (platform == Platform.UNTAPPED_API) UNTAPPED_SUPABASE_HOST
                    else extractHost(baseUrl) ?: continue
-        val rule = cfRules[baseUrl]
-        val tier = if (rule == null) baseTier else maxOf(baseTier, rule.tierFor(category))
-        hostProfiles[host] = ThrottleProfile.forTierAndPlatform(tier, platform)
-        // Only Shopify/WooCommerce ever send a cart-mutation stock probe (see CART_MUTATION_ATTR
-        // usages in Searchers.kt), and only when this search actually has a qty>1 card somewhere.
-        // Only give those hosts a cart profile in that case -- a host with a cart profile entry
-        // shares one combined, fully-serialized budget across browsing and cart-mutation traffic
-        // (see PerHostRateLimiter), which is the safety this search needs but a plain qty=1 search
-        // (the common case, never sends a probe at all) shouldn't pay for.
-        if (mayProbeStock && (platform == Platform.SHOPIFY || platform == Platform.WOOCOMMERCE)) {
-            cartProfiles[host] = ThrottleProfile.cartMutationForTier(tier)
-        }
+        hostProfiles[host] = SizeScaledThrottle.profileForWeight(estimate.totalWeight)
     }
     for ((host, profile) in hostProfiles) {
-        traceLog("setup", "$host: browsing=$profile cart=${cartProfiles[host]}")
+        traceLog("setup", "$host: $profile")
     }
 
-    val rateLimiter = PerHostRateLimiter(hostProfiles, cartProfiles)
+    val rateLimiter = PerHostRateLimiter(hostProfiles)
     val client = buildHttpClient(rateLimiter)
 
     val hasBrowserStores = stores.values.any { KNOWN_PLATFORMS[it] == Platform.BROWSER }
@@ -647,10 +560,7 @@ suspend fun runSearch(
                     checkStore(
                         client, name, base, cards, effectiveBrowserSearcher,
                         onProgress, onResults, onStoreComplete,
-                        onCfBlocked = { url, cardCount ->
-                            runCatching { recordCfThrottleBlock(url, cardCount, category) }
-                            onStoreCfBlocked?.invoke(name)
-                        },
+                        onCfBlocked = { onStoreCfBlocked?.invoke(name) },
                         cardQuantities = cardQuantities,
                     )
                 }

@@ -500,8 +500,8 @@ suspend fun searchWooCommerce(client: HttpClient, base: String, card: String, qt
         // WooCommerce's core low-stock-threshold message renders as e.g. "Only 2 left in stock" in
         // this same element -- free when present, but only shows up near the threshold. Otherwise
         // (or if that text isn't there), fall back to the wc-ajax probe for a real number.
-        // The probe (a cart-mutation request, much more strictly throttled -- see
-        // ThrottleProfile.CART_MUTATION) only runs when it can actually change the plan: a qty-1
+        // The probe (a cart-mutation request, throttled via SizeScaledThrottle same as any other
+        // request to this host) only runs when it can actually change the plan: a qty-1
         // need is satisfied by any available listing regardless of its exact stock count.
         val stockQty = WOOCOMMERCE_STOCK_QTY_RE.find(stockEl?.text() ?: "")?.groupValues?.get(1)?.toIntOrNull()
             ?: if (available && productId != null && qty > 1) probeWooCommerceStock(client, base, productId) else null

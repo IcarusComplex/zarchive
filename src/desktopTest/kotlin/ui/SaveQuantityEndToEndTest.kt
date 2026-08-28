@@ -1,6 +1,5 @@
 package ui
 
-import data.CfThrottleRules
 import data.CollectionRows
 import data.DesktopCollectionRepo
 import data.DesktopSearchListRepo
@@ -31,7 +30,7 @@ class SaveQuantityEndToEndTest {
         tempDb.delete()
         Database.connect("jdbc:h2:file:${tempDb.absolutePath};DB_CLOSE_DELAY=-1", driver = "org.h2.Driver")
         transaction {
-            SchemaUtils.create(Settings, SearchLists, SearchListCards, CfThrottleRules, SavedResultSnapshots, CollectionRows)
+            SchemaUtils.create(Settings, SearchLists, SearchListCards, SavedResultSnapshots, CollectionRows)
         }
 
         val vm = SearchViewModel(

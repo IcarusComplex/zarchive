@@ -26,11 +26,4 @@ class PerHostRateLimiterTest {
         assertEquals(5_000L, limiter.maxDelayMs)
     }
 
-    @Test fun `maxDelayMs also considers cart-mutation profiles, not just browsing`() {
-        val limiter = PerHostRateLimiter(
-            hostProfiles = mapOf("a.example.com" to ThrottleProfile(1, 800L)),
-            cartProfiles = mapOf("a.example.com" to ThrottleProfile(1, 20_000L)),
-        )
-        assertEquals(20_000L, limiter.maxDelayMs)
-    }
 }

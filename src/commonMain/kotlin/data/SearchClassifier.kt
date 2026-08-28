@@ -37,9 +37,14 @@ object SearchClassifier {
 
     // Extra weight added only for a card whose requested quantity > 1, at a platform that actually
     // probes stock via a cart-mutation endpoint (see CART_MUTATION_ATTR usages in Searchers.kt).
+    // Treated as platform-agnostic (~5/store) rather than finely differentiated by request count --
+    // this weight now drives an actual delay directly (SizeScaledThrottle), not just a coarse
+    // 3-bucket tier, so under-estimating it is the unsafe direction of error (too little delay) while
+    // over-estimating is merely "waits a bit longer than strictly needed." Shopify's lower candidate
+    // cap doesn't mean each probe is cheaper to Cloudflare, just that there are fewer of them --
+    // recalibrate downward per-platform only once real testing confirms it's safe to.
     private fun probeWeight(platform: Platform): Double = when (platform) {
-        Platform.SHOPIFY -> 2.0                                   // capped candidates (SHOPIFY_PROBE_CANDIDATE_LIMIT) x 1 POST each
-        Platform.WOOCOMMERCE, Platform.WC_STORE_API -> 5.0        // candidates x binary-search POSTs (see WC_PROBE_CANDIDATE_LIMIT/WC_PROBE_MAX_ATTEMPTS)
+        Platform.SHOPIFY, Platform.WOOCOMMERCE, Platform.WC_STORE_API -> 5.0
         else -> 0.0
     }
 
