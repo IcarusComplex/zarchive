@@ -67,16 +67,10 @@ object SizeScaledThrottle {
         SearchCategory.MEDIUM to 1_500L,
         SearchCategory.LARGE  to 4_000L,
     )
-    // Set equal to NO_QUANTITIES_DELAY_MS (requested live, Aug 2026) -- testing whether
-    // maxConcurrent=1 alone (collapsed from 2-3 everywhere, see checkStore/Searchers.kt) is enough
-    // to make quantity-probing searches safe at the same pace as plain searches, now that a probe
-    // and a plain browsing request share the exact same single-slot host queue either way. Kept as
-    // its own map (not merged into one) so the two scales can diverge again in one edit if this
-    // experiment shows probing still needs to be stricter.
     private val WITH_QUANTITIES_DELAY_MS = mapOf(
-        SearchCategory.SMALL  to 500L,
-        SearchCategory.MEDIUM to 1_500L,
-        SearchCategory.LARGE  to 4_000L,
+        SearchCategory.SMALL  to 1_000L,
+        SearchCategory.MEDIUM to 3_000L,
+        SearchCategory.LARGE  to 7_000L,
     )
 
     fun delayFor(category: SearchCategory, hasQuantities: Boolean): Long =
