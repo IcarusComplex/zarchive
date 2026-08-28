@@ -38,40 +38,46 @@ data class ThrottleProfile(val maxConcurrent: Int, val minDelayMs: Long) {
 }
 
 /**
- * Maps a search's total estimated request weight ([SearchClassifier]) directly to a per-request
- * delay, applied to every host from a store's very first request -- regardless of whether that
- * store has ever been blocked before. Replaces the old tier system + per-store `CfThrottleRule`
- * escalation (which only slowed a store down *after* a 429 already happened).
+ * Maps a search's [SearchCategory] (from [SearchClassifier]) directly to a per-request delay,
+ * applied to every host from a store's very first request -- regardless of whether that store has
+ * ever been blocked before. Replaces the old tier system + per-store `CfThrottleRule` escalation
+ * (which only slowed a store down *after* a 429 already happened).
  *
  * Confirmed live (Aug 2026): running every host at `maxConcurrent=1` with a flat 20s delay --
  * applied unconditionally regardless of search size or platform -- produced zero Cloudflare blocks
  * across roughly a dozen repeated runs over ~8.5 hours, spanning both a SMALL search (4 cards x 20
- * stores, weight=178.8) and a LARGE search (83 cards x 20 stores, weight=4942.1, including quantity
- * probing) run to full completion (68 minutes). Every store that had previously blocked earlier in
- * this same investigation, under lighter pacing, completed clean. `maxConcurrent` is fixed at 1
- * everywhere -- that's the only concurrency level actually tested; a smaller delay at higher
- * concurrency has never been validated, so don't reintroduce it without new evidence.
+ * stores) and a LARGE search (83 cards x 20 stores, including quantity probing) run to full
+ * completion (68 minutes). Every store that had previously blocked earlier in this same
+ * investigation, under lighter pacing, completed clean. `maxConcurrent` is fixed at 1 everywhere --
+ * that's the only concurrency level actually tested; a smaller delay at higher concurrency has
+ * never been validated, so don't reintroduce it without new evidence.
  *
- * [SIZE_DELAY_BREAKPOINTS] is the one place to tune "where's the line". Ordered by weight
- * ascending; a given weight uses the LAST breakpoint it meets or exceeds. Only the flat 20s value
- * above is actually confirmed safe by live testing so far -- the breakpoints below (1s/4s/7s,
- * matching SearchClassifier's SMALL_MAX/MEDIUM_MAX thresholds) are an explicit, deliberate
- * experiment (requested live, Aug 2026) to find out whether smaller/medium searches actually need
- * anywhere near 20s, not yet validated themselves. Adjust based on what real runs at each size show.
+ * Two independent delay scales, selected by whether the search includes ANY qty>1 card
+ * (`hasQuantities` -- the same condition that gates a cart-mutation stock probe at all, see
+ * `checkStore`'s qty computation): a search with quantities is already pushed toward a higher
+ * category by `SearchClassifier`'s probe weight, and now *also* uses the stricter of the two scales
+ * within whatever category it lands in -- quantities make a search heavier in both ways at once,
+ * deliberately. Only the flat 20s value above is actually confirmed safe by live testing so far --
+ * every value below is an explicit, deliberate experiment (requested live, Aug 2026) to find out how
+ * much less than 20s each combination actually needs. Adjust based on what real runs show.
  */
 object SizeScaledThrottle {
-    private val SIZE_DELAY_BREAKPOINTS: List<Pair<Double, Long>> = listOf(
-        0.0 to 1_000L,      // SMALL (weight < 500)
-        500.0 to 4_000L,    // MEDIUM (500 <= weight < 1500)
-        1500.0 to 7_000L,   // LARGE (weight >= 1500)
+    private val NO_QUANTITIES_DELAY_MS = mapOf(
+        SearchCategory.SMALL  to 500L,
+        SearchCategory.MEDIUM to 1_500L,
+        SearchCategory.LARGE  to 4_000L,
+    )
+    private val WITH_QUANTITIES_DELAY_MS = mapOf(
+        SearchCategory.SMALL  to 1_000L,
+        SearchCategory.MEDIUM to 3_000L,
+        SearchCategory.LARGE  to 7_000L,
     )
 
-    fun delayForWeight(weight: Double): Long =
-        SIZE_DELAY_BREAKPOINTS.lastOrNull { weight >= it.first }?.second
-            ?: SIZE_DELAY_BREAKPOINTS.first().second
+    fun delayFor(category: SearchCategory, hasQuantities: Boolean): Long =
+        (if (hasQuantities) WITH_QUANTITIES_DELAY_MS else NO_QUANTITIES_DELAY_MS).getValue(category)
 
-    fun profileForWeight(weight: Double): ThrottleProfile =
-        ThrottleProfile(maxConcurrent = 1, minDelayMs = delayForWeight(weight))
+    fun profileFor(category: SearchCategory, hasQuantities: Boolean): ThrottleProfile =
+        ThrottleProfile(maxConcurrent = 1, minDelayMs = delayFor(category, hasQuantities))
 }
 
 // Set on a request's attributes by a searcher (e.g. probeShopifyStock, wcAddToCartSucceeds) to
@@ -509,16 +515,20 @@ suspend fun runSearch(
     errorLogMutex.withLock { loggedApiErrors.clear() }
 
     // Holistic classification (see SearchClassifier): one weighted request-volume estimate that
-    // already accounts for quantity-probing's extra cost. `category` still drives the cross-store
-    // start stagger below and the pre-search explainer dialog gating (SearchViewModel); the actual
-    // per-request delay is now driven directly off `totalWeight` (see SizeScaledThrottle) rather
-    // than a coarse tier -- and applies unconditionally, not gated behind per-store block history.
+    // already accounts for quantity-probing's extra cost. `category` drives the cross-store start
+    // stagger below, the pre-search explainer dialog gating (SearchViewModel), AND (together with
+    // hasQuantities) the per-request delay -- see SizeScaledThrottle. Applies unconditionally, not
+    // gated behind per-store block history.
     val estimate = SearchClassifier.classify(cards, cardQuantities, stores)
     val category = estimate.category
+    // Same condition that gates a cart-mutation stock probe at all (see checkStore's qty
+    // computation) -- selects the stricter of SizeScaledThrottle's two delay scales.
+    val hasQuantities = cardQuantities.values.any { it > 1 }
 
     traceReset(
         "runSearch: ${cards.size} card(s) x ${stores.size} store(s), weight=${estimate.totalWeight}, " +
-            "category=$category, delayMs=${SizeScaledThrottle.delayForWeight(estimate.totalWeight)}",
+            "category=$category, hasQuantities=$hasQuantities, " +
+            "delayMs=${SizeScaledThrottle.delayFor(category, hasQuantities)}",
     )
 
     val hostProfiles = mutableMapOf<String, ThrottleProfile>()
@@ -530,7 +540,7 @@ suspend fun runSearch(
         // domain — throttle that host directly rather than the (never-requested) store host.
         val host = if (platform == Platform.UNTAPPED_API) UNTAPPED_SUPABASE_HOST
                    else extractHost(baseUrl) ?: continue
-        hostProfiles[host] = SizeScaledThrottle.profileForWeight(estimate.totalWeight)
+        hostProfiles[host] = SizeScaledThrottle.profileFor(category, hasQuantities)
     }
     for ((host, profile) in hostProfiles) {
         traceLog("setup", "$host: $profile")

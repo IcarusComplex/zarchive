@@ -1,33 +1,36 @@
 package engine
 
+import data.SearchCategory
 import kotlin.test.*
 
 // SizeScaledThrottle replaces the old tier/CfThrottleRule escalation system (Aug 2026): the delay
-// is derived directly from a search's estimated request weight, applied unconditionally from a
-// store's first request. See its doc comment in SearchEngine.kt for the live evidence behind this.
+// is derived from a search's SearchCategory plus whether it includes any quantity probing, applied
+// unconditionally from a store's first request. See its doc comment in SearchEngine.kt for the live
+// evidence and reasoning behind the two-scale split.
 class SizeScaledThrottleTest {
 
-    @Test fun `weight below the first breakpoint uses that breakpoint's delay`() {
-        assertEquals(1_000L, SizeScaledThrottle.delayForWeight(0.0))
-        assertEquals(1_000L, SizeScaledThrottle.delayForWeight(1.0))
+    @Test fun `no-quantities scale is strictly less than the with-quantities scale, per category`() {
+        for (category in SearchCategory.entries) {
+            val plain = SizeScaledThrottle.delayFor(category, hasQuantities = false)
+            val withQty = SizeScaledThrottle.delayFor(category, hasQuantities = true)
+            assertTrue(plain < withQty, "$category: expected plain ($plain) < withQty ($withQty)")
+        }
     }
 
-    @Test fun `weight exactly at a breakpoint uses it`() {
-        assertEquals(4_000L, SizeScaledThrottle.delayForWeight(500.0))
-        assertEquals(7_000L, SizeScaledThrottle.delayForWeight(1500.0))
+    @Test fun `no-quantities delays increase with category`() {
+        assertEquals(500L, SizeScaledThrottle.delayFor(SearchCategory.SMALL, hasQuantities = false))
+        assertEquals(1_500L, SizeScaledThrottle.delayFor(SearchCategory.MEDIUM, hasQuantities = false))
+        assertEquals(4_000L, SizeScaledThrottle.delayFor(SearchCategory.LARGE, hasQuantities = false))
     }
 
-    @Test fun `weight between two breakpoints uses the lower one`() {
-        assertEquals(1_000L, SizeScaledThrottle.delayForWeight(499.9))
-        assertEquals(4_000L, SizeScaledThrottle.delayForWeight(1499.9))
+    @Test fun `with-quantities delays increase with category`() {
+        assertEquals(1_000L, SizeScaledThrottle.delayFor(SearchCategory.SMALL, hasQuantities = true))
+        assertEquals(3_000L, SizeScaledThrottle.delayFor(SearchCategory.MEDIUM, hasQuantities = true))
+        assertEquals(7_000L, SizeScaledThrottle.delayFor(SearchCategory.LARGE, hasQuantities = true))
     }
 
-    @Test fun `a large weight still resolves to the top breakpoint`() {
-        assertEquals(7_000L, SizeScaledThrottle.delayForWeight(50_000.0))
-    }
-
-    @Test fun `profileForWeight always serializes to a single in-flight request`() {
-        val profile = SizeScaledThrottle.profileForWeight(4_942.1)
+    @Test fun `profileFor always serializes to a single in-flight request`() {
+        val profile = SizeScaledThrottle.profileFor(SearchCategory.LARGE, hasQuantities = true)
         assertEquals(1, profile.maxConcurrent)
         assertEquals(7_000L, profile.minDelayMs)
     }
