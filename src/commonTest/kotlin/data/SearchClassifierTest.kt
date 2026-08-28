@@ -22,7 +22,7 @@ class SearchClassifierTest {
             "B" to "https://b-shopify.example.com",
             "C" to "https://c-shopify.example.com",
         )
-        val estimate = SearchClassifier.classify(cards(60), emptyMap(), threeShopifyStores)
+        val estimate = SearchClassifier.classify(cards(200), emptyMap(), threeShopifyStores)
         assertEquals(SearchCategory.MEDIUM, estimate.category)
     }
 
@@ -32,7 +32,7 @@ class SearchClassifierTest {
             "B" to "https://b-shopify.example.com",
             "C" to "https://c-shopify.example.com",
         )
-        val estimate = SearchClassifier.classify(cards(200), emptyMap(), threeShopifyStores)
+        val estimate = SearchClassifier.classify(cards(600), emptyMap(), threeShopifyStores)
         assertEquals(SearchCategory.LARGE, estimate.category)
     }
 

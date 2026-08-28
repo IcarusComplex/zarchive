@@ -15,36 +15,38 @@ data class SearchWeightEstimate(val totalWeight: Double, val category: SearchCat
  * WooCommerce/BigCommerce make roughly one) and by whether quantity-probing will add cart-mutation
  * requests on top (only for cards with `qty > 1`, only on platforms that actually probe stock).
  *
- * This holistic weight is what [runSearch][engine] uses to pick a base governance tier (SMALL=1,
- * MEDIUM=2, LARGE=3) and a cross-store start stagger -- see `SearchEngine.kt`'s `StaggerProfile`.
+ * This holistic weight is what [runSearch][engine] uses to pick a per-request delay
+ * (`SizeScaledThrottle`) and drives `SearchCategory`, which separately governs the cross-store
+ * start stagger (`SearchEngine.kt`'s `StaggerProfile`) and the pre-search explainer dialog.
  *
- * Thresholds are a documented starting estimate (same posture as `ThrottleProfile`'s constants),
- * not empirically tuned -- confirmed live (Aug 2026): a full 19-store roster with no quantity
- * probing lands MEDIUM around 12 cards and LARGE around 35 cards; the historical "17-card + one 30x"
- * incident that triggered wide rate-limiting lands in MEDIUM. Revisit against real trace-log data.
+ * Weights are 1 per (card, store) for plain browsing -- reset from earlier, higher per-platform
+ * guesses (Aug 2026, live direction): a plain card search is "one search per store," so 40 cards x
+ * 20 stores is weight 800, not inflated by counting a platform's own internal request fan-out (e.g.
+ * Shopify's candidate handle.js fetches) on top. With `SMALL_MAX`=500/`MEDIUM_MAX`=1500, a full
+ * 19-store roster with no quantity probing lands MEDIUM around 26 cards and LARGE around 79 cards.
  */
 object SearchClassifier {
     // Estimated Ktor-level HTTP requests per (card, store) pair for ordinary browsing.
     // BROWSER (Playwright/WebView) stores never touch the per-host rate limiter -- 0 weight.
+    // Reset to 1 per store, per explicit direction (Aug 2026): a plain card search is "one search
+    // per store" at the level this weight should reason about -- 40 cards x 20 stores is 800 search
+    // calls, not inflated by counting Shopify's own internal candidate-fetch fan-out on top.
     private fun browsingWeight(platform: Platform): Double = when (platform) {
-        Platform.SHOPIFY -> 3.0                                  // suggest.json + ~2 candidate handle.js fetches
-        Platform.WOOCOMMERCE, Platform.WC_STORE_API -> 1.3       // usually 1 request, sometimes +1 product page
-        Platform.BIGCOMMERCE -> 1.0
-        Platform.PRESTASHOP -> 1.5                                // search + product-page fetch for cart token
-        Platform.UNTAPPED_API, Platform.OPENCART, Platform.WARREN_API -> 1.0
+        Platform.SHOPIFY, Platform.WOOCOMMERCE, Platform.WC_STORE_API, Platform.BIGCOMMERCE,
+        Platform.PRESTASHOP, Platform.UNTAPPED_API, Platform.OPENCART, Platform.WARREN_API -> 1.0
         Platform.BROWSER, Platform.UNKNOWN, Platform.UNREACHABLE -> 0.0
     }
 
     // Extra weight added only for a card whose requested quantity > 1, at a platform that actually
     // probes stock via a cart-mutation endpoint (see CART_MUTATION_ATTR usages in Searchers.kt).
-    // Treated as platform-agnostic (~5/store) rather than finely differentiated by request count --
+    // Treated as platform-agnostic (~7/store) rather than finely differentiated by request count --
     // this weight now drives an actual delay directly (SizeScaledThrottle), not just a coarse
     // 3-bucket tier, so under-estimating it is the unsafe direction of error (too little delay) while
     // over-estimating is merely "waits a bit longer than strictly needed." Shopify's lower candidate
     // cap doesn't mean each probe is cheaper to Cloudflare, just that there are fewer of them --
     // recalibrate downward per-platform only once real testing confirms it's safe to.
     private fun probeWeight(platform: Platform): Double = when (platform) {
-        Platform.SHOPIFY, Platform.WOOCOMMERCE, Platform.WC_STORE_API -> 5.0
+        Platform.SHOPIFY, Platform.WOOCOMMERCE, Platform.WC_STORE_API -> 7.0
         else -> 0.0
     }
 
