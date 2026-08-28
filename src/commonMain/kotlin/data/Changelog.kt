@@ -46,6 +46,10 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Diagnostics entries now include the full response detail (headers and body) for API errors and Cloudflare backoffs, not just a generic message.",
         "Reduced rate-limiting on large multi-quantity searches on Shopify/WooCommerce stores by combining a store's regular browsing traffic and its stock-count checks into one shared, paced queue instead of two independent ones that could add up to more requests than the store allows.",
     ),
+    "1.1.22" to listOf(
+        "Redesigned how searches are paced to avoid getting rate-limited by stores. Pacing is now based on a search's size (and whether it includes quantities, e.g. \"20x Card Name\") from the very first request, instead of only slowing down after a store had already blocked you.",
+        "Added an explainer before a larger search starts, letting you know it'll take longer and why -- plus what to do if you hit a rate limit (wait about 10 minutes, or a few hours if it persists).",
+    ),
 )
 
 /**
