@@ -50,6 +50,13 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Redesigned how searches are paced to avoid getting rate-limited by stores. Pacing is now based on a search's size (and whether it includes quantities, e.g. \"20x Card Name\") from the very first request, instead of only slowing down after a store had already blocked you.",
         "Added an explainer before a larger search starts, letting you know it'll take longer and why -- plus what to do if you hit a rate limit (wait about 10 minutes, or a few hours if it persists).",
     ),
+    "1.1.23" to listOf(
+        "New \"Balanced\" order strategy, alongside Cheapest total and Fewest packages: it counts about R110 delivery per store on top of card prices and finds the cheapest all-in combination, so a cheaper card only wins if it beats the extra parcel it would add. The totals row shows the delivery estimate and the all-in figure.",
+        "The \"Not fully available\" list now says why each card is missing -- out of stock, a store that didn't answer, or a pinned listing that isn't in stock -- instead of just listing names. A card that's only missing because a store timed out or was rate-limited is now obvious, and re-running the search usually fixes it.",
+        "Fixed pinned listings and excluded cards leaking between searches: a version pinned for a card in one list no longer silently applies to a completely different search, where it could make a card look unavailable even though several stores had it in stock.",
+        "Fixed listings from stores that report zero copies on hand showing as \"In Stock\" while being quietly skipped by the order lists -- they're now correctly marked out of stock.",
+        "Search results and order lists now show the number of copies a card's group asked for (e.g. x4) and each listing's stock count where the store reports one, so it's clear why a card was split across shops.",
+    ),
 )
 
 /**
