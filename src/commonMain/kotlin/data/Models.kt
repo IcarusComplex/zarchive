@@ -17,6 +17,35 @@ data class SearchResult(
     val stockQty: Int? = null,     // per-listing stock count when the store exposes one; null = unknown/unlimited
 )
 
+/**
+ * Label for a listing's [SearchResult.stockQty] -- how many copies the store itself says it has on
+ * hand. Shared so desktop and Android word it identically. Both only render it when the count is
+ * non-null: most platforms only report or probe a count when the search asked for more than one
+ * copy (see SearchEngine.checkStore), so an unknown count is never shown as a number.
+ */
+fun stockCountLabel(qty: Int): String = "$qty available"
+
+/**
+ * The note on a title-less row meaning "this store answered, and doesn't have it" -- as opposed to
+ * an error/timeout/rate-limit note, which means we never got an answer at all. The order plan
+ * relies on that distinction to tell "nobody stocks this card" apart from "we didn't finish
+ * asking" (see `OrderOptimizer.cardEvidence`), so it's one shared constant rather than a literal
+ * repeated at every producer and consumer.
+ */
+const val NOTE_NOT_STOCKED = "not stocked"
+
+/**
+ * Reconciles a listing whose store reports zero copies on hand: that's out of stock, whatever the
+ * search/suggest payload claimed. Shopify's cart probe (".. is already sold out" -> 0) and
+ * BigCommerce's `"available_to_sell":0` both return a real 0 while the product still looks
+ * available in the search payload it came from. Left as-is such a row renders as "In Stock --
+ * 0 available" and is then silently skipped by the order optimizer (which can take 0 copies from
+ * it), so the card lands in "Not fully available" with no visible reason. Applied centrally in
+ * `SearchEngine.checkStore`, so every platform's rows agree on what 0 means.
+ */
+fun SearchResult.reconcileZeroStock(): SearchResult =
+    if (stockQty == 0) copy(available = false, stockQty = null, note = "Out of stock") else this
+
 
 enum class Platform { SHOPIFY, WOOCOMMERCE, WC_STORE_API, OPENCART, BIGCOMMERCE, PRESTASHOP, WARREN_API, UNTAPPED_API, BROWSER, UNKNOWN, UNREACHABLE }
 

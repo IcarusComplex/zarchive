@@ -205,9 +205,48 @@ These were the hard-won fixes — keep them:
     - **Fewest packages:** greedy set-cover picking the smallest set of stores covering every available
       card (tie-break: cheaper combined price for newly-covered cards), then each card sourced from the
       cheapest *picked* store. Minimises number of orders, price aside.
+    - **Balanced (`balancedPlan`):** minimises `cards + delivery`, charging `DEFAULT_DELIVERY_ZAR`
+      (R110) per store in the plan — the middle of the other two (delivery 0 ≡ cheapest, delivery
+      huge ≡ fewest). This is uncapacitated facility location; it's solved **exactly**, not greedily:
+      pinned + `essentialStores` are forced into every answer, a steepest-descent drop from
+      "everything open" sets the incumbent, then a branch-and-bound over the optional stores prunes
+      on `delivery × storesSoFar + cheapest card spend still reachable in this branch`. Store sets
+      are `Long` bitmasks and the per-node card scan is allocation-free — it recomputes inside
+      `derivedStateOf` on every streamed row, so the set-based first cut (5.1 s on 83 cards × 20
+      stores) was unusable; the current one is ~7 ms, guarded by `BalancedPlanPerfTest`.
+      `BalancedPlanTest` cross-checks optimality against an exhaustive 2^n sweep on 60 random
+      instances — keep that test if the search is ever tuned further.
+      **Pins:** the pinned listing's store is forced open, so its parcel is a fixed cost the rest of
+      the plan optimises around (matches "the pinned version is fixed"). **Coverage first:** all
+      three strategies buy every copy the full store set could supply, so `uncoveredCards` means the
+      same thing in each — a subset that covers less is rejected outright rather than looking cheap.
   `OrderListsPane` has a strategy toggle, a totals row (`PlanStat`), a `StoreOrderCard` per store
   (header opens the store, each `OrderLineRow` opens the listing), and an `UncoveredCard` listing
   cards not in stock anywhere. `STORES[store]` supplies the per-store header URL.
+- **Why a card is uncovered (`ShortfallReason`):** "unavailable" used to collapse four different
+  situations into one bare card name, which made a transient store failure indistinguishable from a
+  card nobody stocks (this cost a long debug session — Sept 2026). `OrderShortfall` now carries
+  `reason` + the evidence behind it (`erroredStores`, `listingsSeen`), computed from the **raw**
+  results (the rows `inStockOnly()` discards are exactly the interesting ones):
+    - `PINNED_UNAVAILABLE` — a pin is set and its URL isn't among the card's in-stock rows. A pin
+      means "source here only", so `candidatePool` returns an empty pool; without this reason the
+      card looks identical to one no store has.
+    - `INCOMPLETE` — ≥1 store left a title-less row with an error note (≠ `NOTE_NOT_STOCKED`), i.e.
+      we never got an answer. Wins over `OUT_OF_STOCK` because "re-run it" is the useful advice.
+    - `OUT_OF_STOCK` / `NOT_STOCKED` / `PARTIAL` (found > 0). `shortfallReasonLabel` (common) is the
+      single source of the wording both UIs render; only `NOT_STOCKED` returns null (bare name).
+- **Zero stock is out of stock (`SearchResult.reconcileZeroStock`, applied in `checkStore`):**
+  Shopify's sold-out cart probe and BigCommerce's `"available_to_sell":0` return a real `0` while
+  the search payload still says available. Such a row rendered as "In Stock — 0 available" and was
+  then silently skipped by `consume` (which can take 0 from it). Normalised once, centrally, to
+  `available=false` / `stockQty=null`.
+- **Order state is scoped to the card set (`SearchViewModel.dropOrderStateOutsideCardSet`):**
+  `executeSearch` clears results/images/store state but used to leave `pinnedListings`,
+  `excludedCards` and `uncheckedOrderLines` untouched (only `clearAll()` reset them), so a pin from
+  an earlier list silently governed the next search. Pins/exclusions are now kept only for cards in
+  the new list (re-searching the same list keeps its choices); unchecked lines are keyed by listing
+  URL and always dropped. `searchAdditional`/`refreshUnavailable` deliberately keep everything —
+  they extend the existing result set rather than replace it.
 
 ## Design system — "Arcane Market Ledger"
 

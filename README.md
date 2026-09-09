@@ -83,7 +83,7 @@ Thoughtseize
 
 ### Pasting a decklist
 
-ZArchive understands standard decklist format. Paste directly from MTGO, Moxfield, or any deck builder — quantity prefixes are stripped automatically:
+ZArchive understands standard decklist format. Paste directly from MTGO, Moxfield, or any deck builder — a quantity prefix is stripped from the card name and kept as the number of copies you want:
 
 ```
 4x Lightning Bolt
@@ -101,11 +101,15 @@ Results are grouped per card. Each group shows:
 |---|---|
 | **Name & Set** | The store's listing title (may include edition or condition) |
 | **Store** | Which shop stocks it |
-| **Status** | In Stock (green) or Out of Stock (dimmed) |
+| **Status** | In Stock (green) or Out of Stock (dimmed), plus how many copies the store has when it reports a number |
 | **Price** | Listed price in ZAR |
 | **Action** | Opens the listing in your browser |
 
 In Stock and Out of Stock listings are split into separate tables. Click any row to open the product page. Hovering a thumbnail shows a larger card art preview.
+
+### Quantities
+
+If you asked for more than one copy of a card, that card's group header shows the number you want (e.g. **×4**), and any listing whose store reports a stock count shows it next to the listing (e.g. **2 available**). Not every store publishes a count, and for single-copy requests ZArchive deliberately skips the extra stock check — any in-stock listing already covers a one-copy need — so a listing with no count shown simply means "in stock, exact number unknown".
 
 ### Card Summary panel
 
@@ -115,10 +119,23 @@ A collapsible **Card Summary** panel above the results shows at a glance which c
 
 Switch to the **Order Lists** tab to see two buying plans (populated once you've run a search):
 
-- **Cheapest total** — picks the cheapest in-stock listing for each card, grouped by store. Best when price is everything.
+- **Cheapest total** — picks the cheapest in-stock listing for each card, grouped by store. Best when price is everything, and ignores what the extra parcels cost you.
+- **Balanced** — the lowest *all-in* cost: it counts about **R110 delivery per store** on top of card prices, so a cheaper card only wins if it beats the extra parcel it would add. Usually the one you actually want. The totals row shows the delivery estimate and the all-in figure alongside the card total.
 - **Fewest packages** — covers your full list from the smallest number of stores. Best when you want to minimise shipping costs.
 
-Each plan shows the total cost and flags any cards not available anywhere. Click a store name to open its homepage; click a listing row to open the product page. An **Exclude owned** toggle above the tabs drops any card already in your [imported collection](#collection-import) from both plans.
+All three buy exactly the same cards — they only disagree about which store each one comes from, so the **Not fully available** list is identical whichever you pick. R110 is a flat estimate, not a quote: real courier fees vary by store, basket size and whether they run free delivery over some threshold.
+
+Each line shows how many copies to buy from that store (**×2**) alongside that listing's stock count where the store reports one, so it's clear why a card was split across shops. Each plan shows the total cost and, at the bottom, a **Not fully available** panel listing anything it couldn't source — each card with the reason next to it:
+
+- **(out of stock)** — stores list the card, but every listing is sold out.
+- **(1 store didn't answer)** — that store timed out or rate-limited us, so its stock is genuinely unknown. Re-run the search before treating the card as unavailable.
+- **(pinned listing unavailable)** — you pinned a specific listing for that card ("Use this version" on a results row) and it isn't in stock right now. Tick **Top up pinned shortfalls elsewhere** to let the plan buy the rest from other stores.
+- **(2 of 4 found)** — the plan already includes a partial buy; it just couldn't reach the quantity you asked for.
+- No reason shown — no store returned that card at all.
+
+Click a store name to open its homepage; click a listing row to open the product page. An **Exclude owned** toggle above the tabs drops any card already in your [imported collection](#collection-import) from both plans.
+
+Pins and per-card exclusions stay with the cards they belong to: re-running the same list keeps them, and searching a different list starts clean rather than carrying them over.
 
 ### Saved Lists & Results
 
@@ -314,6 +331,9 @@ Art is fetched from Scryfall and cached locally. Check your internet connection.
 
 **"The Order Lists tab is empty"**
 It populates once you've run at least one search — there's nothing to build a buying plan from before that.
+
+**"A card I can see in the search results isn't in the buying plan"**
+Check the **Not fully available** panel at the bottom of the Order Lists tab — it now says why next to each card. The two that surprise people: **(N stores didn't answer)** means a store was rate-limited or timed out for that card, so re-running the search usually fixes it; **(pinned listing unavailable)** means a listing you pinned for that card is out of stock, and the plan won't substitute another one unless **Top up pinned shortfalls elsewhere** is ticked.
 
 **"Prices look wrong"**
 ZArchive pulls prices directly from each store at search time. If a price looks off, click the row to open the store's own product page and verify.

@@ -68,6 +68,7 @@ import ui.theme.OutlineVariant
 import ui.theme.Primary
 import ui.theme.SurfaceContainerHighest
 import ui.theme.SurfaceContainerLow
+import ui.theme.Tertiary
 
 // Ported from ui/App.kt's CardThumbnail/ShimmerOverlay/CardImagePopup (desktop) — the hover-driven
 // popup is replaced here with an explicit tap: tapping a thumbnail invokes [onTap] (wired by the
@@ -263,6 +264,11 @@ fun CardDetailModal(
             Text(result.setHint, fontSize = 12.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), textAlign = TextAlign.Center)
         }
         Text(result.store, fontSize = 13.sp, fontWeight = FontWeight.Medium, color = OnSecondaryContainer)
+        // This modal is what a tap opens from both a search-result listing and an order-list line,
+        // so it carries the store's stock count too when the store reports one.
+        result.stockQty?.takeIf { result.available != false }?.let { stock ->
+            Text(data.stockCountLabel(stock), fontSize = 12.sp, fontFamily = Mono, color = Tertiary)
+        }
         Text(
             text = result.priceZar?.let { formatZar(it) } ?: "N/A",
             fontFamily = Mono,

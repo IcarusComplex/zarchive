@@ -401,9 +401,9 @@ suspend fun checkStore(
                     val hits = browserSearcher.search(baseUrl, card)
                     if (hits.isEmpty()) listOf(SearchResult(
                         store = storeName, card = card, title = null,
-                        priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                        priceZar = null, available = null, url = baseUrl, note = NOTE_NOT_STOCKED,
                     ))
-                    else hits.map { it.copy(store = storeName) }
+                    else hits.map { it.copy(store = storeName).reconcileZeroStock() }
                 } catch (e: Exception) {
                     listOf(SearchResult(
                         store = storeName, card = card, title = null,
@@ -463,9 +463,9 @@ suspend fun checkStore(
                         ) { searcher(client, baseUrl, card, qty) }
                         if (hits.isEmpty()) listOf(SearchResult(
                             store = storeName, card = card, title = null,
-                            priceZar = null, available = null, url = baseUrl, note = "not stocked",
+                            priceZar = null, available = null, url = baseUrl, note = NOTE_NOT_STOCKED,
                         ))
-                        else hits.map { it.copy(store = storeName) }
+                        else hits.map { it.copy(store = storeName).reconcileZeroStock() }
                     } catch (e: Exception) {
                         // The Cloudflare-block case is already logged once above, via onCfBlocked --
                         // don't double-log it here for every card that fast-fails against a store

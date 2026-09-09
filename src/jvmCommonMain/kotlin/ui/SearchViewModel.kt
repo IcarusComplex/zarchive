@@ -1319,6 +1319,7 @@ class SearchViewModel(
         searchJob?.cancel()
         results.clear()
         images.clear()
+        dropOrderStateOutsideCardSet(cards)
         completedStores = 0
         completedCardChecks = 0
         totalCardChecks = cards.size * storesToSearch.size
@@ -1335,6 +1336,27 @@ class SearchViewModel(
         if (autoOpenLuckshack) openLuckshackSearches(cards)
 
         launchCardSearch(cards, storesToSearch)
+    }
+
+    /**
+     * Drops the order-list state that belongs to the result set a fresh search is replacing.
+     * `executeSearch` clears results/images/store state, but pins, per-card exclusions and
+     * unchecked lines used to survive into the next search untouched (only [clearAll] cleared
+     * them), so a pin made for a card in an earlier list silently governed the new search too:
+     * `OrderOptimizer.candidatePool` considers *only* the pinned listing, so a pin whose URL isn't
+     * in the new results empties that card's candidate pool and the card reads as "not available
+     * anywhere" -- with nothing on screen pointing at the pin as the cause.
+     *
+     * Scoped to the new card set rather than wiped outright: re-searching the same list (the
+     * common case) keeps its "Use this version" choices and its excluded cards, while searching a
+     * different list starts clean. Unchecked lines are keyed by *listing URL*, all of which belong
+     * to the results just cleared, so they go entirely.
+     */
+    internal fun dropOrderStateOutsideCardSet(cards: List<String>) {
+        val keep = cards.toSet()
+        pinnedListings.keys.filterNot { it in keep }.forEach { pinnedListings.remove(it) }
+        excludedCards.keys.filterNot { it in keep }.forEach { excludedCards.remove(it) }
+        uncheckedOrderLines.clear()
     }
 
     // Shared launcher for search()/searchAdditional()/refreshUnavailable() — all three only

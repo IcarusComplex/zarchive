@@ -403,6 +403,7 @@ fun AndroidApp(
                                     onOpenUrl = platformActions::openUrl,
                                     onCardTap = { detailResultAllowPin = true; detailResult = it },
                                     owned = ownedCards.ownsCard(card),
+                                    wantedQty = vm.cardQuantities[card] ?: 1,
                                 )
                                 Spacer(Modifier.height(12.dp))
                             }

@@ -58,6 +58,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import data.NOTE_NOT_STOCKED
 import data.SearchResult
 import data.preferExactMatches
 import ui.theme.ErrorColor
@@ -215,10 +216,26 @@ private fun ListingCard(
                     Text(subtitle, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    result.store, fontSize = 12.sp, fontWeight = FontWeight.Medium,
-                    color = if (dimmed) OnSurfaceVariant else OnSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        result.store, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+                        color = if (dimmed) OnSurfaceVariant else OnSecondaryContainer,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    // The store's own count of copies on hand, when it reports one. There's no
+                    // per-row status chip here (the group header carries in/out of stock), so this
+                    // sits beside the store name rather than under a chip like desktop's does.
+                    val stock = result.stockQty?.takeIf { result.available != false }
+                    if (stock != null) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            data.stockCountLabel(stock), fontSize = 11.sp, fontFamily = Mono,
+                            color = if (dimmed) OnSurfaceVariant.copy(alpha = 0.7f) else Tertiary,
+                            maxLines = 1,
+                        )
+                    }
+                }
             }
             Spacer(Modifier.width(8.dp))
             Text(
@@ -334,6 +351,7 @@ fun CardSection(
     onOpenUrl: (String) -> Unit,
     onCardTap: (SearchResult) -> Unit,
     owned: Boolean = false,
+    wantedQty: Int = 1,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -344,8 +362,8 @@ fun CardSection(
     }
     val inStock = listings.filter { it.available != false }.sortedByPriceAsc()
     val outOfStock = listings.filter { it.available == false }.sortedByPriceAsc()
-    val notStocked = results.filter { it.title == null && it.note == "not stocked" }.map { it.store }.sorted()
-    val errors = results.filter { it.title == null && it.note != "not stocked" }
+    val notStocked = results.filter { it.title == null && it.note == NOTE_NOT_STOCKED }.map { it.store }.sorted()
+    val errors = results.filter { it.title == null && it.note != NOTE_NOT_STOCKED }
 
     var inStockExpanded by remember { mutableStateOf(true) }
     var outStockExpanded by remember { mutableStateOf(false) }
@@ -372,6 +390,13 @@ fun CardSection(
                     fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false),
                 )
+                // How many copies the list asked for -- the number the per-store counts below have
+                // to be read against. Only shown when it's more than the default single copy.
+                if (wantedQty > 1) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("×$wantedQty", fontSize = 13.sp, fontFamily = Mono,
+                        fontWeight = FontWeight.Bold, color = Primary)
+                }
                 if (owned) {
                     Spacer(Modifier.width(6.dp))
                     Icon(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, modifier = Modifier.size(14.dp))

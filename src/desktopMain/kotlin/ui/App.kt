@@ -71,9 +71,11 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import kotlinx.coroutines.delay
+import data.NOTE_NOT_STOCKED
 import data.SearchResult
 import data.OrderPlan
 import data.StoreOrder
+import data.balancedPlan
 import data.cheapestPlan
 import data.fewestStoresPlan
 import data.preferExactMatches
@@ -3137,6 +3139,7 @@ private fun SearchResultsTab(
                         },
                         onRefresh = { vm.refreshCard(card) },
                         owned = ownedCards.ownsCard(card),
+                        wantedQty = vm.cardQuantities[card] ?: 1,
                     )
                 }
                 item { Spacer(Modifier.height(8.dp)) }
@@ -3546,6 +3549,7 @@ private fun CardSection(
     onToggleExcludeFromOrder: () -> Unit = {},
     onRefresh: () -> Unit = {},
     owned: Boolean = false,
+    wantedQty: Int = 1,
 ) {
     var cardFilter by remember { mutableStateOf("") }
     val cardFilterQ = cardFilter.trim().lowercase()
@@ -3556,8 +3560,8 @@ private fun CardSection(
     }
     val inStock    = listings.filter { it.available != false }.sortedByPrice()
     val outOfStock = listings.filter { it.available == false }.sortedByPrice()
-    val notStocked = results.filter { it.title == null && it.note == "not stocked" }.map { it.store }.sorted()
-    val errors     = results.filter { it.title == null && it.note != "not stocked" }
+    val notStocked = results.filter { it.title == null && it.note == NOTE_NOT_STOCKED }.map { it.store }.sorted()
+    val errors     = results.filter { it.title == null && it.note != NOTE_NOT_STOCKED }
 
     var inStockExpanded  by remember { mutableStateOf(true) }
     var outStockExpanded by remember { mutableStateOf(false) }
@@ -3584,6 +3588,13 @@ private fun CardSection(
                 buildString { append("Matches: \""); append(card); append('"') },
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = OnSurface,
             )
+            // How many copies the list asked for -- the number every per-store stock count below
+            // has to be read against. Only shown when it's more than the default single copy.
+            if (wantedQty > 1) {
+                Spacer(Modifier.width(6.dp))
+                Text("×$wantedQty", fontSize = 14.sp, fontFamily = Mono,
+                    fontWeight = FontWeight.Bold, color = Primary)
+            }
             if (owned) {
                 Spacer(Modifier.width(6.dp))
                 IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 14.dp)
@@ -3888,7 +3899,7 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
                     color = if (dimmed) OnSurfaceVariant else OnSecondaryContainer, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             // Status
-            Box(Modifier.width(COL_STATUS)) { StatusChip(result.available) }
+            Box(Modifier.width(COL_STATUS)) { StatusChip(result.available, result.stockQty) }
             // Price
             Box(Modifier.width(COL_PRICE), contentAlignment = Alignment.CenterEnd) {
                 Text(
@@ -3963,25 +3974,38 @@ private fun ListingRow(result: SearchResult, imagePath: String?, dimmed: Boolean
 }
 
 
+// [stockQty] is the store's own count of copies on hand, when it exposes one. It goes on a second
+// line under the chip rather than inside the chip text so the chip keeps a single stable width.
 @Composable
-private fun StatusChip(available: Boolean?) {
+private fun StatusChip(available: Boolean?, stockQty: Int? = null) {
     val (text, color, filled) = when (available) {
         true  -> Triple("In Stock", Tertiary, true)
         false -> Triple("Sold Out", OnSurfaceVariant, false)
         null  -> Triple("Unknown", OnSurfaceVariant, false)
     }
-    Text(
-        text.uppercase(),
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Bold,
-        letterSpacing = 0.5.sp,
-        color = color,
-        modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
-            .then(if (filled) Modifier.background(color.copy(alpha = 0.1f)) else Modifier)
-            .border(1.dp, if (filled) color.copy(alpha = 0.25f) else OutlineVariant, RoundedCornerShape(4.dp))
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
+    Column {
+        Text(
+            text.uppercase(),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.5.sp,
+            color = color,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .then(if (filled) Modifier.background(color.copy(alpha = 0.1f)) else Modifier)
+                .border(1.dp, if (filled) color.copy(alpha = 0.25f) else OutlineVariant, RoundedCornerShape(4.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+        if (available != false && stockQty != null) {
+            Text(
+                data.stockCountLabel(stockQty),
+                fontSize = 10.sp,
+                fontFamily = Mono,
+                color = OnSurfaceVariant,
+                modifier = Modifier.padding(start = 2.dp, top = 3.dp),
+            )
+        }
+    }
 }
 
 // Cache loaded card art so the same image isn't re-fetched per row.
@@ -4391,7 +4415,20 @@ private fun OrderListsPane(vm: SearchViewModel) {
     fun cardsForPlan() = if (vm.excludeOwnedFromOrders) vm.searchedCards.filterNot { ownedCards.ownsCard(it) } else vm.searchedCards
     val cheapest by remember { derivedStateOf { cheapestPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
     val fewest   by remember { derivedStateOf { fewestStoresPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls) } }
-    val plan = if (strategy == OrderStrategy.CHEAPEST) cheapest else fewest
+    // Only computed when it's the selected strategy: it's the one plan whose cost isn't a single
+    // pass over the results (see balancedPlan), so it doesn't need to run on every streamed row
+    // while the user is looking at one of the other two.
+    val balanced by remember {
+        derivedStateOf {
+            if (vm.orderStrategy != OrderStrategy.BALANCED) null
+            else balancedPlan(cardsForPlan(), vm.results.toList(), vm.pinnedListings, vm.includePartialMatches, vm.cardQuantities, vm.topUpPinnedShortfalls)
+        }
+    }
+    val plan = when (strategy) {
+        OrderStrategy.CHEAPEST -> cheapest
+        OrderStrategy.FEWEST   -> fewest
+        OrderStrategy.BALANCED -> balanced ?: cheapest
+    }
 
     val anyInStock = cheapest.storeOrders.isNotEmpty()
 
@@ -4482,6 +4519,15 @@ private fun OrderListsPane(vm: SearchViewModel) {
             PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
             Spacer(Modifier.width(20.dp))
             PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
+            // The number the balanced plan actually minimised, spelled out: "total" above is cards
+            // only (same as every other strategy), so the delivery it traded against has to be
+            // visible or the plan just looks like it picked a worse price.
+            if (plan.deliveryPerStore > 0.0) {
+                Spacer(Modifier.width(20.dp))
+                PlanStat(formatZar(activeStores * plan.deliveryPerStore), "delivery est.")
+                Spacer(Modifier.width(20.dp))
+                PlanStat(formatZar(activeTotal + activeStores * plan.deliveryPerStore), "all-in", valueColor = Primary)
+            }
             if (!vm.isSearching && plan.uncoveredCards.isNotEmpty()) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat(
@@ -4850,9 +4896,20 @@ private fun OrderLineRow(line: data.OrderLine, imagePath: String?, checked: Bool
                         IconTooltip(Icons.Default.CheckCircle, "In your collection", tint = Tertiary, size = 13.dp)
                     }
                 }
-                line.listing.title?.takeIf { it != line.card }?.let {
-                    Text(it, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val listingTitle = line.listing.title?.takeIf { it != line.card }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (listingTitle != null) {
+                        Text(listingTitle, fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.7f),
+                            maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false))
+                    }
+                    // The store's own count for this listing, so it's obvious how much headroom
+                    // the planned quantity is working with (and why a card got split across stores).
+                    line.listing.stockQty?.let { stock ->
+                        if (listingTitle != null) Spacer(Modifier.width(6.dp))
+                        Text(data.stockCountLabel(stock), fontSize = 11.sp, fontFamily = Mono,
+                            color = OnSurfaceVariant.copy(alpha = 0.7f), maxLines = 1)
+                    }
                 }
             }
             Box(Modifier.width(COL_PRICE).alpha(contentAlpha), contentAlignment = Alignment.CenterEnd) {
@@ -4915,13 +4972,25 @@ private fun UncoveredCard(shortfalls: List<data.OrderShortfall>, ownedCards: Set
                 Text("Not fully available (${shortfalls.size})", fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold, color = ErrorColor)
             }
+            // A card here is only genuinely unavailable if every store actually answered for it.
+            // When one didn't, say so up front -- a rate-limited/timed-out store looks exactly like
+            // an out-of-stock one in the plan, and re-running is what fills the gap.
+            if (shortfalls.any { it.reason == data.ShortfallReason.INCOMPLETE }) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Some stores didn't answer for these — re-run the search before treating them as unavailable.",
+                    fontSize = 11.sp, color = OnSurfaceVariant.copy(alpha = 0.8f),
+                )
+            }
             Spacer(Modifier.height(6.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 shortfalls.forEachIndexed { i, shortfall ->
-                    // Fully unavailable cards (found == 0) render as plain names, like before
-                    // quantity existed; partially-covered cards get a "(2 of 4 found)"
-                    // qualifier so it's clear the plan already includes a partial buy.
-                    val label = if (shortfall.found > 0) "${shortfall.card} (${shortfall.found} of ${shortfall.needed} found)" else shortfall.card
+                    // Cards get a "(why)" qualifier -- "2 of 4 found" for a partial buy the plan
+                    // already includes, and for the rest the reason they're missing (out of stock,
+                    // a store that didn't answer, a pinned listing that can't be honoured). Only a
+                    // card no store stocks at all renders as a plain name, like it always did.
+                    val reason = data.shortfallReasonLabel(shortfall)
+                    val label = if (reason != null) "${shortfall.card} ($reason)" else shortfall.card
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             if (i < shortfalls.lastIndex) "$label," else label,

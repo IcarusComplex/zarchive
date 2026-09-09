@@ -67,7 +67,10 @@ class OrderOptimizerTest {
         )
         val plan = cheapestPlan(listOf("Bolt"), results)
         assertTrue(plan.storeOrders.isEmpty())
-        assertEquals(listOf(OrderShortfall("Bolt", needed = 1, found = 0)), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Bolt", needed = 1, found = 0, reason = ShortfallReason.OUT_OF_STOCK, listingsSeen = 1)),
+            plan.uncoveredCards,
+        )
     }
 
     @Test fun `cheapest puts card with no listings in uncovered`() {
@@ -77,6 +80,7 @@ class OrderOptimizerTest {
             listOf(OrderShortfall("Bolt", needed = 1, found = 0), OrderShortfall("Spear", needed = 1, found = 0)),
             plan.uncoveredCards,
         )
+        assertTrue(plan.uncoveredCards.all { it.reason == ShortfallReason.NOT_STOCKED })
     }
 
     @Test fun `cheapest skips null-title placeholder rows`() {
@@ -138,7 +142,10 @@ class OrderOptimizerTest {
             result("Spear", "StoreA", 10.0, available = false),
         )
         val plan = fewestStoresPlan(listOf("Bolt", "Spear"), results)
-        assertEquals(listOf(OrderShortfall("Spear", needed = 1, found = 0)), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Spear", needed = 1, found = 0, reason = ShortfallReason.OUT_OF_STOCK, listingsSeen = 1)),
+            plan.uncoveredCards,
+        )
         assertEquals(1, plan.storeOrders[0].itemCount)
     }
 
@@ -190,7 +197,10 @@ class OrderOptimizerTest {
             result("Bolt", "StoreA", 5.0, stockQty = null),
         )
         val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 26))
-        assertEquals(listOf(OrderShortfall("Bolt", needed = 26, found = 1)), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Bolt", needed = 26, found = 1, reason = ShortfallReason.PARTIAL, listingsSeen = 1)),
+            plan.uncoveredCards,
+        )
         val lines = plan.storeOrders.flatMap { it.lines }
         assertEquals(1, lines.size)
         assertEquals(1, lines[0].qty)
@@ -202,7 +212,10 @@ class OrderOptimizerTest {
             result("Bolt", "StoreB", 8.0, stockQty = 2),
         )
         val plan = cheapestPlan(listOf("Bolt"), results, quantities = mapOf("Bolt" to 5))
-        assertEquals(listOf(OrderShortfall("Bolt", needed = 5, found = 4)), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Bolt", needed = 5, found = 4, reason = ShortfallReason.PARTIAL, listingsSeen = 2)),
+            plan.uncoveredCards,
+        )
         val lines = plan.storeOrders.flatMap { it.lines }
         assertEquals(4, lines.sumOf { it.qty })
     }
@@ -245,7 +258,10 @@ class OrderOptimizerTest {
             quantities = mapOf("Bolt" to 4),
             topUpPinnedShortfalls = false,
         )
-        assertEquals(listOf(OrderShortfall("Bolt", needed = 4, found = 2)), plan.uncoveredCards)
+        assertEquals(
+            listOf(OrderShortfall("Bolt", needed = 4, found = 2, reason = ShortfallReason.PARTIAL, listingsSeen = 2)),
+            plan.uncoveredCards,
+        )
         val lines = plan.storeOrders.flatMap { it.lines }
         assertEquals(1, lines.size)
         assertEquals("StoreA", lines[0].listing.store)
@@ -268,5 +284,107 @@ class OrderOptimizerTest {
         assertEquals(2, lines.size)
         assertEquals(2, lines.first { it.listing.store == "StoreA" }.qty)
         assertEquals(2, lines.first { it.listing.store == "StoreB" }.qty)
+    }
+
+    // ── shortfall reasons ────────────────────────────────────────────────────
+
+    // A store that errored/timed out for a card leaves a title-less row with an error note. That
+    // card isn't "unavailable" -- we never got an answer for it -- and the plan has to say so,
+    // because it's indistinguishable from a genuine out-of-stock in every other respect.
+    @Test fun `store error for a card is reported as incomplete, not unavailable`() {
+        val results = listOf(
+            result("Bolt", "StoreA", null).copy(title = null, note = "[timeout]"),
+            result("Bolt", "StoreB", null).copy(title = null, note = NOTE_NOT_STOCKED),
+        )
+        val plan = cheapestPlan(listOf("Bolt"), results)
+        val shortfall = plan.uncoveredCards.single()
+        assertEquals(ShortfallReason.INCOMPLETE, shortfall.reason)
+        assertEquals(1, shortfall.erroredStores)   // only StoreA; StoreB answered "not stocked"
+        assertEquals("1 store didn't answer", shortfallReasonLabel(shortfall))
+    }
+
+    @Test fun `out-of-stock listings plus a store error report both`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, available = false),
+            result("Bolt", "StoreB", null).copy(title = null, note = "[error: 429]"),
+        )
+        val shortfall = cheapestPlan(listOf("Bolt"), results).uncoveredCards.single()
+        assertEquals(ShortfallReason.INCOMPLETE, shortfall.reason)
+        assertEquals("out of stock, 1 store didn't answer", shortfallReasonLabel(shortfall))
+    }
+
+    // The case that made a pinned card read as "nobody stocks this": the pin can't be honoured
+    // (its listing isn't in stock in these results) so candidatePool is empty, even though other
+    // stores have the card. Still a shortfall -- a pin means "source here only" -- but the panel
+    // now says which.
+    @Test fun `pin that no in-stock listing matches is reported as pinned-unavailable`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, url = "https://example.com/pin", available = false),
+            result("Bolt", "StoreB", 8.0),
+        )
+        val plan = cheapestPlan(
+            listOf("Bolt"), results,
+            pinnedListings = mapOf("Bolt" to "https://example.com/pin"),
+        )
+        assertTrue(plan.storeOrders.isEmpty())
+        val shortfall = plan.uncoveredCards.single()
+        assertEquals(ShortfallReason.PINNED_UNAVAILABLE, shortfall.reason)
+        assertEquals("pinned listing unavailable", shortfallReasonLabel(shortfall))
+    }
+
+    @Test fun `fewest reports pinned-unavailable too`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, url = "https://example.com/pin", available = false),
+            result("Bolt", "StoreB", 8.0),
+        )
+        val plan = fewestStoresPlan(
+            listOf("Bolt"), results,
+            pinnedListings = mapOf("Bolt" to "https://example.com/pin"),
+        )
+        assertEquals(ShortfallReason.PINNED_UNAVAILABLE, plan.uncoveredCards.single().reason)
+    }
+
+    // Topping up rescues the same case: the pin can't be honoured, but the plan buys elsewhere,
+    // so there's no shortfall at all to explain.
+    @Test fun `unhonourable pin with top-up is covered elsewhere`() {
+        val results = listOf(
+            result("Bolt", "StoreA", 5.0, url = "https://example.com/pin", available = false),
+            result("Bolt", "StoreB", 8.0),
+        )
+        val plan = cheapestPlan(
+            listOf("Bolt"), results,
+            pinnedListings = mapOf("Bolt" to "https://example.com/pin"),
+            topUpPinnedShortfalls = true,
+        )
+        assertTrue(plan.uncoveredCards.isEmpty())
+        assertEquals("StoreB", plan.storeOrders.single().store)
+    }
+
+    @Test fun `reason label is null only for a card no store stocks`() {
+        val shortfall = cheapestPlan(listOf("Bolt"), emptyList()).uncoveredCards.single()
+        assertEquals(ShortfallReason.NOT_STOCKED, shortfall.reason)
+        assertNull(shortfallReasonLabel(shortfall))
+    }
+
+    // A listing whose store says it holds zero copies is out of stock, not "in stock with 0
+    // available" -- otherwise the row shows as in stock while consume() can take nothing from it,
+    // and the card silently lands in the uncovered list. reconcileZeroStock is applied in
+    // SearchEngine.checkStore, so the plan only ever sees the reconciled row.
+    @Test fun `zero stock reconciles to out of stock`() {
+        val reconciled = result("Bolt", "StoreA", 5.0, stockQty = 0).reconcileZeroStock()
+        assertEquals(false, reconciled.available)
+        assertNull(reconciled.stockQty)
+        assertEquals("Out of stock", reconciled.note)
+
+        val plan = cheapestPlan(listOf("Bolt"), listOf(reconciled))
+        assertTrue(plan.storeOrders.isEmpty())
+        assertEquals(ShortfallReason.OUT_OF_STOCK, plan.uncoveredCards.single().reason)
+    }
+
+    @Test fun `known-nonzero and unknown stock are both left alone`() {
+        val counted = result("Bolt", "StoreA", 5.0, stockQty = 3)
+        assertEquals(counted, counted.reconcileZeroStock())
+        val uncounted = result("Bolt", "StoreA", 5.0)          // stockQty null = unknown, not zero
+        assertEquals(uncounted, uncounted.reconcileZeroStock())
     }
 }
