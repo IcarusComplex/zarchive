@@ -164,13 +164,25 @@ class BalancedPlanTest {
         assertEquals(ShortfallReason.PINNED_UNAVAILABLE, plan.uncoveredCards.single().reason)
     }
 
-    @Test fun `plan carries the delivery estimate it optimised against`() {
-        val plan = balancedPlan(listOf("Bolt"), listOf(result("Bolt", "StoreA", 10.0)))
-        assertEquals(DEFAULT_DELIVERY_ZAR, plan.deliveryPerStore, 0.001)
-        assertEquals(DEFAULT_DELIVERY_ZAR, plan.deliveryTotal, 0.001)
-        assertEquals(10.0 + DEFAULT_DELIVERY_ZAR, plan.allInTotal, 0.001)
-        // The other two strategies don't price delivery at all.
-        assertEquals(0.0, cheapestPlan(listOf("Bolt"), listOf(result("Bolt", "StoreA", 10.0))).allInTotal - 10.0, 0.001)
+    @Test fun `every strategy carries the same delivery estimate so all-in is comparable`() {
+        val results = listOf(result("Bolt", "StoreA", 10.0))
+        val balanced = balancedPlan(listOf("Bolt"), results)
+        assertEquals(DEFAULT_DELIVERY_ZAR, balanced.deliveryPerStore, 0.001)
+        assertEquals(DEFAULT_DELIVERY_ZAR, balanced.deliveryTotal, 0.001)
+        assertEquals(10.0 + DEFAULT_DELIVERY_ZAR, balanced.allInTotal, 0.001)
+        // The other two don't optimise against delivery, but they do report it -- otherwise the
+        // strategy toggle compares a cards-only total against an all-in one.
+        for (plan in listOf(cheapestPlan(listOf("Bolt"), results), fewestStoresPlan(listOf("Bolt"), results))) {
+            assertEquals(DEFAULT_DELIVERY_ZAR, plan.deliveryPerStore, 0.001)
+            assertEquals(10.0 + DEFAULT_DELIVERY_ZAR, plan.allInTotal, 0.001)
+            assertEquals(10.0, plan.grandTotal, 0.001)
+        }
+    }
+
+    @Test fun `a free-delivery balanced plan reports no delivery at all`() {
+        val plan = balancedPlan(listOf("Bolt"), listOf(result("Bolt", "StoreA", 10.0)), deliveryPerStore = 0.0)
+        assertEquals(0.0, plan.deliveryPerStore, 0.001)
+        assertEquals(10.0, plan.allInTotal, 0.001)
     }
 
     @Test fun `empty results produce an empty plan, not a crash`() {

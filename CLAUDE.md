@@ -233,6 +233,15 @@ These were the hard-won fixes — keep them:
       the plan optimises around (matches "the pinned version is fixed"). **Coverage first:** all
       three strategies buy every copy the full store set could supply, so `uncoveredCards` means the
       same thing in each — a subset that covers less is rejected outright rather than looking cheap.
+    - **Delivery is reported by all three, optimised by one:** `cheapestPlan` / `fewestStoresPlan` /
+      `balancedPlan` all take a `deliveryPerStore` (default `DEFAULT_DELIVERY_ZAR`) and carry it on
+      the returned `OrderPlan`, so `deliveryTotal` / `allInTotal` are populated for every strategy
+      and the totals row renders identically in all three. Only `balancedPlan` *optimises* against
+      it. This is deliberate: the strategy toggle exists to be compared, and comparing a cards-only
+      total against an all-in one is meaningless — cheapest-cards routinely wins on `grandTotal`
+      and loses on `allInTotal`. `balancedPlan`'s two `cheapestPlan` fallbacks (free delivery, and
+      the `BALANCED_MAX_STORES` overflow guard) must pass their own `deliveryPerStore` through, so
+      `balancedPlan(deliveryPerStore = 0.0)` still reports zero delivery.
   `OrderListsPane` has a strategy toggle, a totals row (`PlanStat`), a `StoreOrderCard` per store
   (header opens the store, each `OrderLineRow` opens the listing), and an `UncoveredCard` listing
   cards not in stock anywhere. `STORES[store]` supplies the per-store header URL.

@@ -63,6 +63,9 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
     "1.1.25" to listOf(
         "Large searches are much lighter on the card summary panel. It was re-deriving every listing's card name several times over on every single result that streamed in, which made big searches sluggish and was the likely trigger for a crash some users hit partway through one.",
     ),
+    "1.1.26" to listOf(
+        "Cheapest total and Fewest packages now show the delivery estimate and the all-in figure too, the same way Balanced always has. Only Balanced picks stores to minimise that number, but seeing it on all three lets you compare them properly -- Cheapest total often wins on card prices and loses on all-in by splitting the order across more shops.",
+    ),
 )
 
 /**

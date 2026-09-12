@@ -4515,9 +4515,10 @@ private fun OrderListsPane(vm: SearchViewModel) {
             PlanStat("$activeItems", if (activeItems == 1) "card" else "cards")
             Spacer(Modifier.width(20.dp))
             PlanStat(formatZar(activeTotal), "total", valueColor = Primary)
-            // The number the balanced plan actually minimised, spelled out: "total" above is cards
-            // only (same as every other strategy), so the delivery it traded against has to be
-            // visible or the plan just looks like it picked a worse price.
+            // "total" above is cards only, on every strategy. Spell out the parcel cost and the
+            // all-in figure for all three so they can actually be compared against each other --
+            // cheapest-cards often wins on "total" and loses on "all-in" by ordering from more
+            // stores. Only the balanced plan optimises against this number; the other two report it.
             if (plan.deliveryPerStore > 0.0) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat(formatZar(activeStores * plan.deliveryPerStore), "delivery est.")

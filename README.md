@@ -117,11 +117,13 @@ A collapsible **Card Summary** panel above the results shows at a glance which c
 
 ### Order Lists tab
 
-Switch to the **Order Lists** tab to see two buying plans (populated once you've run a search):
+Switch to the **Order Lists** tab to see three buying plans (populated once you've run a search):
 
 - **Cheapest total** — picks the cheapest in-stock listing for each card, grouped by store. Best when price is everything, and ignores what the extra parcels cost you.
-- **Balanced** — the lowest *all-in* cost: it counts about **R110 delivery per store** on top of card prices, so a cheaper card only wins if it beats the extra parcel it would add. Usually the one you actually want. The totals row shows the delivery estimate and the all-in figure alongside the card total.
+- **Balanced** — the lowest *all-in* cost: it counts about **R110 delivery per store** on top of card prices, so a cheaper card only wins if it beats the extra parcel it would add. Usually the one you actually want.
 - **Fewest packages** — covers your full list from the smallest number of stores. Best when you want to minimise shipping costs.
+
+Every plan's totals row shows the same three figures: the card **total**, the **delivery estimate** (R110 per store in that plan), and the **all-in** figure. Only Balanced actually optimises against delivery — the other two just report it — but showing it on all three is what lets you compare them. Cheapest total often wins on cards and loses on all-in by spreading the order across more shops.
 
 All three buy exactly the same cards — they only disagree about which store each one comes from, so the **Not fully available** list is identical whichever you pick. R110 is a flat estimate, not a quote: real courier fees vary by store, basket size and whether they run free delivery over some threshold.
 

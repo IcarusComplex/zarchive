@@ -74,9 +74,12 @@ data class OrderPlan(
     val storeOrders: List<StoreOrder>,
     val uncoveredCards: List<OrderShortfall>,
     /**
-     * Per-parcel delivery estimate this plan was optimised against (see [balancedPlan]).
-     * 0.0 for plans that ignore delivery entirely, which is what [grandTotal] always excludes --
-     * a store's real courier fee isn't something a search can know.
+     * Per-parcel delivery estimate charged in [deliveryTotal] / [allInTotal]. Every strategy
+     * carries it so the three plans' all-in figures are comparable -- that comparison is the
+     * whole point of the strategy toggle, and "cheapest cards" routinely loses it by spreading
+     * the order over more parcels. Only [balancedPlan] *optimises* against it; the other two
+     * merely report it. [grandTotal] always excludes it -- a store's real courier fee isn't
+     * something a search can know.
      */
     val deliveryPerStore: Double = 0.0,
 ) {
@@ -85,7 +88,7 @@ data class OrderPlan(
     val grandTotal: Double get() = storeOrders.sumOf { it.total }
     /** Estimated delivery across every store in the plan; 0.0 unless [deliveryPerStore] is set. */
     val deliveryTotal: Double get() = storeCount * deliveryPerStore
-    /** Cards plus estimated delivery -- the number [balancedPlan] actually minimises. */
+    /** Cards plus estimated delivery. This is the number [balancedPlan] minimises. */
     val allInTotal: Double get() = grandTotal + deliveryTotal
 }
 
@@ -236,6 +239,7 @@ fun cheapestPlan(
     includePartialMatches: Boolean = false,
     quantities: Map<String, Int> = emptyMap(),
     topUpPinnedShortfalls: Boolean = false,
+    deliveryPerStore: Double = DEFAULT_DELIVERY_ZAR,
 ): OrderPlan {
     val uniqueCards = cards.distinct()
     val rawByCard = results.inStockOnly().groupBy { it.card }
@@ -254,7 +258,7 @@ fun cheapestPlan(
             card, needed, needed - remaining, evidence[card], pinUnhonoured(pin, rawByCard[card]),
         )
     }
-    return OrderPlan(buildStoreOrders(chosen), shortfalls)
+    return OrderPlan(buildStoreOrders(chosen), shortfalls, deliveryPerStore)
 }
 
 /**
@@ -279,6 +283,7 @@ fun fewestStoresPlan(
     includePartialMatches: Boolean = false,
     quantities: Map<String, Int> = emptyMap(),
     topUpPinnedShortfalls: Boolean = false,
+    deliveryPerStore: Double = DEFAULT_DELIVERY_ZAR,
 ): OrderPlan {
     val uniqueCards = cards.distinct()
     val rawByCard = results.inStockOnly().groupBy { it.card }
@@ -348,7 +353,7 @@ fun fewestStoresPlan(
         )
     }
 
-    return OrderPlan(buildStoreOrders(chosen), shortfalls)
+    return OrderPlan(buildStoreOrders(chosen), shortfalls, deliveryPerStore)
 }
 
 // ── Balanced (cards + delivery) ───────────────────────────────────────────────
@@ -494,7 +499,7 @@ fun balancedPlan(
     // Free parcels means there's nothing to trade off -- cheapest-per-card IS the balanced answer,
     // and the search below would have no bound to prune on.
     if (deliveryPerStore <= 0.0) {
-        return cheapestPlan(cards, results, pinnedListings, includePartialMatches, quantities, topUpPinnedShortfalls)
+        return cheapestPlan(cards, results, pinnedListings, includePartialMatches, quantities, topUpPinnedShortfalls, deliveryPerStore)
     }
 
     val uniqueCards = cards.distinct()
@@ -527,8 +532,7 @@ fun balancedPlan(
     // (20 stores); the cheapest plan is the honest fallback, still labelled with the delivery
     // estimate so the UI reports the same all-in figure it would have optimised for.
     if (storeNames.size > BALANCED_MAX_STORES) {
-        return cheapestPlan(cards, results, pinnedListings, includePartialMatches, quantities, topUpPinnedShortfalls)
-            .copy(deliveryPerStore = deliveryPerStore)
+        return cheapestPlan(cards, results, pinnedListings, includePartialMatches, quantities, topUpPinnedShortfalls, deliveryPerStore)
     }
     val storeBit = storeNames.withIndex().associate { (i, name) -> name to (1L shl i) }
     val allMask = storeNames.indices.fold(0L) { m, i -> m or (1L shl i) }

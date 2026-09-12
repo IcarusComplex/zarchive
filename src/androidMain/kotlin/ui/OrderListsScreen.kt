@@ -239,9 +239,10 @@ fun OrderListsScreen(vm: SearchViewModel, onOpenUrl: (String) -> Unit, onImageTa
                 CircularProgressIndicator(Modifier.size(12.dp), color = Primary, strokeWidth = 1.5.dp)
             }
         }
-        // The number the balanced plan actually minimised, spelled out: the "total" stat above is
-        // cards only (same as every other strategy), so the delivery it traded against has to be
-        // visible or the plan looks like it just picked a worse price.
+        // The "total" stat above is cards only, on every strategy. Spell out the parcel cost and
+        // the all-in figure for all three so they can be compared against each other -- cheapest
+        // cards often wins on "total" and loses on "all-in" by ordering from more stores. Only the
+        // balanced plan optimises against this number; the other two report it.
         if (plan.deliveryPerStore > 0.0) {
             Spacer(Modifier.height(4.dp))
             Text(
