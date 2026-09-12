@@ -13,7 +13,7 @@ plugins {
 }
 
 group = "co.za.mtg"
-version = "1.1.24"
+version = "1.1.25"
 
 repositories {
     mavenCentral()

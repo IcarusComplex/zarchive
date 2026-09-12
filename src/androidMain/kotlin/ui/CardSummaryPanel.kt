@@ -30,6 +30,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -38,7 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import data.SearchResult
-import data.preferExactMatches
 import ui.theme.OnSurface
 import ui.theme.OnSurfaceVariant
 import ui.theme.OutlineVariant
@@ -72,11 +72,12 @@ fun CardSummaryPanel(
 ) {
     val filterQ = filter.trim().lowercase()
     val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
-    val foundCount = cards.count { card ->
-        preferExactMatches(card, results.filter { it.card == card && it.title != null }, exactOnly = !includePartialMatches)
-            .any { it.available != false }
+    // One pass over the results per change, not per card per recomposition -- see cardSummaryFacts.
+    val facts = remember(cards, results, includePartialMatches) {
+        data.cardSummaryFacts(cards, results, includePartialMatches)
     }
-    val pendingCount = if (isSearching) cards.count { card -> results.none { it.card == card } } else 0
+    val foundCount = cards.count { facts[it]?.hasInStock == true }
+    val pendingCount = if (isSearching) cards.count { facts[it]?.pending == true } else 0
 
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -132,18 +133,16 @@ fun CardSummaryPanel(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         shownCards.forEach { card ->
-                            val cardResults = results.filter { it.card == card }
-                            val imagePath = preferExactMatches(card, cardResults.filter { it.title != null }, exactOnly = !includePartialMatches)
-                                .mapNotNull { r -> r.title?.let { images[it] } }
-                                .firstOrNull() ?: images[card]
+                            val cardFacts = facts[card]
+                            val imagePath = cardFacts?.titles?.firstNotNullOfOrNull { images[it] } ?: images[card]
                             CardSummaryEntry(
                                 card = card,
-                                results = cardResults,
+                                hasInStock = cardFacts?.hasInStock == true,
+                                hasOutOfStock = cardFacts?.hasOutOfStock == true,
                                 imagePath = imagePath,
                                 isSearching = isSearching,
                                 onClick = { onCardClick(card) },
                                 onImageTap = onImageTap,
-                                includePartialMatches = includePartialMatches,
                                 owned = ownedCards.ownsCard(card),
                             )
                         }
@@ -157,17 +156,14 @@ fun CardSummaryPanel(
 @Composable
 private fun CardSummaryEntry(
     card: String,
-    results: List<SearchResult>,
+    hasInStock: Boolean,
+    hasOutOfStock: Boolean,
     imagePath: String?,
     isSearching: Boolean,
     onClick: () -> Unit,
     onImageTap: (String) -> Unit,
-    includePartialMatches: Boolean,
     owned: Boolean = false,
 ) {
-    val listings = preferExactMatches(card, results.filter { it.title != null }, exactOnly = !includePartialMatches)
-    val hasInStock = listings.any { it.available != false }
-    val hasOutOfStock = !hasInStock && listings.any { it.available == false }
     val (statusText, statusColor) = when {
         hasInStock  -> "Found" to Tertiary
         isSearching -> "…" to OnSurfaceVariant.copy(alpha = 0.35f)

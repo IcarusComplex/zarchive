@@ -112,6 +112,7 @@ val KNOWN_PLATFORMS: Map<String, Platform> = mapOf(
 )
 
 private val PRICE_RE = Regex("""R\s?([\d\s,.]+)""")
+private val EURO_DECIMAL_RE = Regex("""[\d\s.]*\d,\d{2}""")
 
 // SA stores use two formats:
 //   English:  R3,000.00  (comma = thousands sep, dot = decimal)
@@ -120,7 +121,7 @@ private val PRICE_RE = Regex("""R\s?([\d\s,.]+)""")
 // exactly 2 digits. Everything else is treated as English/dot-decimal.
 fun parsePrice(text: String): Double? {
     val raw = PRICE_RE.find(text)?.groupValues?.get(1)?.trim() ?: return null
-    val euroDecimal = raw.matches(Regex("""[\d\s.]*\d,\d{2}"""))
+    val euroDecimal = raw.matches(EURO_DECIMAL_RE)
     return if (euroDecimal) {
         raw.replace(".", "").replace(" ", "").replace(",", ".").toDoubleOrNull()
     } else {
@@ -143,8 +144,10 @@ private val NON_SINGLE_RE = Regex(
 )
 
 // Collapse to a comparable key: lowercase, punctuation → spaces, trimmed.
+private val MATCH_KEY_RE = Regex("[^a-z0-9]+")
+
 private fun matchKey(s: String): String =
-    s.lowercase().replace(Regex("[^a-z0-9]+"), " ").trim()
+    s.lowercase().replace(MATCH_KEY_RE, " ").trim()
 
 /**
  * Among a searched card's candidate listings, prefer the ones whose name matches the query
@@ -168,6 +171,43 @@ fun preferExactMatches(card: String, listings: List<SearchResult>, exactOnly: Bo
     return if (exact.isNotEmpty()) exact else listings
 }
 
+/**
+ * Per-card facts the card-summary panel renders: the exact-match listing titles (image lookup),
+ * whether anything is in/out of stock, and whether the card is still awaiting its first result.
+ *
+ * Exists so the panel computes this **once per results change** instead of once per card per
+ * recomposition. [preferExactMatches] normalises every listing title, and on a large streaming
+ * search the panel recomposes on every arriving row -- doing it inline per entry meant re-running
+ * the whole normalisation over every listing many times a second on the UI thread.
+ */
+class CardSummaryFacts(
+    val titles: List<String>,
+    val hasInStock: Boolean,
+    val hasOutOfStock: Boolean,
+    val pending: Boolean,
+)
+
+fun cardSummaryFacts(
+    cards: List<String>,
+    results: List<SearchResult>,
+    includePartialMatches: Boolean,
+): Map<String, CardSummaryFacts> {
+    val byCard = results.groupBy { it.card }
+    return cards.associateWith { card ->
+        val all = byCard[card].orEmpty()
+        val listings = preferExactMatches(card, all.filter { it.title != null }, exactOnly = !includePartialMatches)
+        val inStock = listings.any { it.available != false }
+        CardSummaryFacts(
+            titles = listings.mapNotNull { it.title },
+            hasInStock = inStock,
+            hasOutOfStock = !inStock && listings.any { it.available == false },
+            pending = all.isEmpty(),
+        )
+    }
+}
+
+private val WORD_SPLIT_RE = Regex("[^a-z']+")
+
 fun isRelevant(card: String, title: String): Boolean {
     if (NON_SINGLE_RE.containsMatchIn(title)) return false
     // Match against the set-name-stripped title, not the raw one — otherwise a query word that
@@ -175,7 +215,7 @@ fun isRelevant(card: String, title: String): Boolean {
     // [Commander Legends: Battle for Baldur's Gate]") falsely satisfies a whole-word check for an
     // unrelated card like "Mystic Gate".
     val t = normalizeCardName(title).lowercase()
-    val words = card.lowercase().split(Regex("[^a-z']+")).filter { it.length > 2 }
+    val words = card.lowercase().split(WORD_SPLIT_RE).filter { it.length > 2 }
     if (words.isEmpty()) return false
     // Whole-word match (not substring) so "Hop to It" → "hop" doesn't match "Hope Thief".
     return words.all { w -> Regex("""\b${Regex.escape(w)}\b""").containsMatchIn(t) }
@@ -189,6 +229,15 @@ internal val NOISE_RE = Regex(
     """double[ -]?sided(?:[ -]?token)?|dfc)\b"""
 )
 
+// Hoisted: normalizeCardNameSingle runs once per listing title, and the card summary re-derives
+// those on every streamed result. Compiling these five patterns per call is ~20% of the function's
+// cost and allocates a Pattern + Matcher per listing per pass -- pure churn for constant patterns.
+private val BRACKET_GROUP_RE = Regex("""\[[^\]]*\]""")
+private val PAREN_GROUP_RE   = Regex("""\([^)]*\)""")
+private val HASH_SLASH_RE    = Regex("""[#/]""")
+private val TRAILING_NUM_RE  = Regex("""\b\d{1,5}\b\s*$""")
+private val WHITESPACE_RE    = Regex("""\s+""")
+
 /**
  * Reduce a messy store listing title to a probable card name for Scryfall lookup.
  * Strips set names in brackets/parens, treatment & condition keywords, collector numbers,
@@ -197,15 +246,15 @@ internal val NOISE_RE = Regex(
  */
 private fun normalizeCardNameSingle(title: String): String {
     var s = title
-    s = s.replace(Regex("""\[[^\]]*\]"""), " ")   // [Set Name]
-    s = s.replace(Regex("""\([^)]*\)"""), " ")    // (PFRF), (Foil), etc.
+    s = s.replace(BRACKET_GROUP_RE, " ")   // [Set Name]
+    s = s.replace(PAREN_GROUP_RE, " ")     // (PFRF), (Foil), etc.
     // "Card Name - Set Name" → keep the part before the first " - "
     val dash = s.indexOf(" - ")
     if (dash > 0) s = s.substring(0, dash)
     s = s.replace(NOISE_RE, " ")
-    s = s.replace(Regex("""[#/]"""), " ")
-    s = s.replace(Regex("""\b\d{1,5}\b\s*$"""), " ")   // trailing collector number
-    s = s.replace(Regex("""\s+"""), " ").trim()
+    s = s.replace(HASH_SLASH_RE, " ")
+    s = s.replace(TRAILING_NUM_RE, " ")    // trailing collector number
+    s = s.replace(WHITESPACE_RE, " ").trim()
     return s.trim(' ', '-', '–', '—', ',', '.', ':', '*')
 }
 

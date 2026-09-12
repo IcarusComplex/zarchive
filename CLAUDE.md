@@ -195,6 +195,19 @@ These were the hard-won fixes — keep them:
 - **Card-summary search field:** `CardSummaryPanel` has an internal `FilterField` ("Find a card in
   the list…") that substring-filters the summary grid by card name. `FilterField` now takes an
   optional `placeholder`.
+- **Card summary is computed once per results change (`data.cardSummaryFacts`):** the panel used to
+  derive each card's exact-match listings *three* times per recomposition (the `foundCount` pass, the
+  image-path pass, and again inside `CardSummaryEntry`), each doing `results.filter { it.card == card }`
+  over the whole result set. On a streaming search that ran on every arriving row — ~19 ms per
+  recomposition on 80 cards × 40 listings, on the UI thread, and it was the frame in a reported
+  `Matcher.reset` NPE crash (Sept 2026). `cardSummaryFacts` now does one `groupBy` + one
+  `preferExactMatches` per card, returning `titles` / `hasInStock` / `hasOutOfStock` / `pending`,
+  and both platforms call it inside `remember(cards, results, includePartialMatches)` — so
+  recompositions driven by anything else (image resolution, hover, filter typing) no longer redo it
+  at all. `CardSummaryEntry` takes the two booleans instead of a `List<SearchResult>`.
+  `CardSummaryFactsPerfTest` guards the cost. The regexes in `normalizeCardNameSingle` / `matchKey` /
+  `isRelevant`'s word split are hoisted to top-level `val`s for the same reason — **don't move them
+  back inside the functions.**
 - **Optimised order lists (`data/OrderOptimizer.kt`):** pure functions `cheapestPlan` and
   `fewestStoresPlan` build an `OrderPlan` (`List<StoreOrder>` of `OrderLine`s + `uncoveredCards`) from
   the current results. Both run **reactively** via `derivedStateOf` over `vm.results` — they recompute

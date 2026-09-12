@@ -4152,11 +4152,12 @@ private fun CardSummaryPanel(
     val summaryFilter = filter
     val filterQ = summaryFilter.trim().lowercase()
     val shownCards = if (filterQ.isEmpty()) cards else cards.filter { it.lowercase().contains(filterQ) }
-    val foundCount = cards.count { card ->
-        preferExactMatches(card, results.filter { it.card == card && it.title != null }, exactOnly = !includePartialMatches)
-            .any { it.available != false }
+    // One pass over the results per change, not per card per recomposition — see cardSummaryFacts.
+    val facts = remember(cards, results, includePartialMatches) {
+        data.cardSummaryFacts(cards, results, includePartialMatches)
     }
-    val pendingCount = if (isSearching) cards.count { card -> results.none { it.card == card } } else 0
+    val foundCount = cards.count { facts[it]?.hasInStock == true }
+    val pendingCount = if (isSearching) cards.count { facts[it]?.pending == true } else 0
 
     Surface(
         shape = RoundedCornerShape(8.dp),
@@ -4252,18 +4253,16 @@ private fun CardSummaryPanel(
                         shownCards.chunked(2).forEach { pair ->
                             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                                 pair.forEach { card ->
-                                    val cardResults = results.filter { it.card == card }
-                                    val imagePath = preferExactMatches(card, cardResults.filter { it.title != null }, exactOnly = !includePartialMatches)
-                                        .mapNotNull { r -> r.title?.let { images[it] } }
-                                        .firstOrNull() ?: images[card]
+                                    val cardFacts = facts[card]
+                                    val imagePath = cardFacts?.titles?.firstNotNullOfOrNull { images[it] } ?: images[card]
                                     CardSummaryEntry(
                                         card = card,
-                                        results = cardResults,
+                                        hasInStock = cardFacts?.hasInStock == true,
+                                        hasOutOfStock = cardFacts?.hasOutOfStock == true,
                                         imagePath = imagePath,
                                         isSearching = isSearching,
                                         modifier = Modifier.weight(1f),
                                         onClick = { onCardClick(card) },
-                                        includePartialMatches = includePartialMatches,
                                         showCardOnHover = showCardOnHover,
                                         owned = ownedCards.ownsCard(card),
                                     )
@@ -4281,12 +4280,12 @@ private fun CardSummaryPanel(
 @Composable
 private fun CardSummaryEntry(
     card: String,
-    results: List<SearchResult>,
+    hasInStock: Boolean = false,
+    hasOutOfStock: Boolean = false,
     imagePath: String? = null,
     isSearching: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
-    includePartialMatches: Boolean = false,
     showCardOnHover: Boolean = false,
     owned: Boolean = false,
 ) {
@@ -4310,9 +4309,6 @@ private fun CardSummaryEntry(
         }
     }
 
-    val listings = preferExactMatches(card, results.filter { it.title != null }, exactOnly = !includePartialMatches)
-    val hasInStock = listings.any { it.available != false }
-    val hasOutOfStock = !hasInStock && listings.any { it.available == false }
     // Don't finalise Out of Stock / Not Found until searching is done — a card that's OOS at
     // one fast store might be in stock at a slower one still running.
     val (statusText, statusColor) = when {

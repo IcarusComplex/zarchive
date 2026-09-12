@@ -60,6 +60,9 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
     "1.1.24" to listOf(
         "Jumping around a long list of results is now instant. Tapping a card in the summary list, or the scroll-to-top button, snaps straight to that position instead of fast-scrolling to it, which took several seconds on big searches.",
     ),
+    "1.1.25" to listOf(
+        "Large searches are much lighter on the card summary panel. It was re-deriving every listing's card name several times over on every single result that streamed in, which made big searches sluggish and was the likely trigger for a crash some users hit partway through one.",
+    ),
 )
 
 /**
