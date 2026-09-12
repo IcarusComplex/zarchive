@@ -57,6 +57,9 @@ val CHANGELOG: Map<String, List<String>> = mapOf(
         "Fixed listings from stores that report zero copies on hand showing as \"In Stock\" while being quietly skipped by the order lists -- they're now correctly marked out of stock.",
         "Search results and order lists now show the number of copies a card's group asked for (e.g. x4) and each listing's stock count where the store reports one, so it's clear why a card was split across shops.",
     ),
+    "1.1.24" to listOf(
+        "Jumping around a long list of results is now instant. Tapping a card in the summary list, or the scroll-to-top button, snaps straight to that position instead of fast-scrolling to it, which took several seconds on big searches.",
+    ),
 )
 
 /**

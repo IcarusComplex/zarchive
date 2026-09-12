@@ -373,7 +373,7 @@ fun AndroidApp(
                                         onCardClick = { card ->
                                             val idx = resultCards.indexOf(card)
                                             if (idx >= 0) {
-                                                resultsScope.launch { resultsListState.animateScrollToItem(RESULTS_CARD_ITEMS_START_INDEX + idx) }
+                                                resultsScope.launch { resultsListState.scrollToItem(RESULTS_CARD_ITEMS_START_INDEX + idx) }
                                             }
                                         },
                                         onImageTap = { expandedImagePath = it },
@@ -432,7 +432,7 @@ fun AndroidApp(
                     exit = fadeOut() + scaleOut(),
                 ) {
                     FloatingActionButton(
-                        onClick = { resultsScope.launch { resultsListState.animateScrollToItem(0) } },
+                        onClick = { resultsScope.launch { resultsListState.scrollToItem(0) } },
                         containerColor = Primary,
                         contentColor = OnPrimary,
                     ) {

@@ -4532,7 +4532,7 @@ private fun OrderListsPane(vm: SearchViewModel) {
                 Spacer(Modifier.width(20.dp))
                 PlanStat(
                     "${plan.uncoveredCards.size}", "unavailable", valueColor = ErrorColor,
-                    onClick = { scope.launch { orderListState.animateScrollToItem(plan.storeOrders.size) } },
+                    onClick = { scope.launch { orderListState.scrollToItem(plan.storeOrders.size) } },
                 )
             }
             Spacer(Modifier.weight(1f))
